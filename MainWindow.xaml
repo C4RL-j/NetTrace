@@ -1,0 +1,176 @@
+<Window x:Class="NetTrace.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="NetTrace"
+        Width="920" Height="650"
+        MinWidth="760" MinHeight="560"
+        WindowStartupLocation="CenterScreen"
+        Background="#0A1020"
+        Foreground="#F8FAFC">
+
+    <Window.Resources>
+        <SolidColorBrush x:Key="CardBrush" Color="#111A2E"/>
+        <SolidColorBrush x:Key="SubtleBrush" Color="#94A3B8"/>
+        <SolidColorBrush x:Key="BorderBrush" Color="#1E2A44"/>
+        <SolidColorBrush x:Key="AccentBrush" Color="#38BDF8"/>
+
+        <Style TargetType="Border" x:Key="CardStyle">
+            <Setter Property="Background" Value="{StaticResource CardBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="14"/>
+            <Setter Property="Padding" Value="18"/>
+        </Style>
+
+        <Style TargetType="TextBlock" x:Key="MutedText">
+            <Setter Property="Foreground" Value="{StaticResource SubtleBrush}"/>
+            <Setter Property="FontSize" Value="13"/>
+        </Style>
+
+        <Style TargetType="ComboBox">
+            <Setter Property="MinHeight" Value="34"/>
+            <Setter Property="Padding" Value="10,4"/>
+            <Setter Property="Background" Value="#172036"/>
+            <Setter Property="Foreground" Value="#F8FAFC"/>
+            <Setter Property="BorderBrush" Value="#2B3957"/>
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="26">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="18"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="18"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="18"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <Grid Grid.Row="0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="320"/>
+            </Grid.ColumnDefinitions>
+
+            <StackPanel>
+                <TextBlock Text="NetTrace" FontSize="28" FontWeight="SemiBold"/>
+                <TextBlock Text="Lightweight network usage monitor" Margin="0,5,0,0" Style="{StaticResource MutedText}"/>
+            </StackPanel>
+
+            <StackPanel Grid.Column="1">
+                <TextBlock Text="Network adapter" Style="{StaticResource MutedText}" Margin="0,0,0,6"/>
+                <ComboBox x:Name="AdapterComboBox"
+                          SelectionChanged="AdapterComboBox_OnSelectionChanged"
+                          DisplayMemberPath="Name"/>
+            </StackPanel>
+        </Grid>
+
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="14"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0" Style="{StaticResource CardStyle}">
+                <StackPanel>
+                    <TextBlock Text="DOWNLOAD" Style="{StaticResource MutedText}"/>
+                    <TextBlock x:Name="DownloadRateText" Text="0 B/s" FontSize="34" FontWeight="SemiBold" Margin="0,8,0,0"/>
+                    <TextBlock x:Name="DownloadSessionText" Text="Session: 0 B" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+                </StackPanel>
+            </Border>
+
+            <Border Grid.Column="2" Style="{StaticResource CardStyle}">
+                <StackPanel>
+                    <TextBlock Text="UPLOAD" Style="{StaticResource MutedText}"/>
+                    <TextBlock x:Name="UploadRateText" Text="0 B/s" FontSize="34" FontWeight="SemiBold" Margin="0,8,0,0"/>
+                    <TextBlock x:Name="UploadSessionText" Text="Session: 0 B" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <Grid Grid.Row="4">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="12"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="12"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0" Style="{StaticResource CardStyle}">
+                <StackPanel>
+                    <TextBlock Text="TODAY" Style="{StaticResource MutedText}"/>
+                    <TextBlock x:Name="TodayTotalText" Text="0 B" FontSize="25" FontWeight="SemiBold" Margin="0,7,0,0"/>
+                    <TextBlock x:Name="TodayBreakdownText" Text="↓ 0 B   ↑ 0 B" Style="{StaticResource MutedText}" Margin="0,6,0,0"/>
+                </StackPanel>
+            </Border>
+
+            <Border Grid.Column="2" Style="{StaticResource CardStyle}">
+                <StackPanel>
+                    <TextBlock Text="LAST 7 DAYS" Style="{StaticResource MutedText}"/>
+                    <TextBlock x:Name="WeekTotalText" Text="0 B" FontSize="25" FontWeight="SemiBold" Margin="0,7,0,0"/>
+                    <TextBlock x:Name="WeekBreakdownText" Text="↓ 0 B   ↑ 0 B" Style="{StaticResource MutedText}" Margin="0,6,0,0"/>
+                </StackPanel>
+            </Border>
+
+            <Border Grid.Column="4" Style="{StaticResource CardStyle}">
+                <StackPanel>
+                    <TextBlock Text="LAST 30 DAYS" Style="{StaticResource MutedText}"/>
+                    <TextBlock x:Name="MonthTotalText" Text="0 B" FontSize="25" FontWeight="SemiBold" Margin="0,7,0,0"/>
+                    <TextBlock x:Name="MonthBreakdownText" Text="↓ 0 B   ↑ 0 B" Style="{StaticResource MutedText}" Margin="0,6,0,0"/>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <Border Grid.Row="6" Style="{StaticResource CardStyle}">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel>
+                    <TextBlock Text="CONNECTION" Style="{StaticResource MutedText}"/>
+                    <TextBlock x:Name="AdapterNameText" Text="No active adapter" FontSize="18" FontWeight="SemiBold" Margin="0,10,0,14"/>
+
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="110"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Text="Type" Style="{StaticResource MutedText}"/>
+                        <TextBlock x:Name="AdapterTypeText" Grid.Column="1" Text="—"/>
+
+                        <TextBlock Grid.Row="1" Text="IPv4" Style="{StaticResource MutedText}" Margin="0,9,0,0"/>
+                        <TextBlock x:Name="Ipv4Text" Grid.Row="1" Grid.Column="1" Text="—" Margin="0,9,0,0"/>
+
+                        <TextBlock Grid.Row="2" Text="Link speed" Style="{StaticResource MutedText}" Margin="0,9,0,0"/>
+                        <TextBlock x:Name="LinkSpeedText" Grid.Row="2" Grid.Column="1" Text="—" Margin="0,9,0,0"/>
+                    </Grid>
+                </StackPanel>
+
+                <StackPanel Grid.Column="1" Margin="35,0,0,0">
+                    <TextBlock Text="STATUS" Style="{StaticResource MutedText}"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,11,0,0">
+                        <Ellipse x:Name="StatusDot" Width="9" Height="9" Fill="#22C55E" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="StatusText" Text="Monitoring" Margin="8,0,0,0" FontWeight="SemiBold"/>
+                    </StackPanel>
+
+                    <TextBlock Text="History is stored locally and begins from the first run of this app. No network data is uploaded anywhere."
+                               TextWrapping="Wrap"
+                               Style="{StaticResource MutedText}"
+                               Margin="0,18,0,0"/>
+                    <TextBlock x:Name="DatabasePathText" Text="" TextWrapping="Wrap" Foreground="#64748B" FontSize="11" Margin="0,12,0,0"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

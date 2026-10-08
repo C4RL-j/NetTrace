@@ -1,0 +1,202 @@
+using System.Diagnostics;
+using System.IO;
+using Microsoft.Data.Sqlite;
+
+namespace NetTrace.Services;
+
+public sealed class UsageStore
+{
+    private readonly string _connectionString;
+
+    public string DatabasePath { get; }
+
+    public UsageStore()
+        : this(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData))
+    {
+    }
+
+    // Accept an explicit root so migration can be verified without touching real user data.
+    public UsageStore(string localApplicationDataDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(localApplicationDataDirectory);
+        var directory = Path.Combine(localApplicationDataDirectory, "NetTrace");
+        var legacyPath = Path.Combine(localApplicationDataDirectory, "DataUsageMonitor", "usage.db");
+        DatabasePath = Path.Combine(directory, "usage.db");
+        _connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = DatabasePath,
+            Mode = SqliteOpenMode.ReadWrite
+        }.ToString();
+
+        try
+        {
+            Directory.CreateDirectory(directory);
+            var createSchema = !DatabaseFileExists(DatabasePath);
+            if (createSchema && DatabaseFileExists(legacyPath))
+            {
+                CopyLegacyDatabase(legacyPath);
+                createSchema = false;
+            }
+
+            Initialize(createSchema);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+            or SqliteException or InvalidOperationException)
+        {
+            throw new InvalidOperationException(
+                $"Could not initialize NetTrace history at '{DatabasePath}'.\n{exception.Message}",
+                exception);
+        }
+    }
+
+    private static bool DatabaseFileExists(string path)
+    {
+        try
+        {
+            // File.Exists also returns false on access errors; those must stop migration.
+            if ((File.GetAttributes(path) & FileAttributes.Directory) != 0)
+                throw new IOException($"The database path '{path}' refers to a directory.");
+            return true;
+        }
+        catch (FileNotFoundException)
+        {
+            return false;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return false;
+        }
+    }
+
+    private void CopyLegacyDatabase(string legacyPath)
+    {
+        var temporaryPath = Path.Combine(
+            Path.GetDirectoryName(DatabasePath)!, $".usage-migration-{Guid.NewGuid():N}.db");
+
+        try
+        {
+            var sourceConnectionString = new SqliteConnectionStringBuilder
+            {
+                DataSource = legacyPath,
+                Mode = SqliteOpenMode.ReadOnly,
+                Pooling = false
+            }.ToString();
+            var destinationConnectionString = new SqliteConnectionStringBuilder
+            {
+                DataSource = temporaryPath,
+                Pooling = false
+            }.ToString();
+
+            using (var source = new SqliteConnection(sourceConnectionString))
+            using (var destination = new SqliteConnection(destinationConnectionString))
+            {
+                source.Open();
+                destination.Open();
+                // A raw file copy can omit committed usage still present in the legacy WAL.
+                source.BackupDatabase(destination);
+
+                // Make the staged copy self-contained before renaming it into place.
+                using var journal = destination.CreateCommand();
+                journal.CommandText = "PRAGMA journal_mode=DELETE;";
+                journal.ExecuteNonQuery();
+                DatabaseMigrator.Initialize(destination, createSchema: false);
+            }
+
+            try
+            {
+                // Never replace an existing database, including one created by another startup.
+                File.Move(temporaryPath, DatabasePath, overwrite: false);
+            }
+            catch (IOException)
+            {
+                if (!DatabaseFileExists(DatabasePath))
+                    throw;
+                // A concurrent startup won the race; its NetTrace database takes precedence.
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+            or SqliteException or InvalidOperationException)
+        {
+            throw new InvalidOperationException(
+                $"Could not copy legacy history from '{legacyPath}' to '{DatabasePath}'. " +
+                $"The legacy database was not modified or deleted.\n{exception.Message}",
+                exception);
+        }
+        finally
+        {
+            // Only remove files belonging to this attempt, never either usage.db.
+            foreach (var suffix in new[] { "", "-wal", "-shm", "-journal" })
+            {
+                try
+                {
+                    File.Delete(temporaryPath + suffix);
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    Trace.TraceError($"Could not remove migration temporary file '{temporaryPath + suffix}': {exception.Message}");
+                }
+            }
+        }
+    }
+
+    private void Initialize(bool createSchema)
+    {
+        var initializationConnectionString = new SqliteConnectionStringBuilder(_connectionString)
+        {
+            Mode = createSchema ? SqliteOpenMode.ReadWriteCreate : SqliteOpenMode.ReadWrite
+        }.ToString();
+        using var connection = new SqliteConnection(initializationConnectionString);
+        connection.Open();
+
+        DatabaseMigrator.Initialize(connection, createSchema);
+
+        using var pragma = connection.CreateCommand();
+        pragma.CommandText = "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;";
+        pragma.ExecuteNonQuery();
+    }
+
+    public void AddUsage(DateOnly day, long downloaded, long uploaded)
+    {
+        if (downloaded <= 0 && uploaded <= 0)
+            return;
+
+        using var connection = new SqliteConnection(_connectionString);
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO daily_usage(day, downloaded, uploaded)
+            VALUES ($day, $downloaded, $uploaded)
+            ON CONFLICT(day) DO UPDATE SET
+                downloaded = downloaded + excluded.downloaded,
+                uploaded = uploaded + excluded.uploaded;
+            """;
+        command.Parameters.AddWithValue("$day", day.ToString("yyyy-MM-dd"));
+        command.Parameters.AddWithValue("$downloaded", Math.Max(0, downloaded));
+        command.Parameters.AddWithValue("$uploaded", Math.Max(0, uploaded));
+        command.ExecuteNonQuery();
+    }
+
+    public (long Downloaded, long Uploaded) GetTotals(DateOnly start, DateOnly end)
+    {
+        using var connection = new SqliteConnection(_connectionString);
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT
+                COALESCE(SUM(downloaded), 0),
+                COALESCE(SUM(uploaded), 0)
+            FROM daily_usage
+            WHERE day >= $start AND day <= $end;
+            """;
+        command.Parameters.AddWithValue("$start", start.ToString("yyyy-MM-dd"));
+        command.Parameters.AddWithValue("$end", end.ToString("yyyy-MM-dd"));
+
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+            return (0, 0);
+
+        return (reader.GetInt64(0), reader.GetInt64(1));
+    }
+}

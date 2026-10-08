@@ -1,0 +1,3 @@
+C:\PROJECTs\DataUsageMonitorV1\bin\Release\net8.0-windows\win-x64\publish\NetTrace.pdb
+C:\PROJECTs\DataUsageMonitorV1\bin\Release\net8.0-windows\win-x64\publish\e_sqlite3.dll
+C:\PROJECTs\DataUsageMonitorV1\bin\Release\net8.0-windows\win-x64\publish\NetTrace.exe
