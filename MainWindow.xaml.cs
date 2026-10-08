@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -13,6 +14,13 @@ public partial class MainWindow : Window
     private readonly NetworkMonitor _monitor = new();
     private readonly UsageStore _store;
     private readonly DispatcherTimer _timer;
+    private readonly ProfileStore _profiles;
+    private readonly ConnectionProfileMonitor _profileMonitor;
+    private volatile bool _closing;
+    private bool _loadingAdapters;
+    private NetworkIdentity? _lastPhysicalNetwork;
+    private string? _lastDetectionMessage;
+    private ConnectionStatus? _lastConnectionStatus;
 
     private AdapterInfo? _selectedAdapter;
     private NetworkSnapshot? _previousSnapshot;
@@ -31,9 +39,16 @@ public partial class MainWindow : Window
     }
 
     public MainWindow(UsageStore store)
+        : this(store, new NetworkIdentityService())
+    {
+    }
+
+    public MainWindow(UsageStore store, INetworkIdentityService identityService)
     {
         ArgumentNullException.ThrowIfNull(store);
         _store = store;
+        _profiles = new ProfileStore(store);
+        _profileMonitor = new ConnectionProfileMonitor(identityService, new ProfileResolver(_profiles));
         InitializeComponent();
 
         DatabasePathText.Text = _store.DatabasePath;
@@ -45,28 +60,105 @@ public partial class MainWindow : Window
         };
         _timer.Tick += Timer_OnTick;
 
-        Closed += (_, _) => FlushPending();
+        Closed += (_, _) =>
+        {
+            _closing = true;
+            _timer.Stop();
+            try { FlushPending(); }
+            finally { _profileMonitor.Dispose(); }
+        };
         RefreshTotals();
+        _profileMonitor.StateChanged += ProfileMonitor_OnStateChanged;
+        _profileMonitor.Start();
         _timer.Start();
+    }
+
+    private void ProfileMonitor_OnStateChanged(object? sender, EventArgs e)
+    {
+        if (_closing || Dispatcher.HasShutdownStarted) return;
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (_closing) return;
+            var state = _profileMonitor.Current;
+            if (state.Network != _lastPhysicalNetwork || state.Message != _lastDetectionMessage
+                || state.Status != _lastConnectionStatus || _selectedAdapter is null)
+            {
+                _lastPhysicalNetwork = state.Network;
+                _lastDetectionMessage = state.Message;
+                _lastConnectionStatus = state.Status;
+                try { LoadAdapters(); }
+                catch (System.Net.NetworkInformation.NetworkInformationException exception)
+                {
+                    Trace.TraceWarning($"Could not refresh network adapters: {exception.Message}");
+                }
+            }
+            CurrentProfileText.Text = state.Status switch
+            {
+                ConnectionStatus.ConnectedRecognized => state.Profile!.DisplayName,
+                ConnectionStatus.ConnectedUnassigned => "Unassigned network",
+                ConnectionStatus.ConnectedIdentityUnavailable => "Network identity unavailable",
+                ConnectionStatus.Disconnected => "Disconnected",
+                _ => "Detecting connection…"
+            };
+            CurrentProfileText.ToolTip = CurrentProfileText.Text;
+            CurrentNetworkText.Text = state.Network is null
+                ? state.Message ?? "No physical network connected."
+                : state.Network.DisplayName;
+            AssignProfileButton.Visibility = state.CanAssign
+                ? Visibility.Visible : Visibility.Collapsed;
+        }));
+    }
+
+    private void ManageProfiles_OnClick(object sender, RoutedEventArgs e) => OpenProfiles(null);
+
+    private void AssignProfile_OnClick(object sender, RoutedEventArgs e)
+    {
+        var state = _profileMonitor.Current;
+        if (state.CanAssign) OpenProfiles(state.Network);
+    }
+
+    private void OpenProfiles(NetworkIdentity? network)
+    {
+        try
+        {
+            var dialog = new ProfileManagerWindow(_profiles, network) { Owner = this };
+            dialog.ProfilesChanged += (_, _) => _profileMonitor.Refresh();
+            dialog.ShowDialog();
+            _profileMonitor.Refresh();
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show(this, $"Could not open connection profiles.\n\n{exception.Message}",
+                "NetTrace profiles", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     private void LoadAdapters()
     {
         var adapters = _monitor.GetActiveAdapters();
-        AdapterComboBox.ItemsSource = adapters;
+        var selected = adapters.FirstOrDefault(adapter => adapter.Id == _selectedAdapter?.Id)
+            ?? adapters.FirstOrDefault();
+        _loadingAdapters = true;
+        try
+        {
+            AdapterComboBox.ItemsSource = adapters;
+            AdapterComboBox.SelectedItem = selected;
+        }
+        finally { _loadingAdapters = false; }
 
-        if (adapters.Count > 0)
+        if (selected?.Id != _selectedAdapter?.Id)
         {
-            AdapterComboBox.SelectedIndex = 0;
+            FlushPending();
+            _previousSnapshot = selected is null ? null : _monitor.Capture(selected.Id);
         }
-        else
-        {
-            SetOffline("No active network adapter");
-        }
+        _selectedAdapter = selected;
+        UpdateAdapterDetails();
+        if (selected is null) SetOffline("No active network adapter");
     }
 
     private void AdapterComboBox_OnSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (_loadingAdapters) return;
         FlushPending();
 
         _selectedAdapter = AdapterComboBox.SelectedItem as AdapterInfo;

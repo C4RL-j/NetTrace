@@ -1,0 +1,6 @@
+# Generated .NET, WPF and Visual Studio artifacts (including nested projects).
+[Bb]in/
+[Oo]bj/
+.vs/
+[Pp]ublish/
+*.user

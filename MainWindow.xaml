@@ -125,6 +125,7 @@
         </Grid>
 
         <Border Grid.Row="6" Style="{StaticResource CardStyle}">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
@@ -132,8 +133,21 @@
                 </Grid.ColumnDefinitions>
 
                 <StackPanel>
-                    <TextBlock Text="CONNECTION" Style="{StaticResource MutedText}"/>
-                    <TextBlock x:Name="AdapterNameText" Text="No active adapter" FontSize="18" FontWeight="SemiBold" Margin="0,10,0,14"/>
+                    <DockPanel>
+                        <Button x:Name="ManageProfilesButton" Content="Profiles" Click="ManageProfiles_OnClick" DockPanel.Dock="Right" Padding="8,0" Margin="12,0,0,0"/>
+                        <TextBlock Text="CONNECTION" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                    </DockPanel>
+                    <DockPanel Margin="0,4,0,0">
+                        <Button x:Name="AssignProfileButton" Content="Assign profile" Click="AssignProfile_OnClick" DockPanel.Dock="Right"
+                                Padding="8,0" Margin="10,0,0,0" Visibility="Collapsed"/>
+                        <TextBlock x:Name="CurrentProfileText" Text="Detecting connection…" FontSize="18" FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                    </DockPanel>
+                    <TextBlock x:Name="CurrentNetworkText" Style="{StaticResource MutedText}" Margin="0,2,0,0" TextWrapping="Wrap"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,6,0,5">
+                        <TextBlock Text="Adapter: " Style="{StaticResource MutedText}"/>
+                        <TextBlock x:Name="AdapterNameText" Text="No active adapter" FontSize="13"/>
+                    </StackPanel>
 
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -149,11 +163,11 @@
                         <TextBlock Text="Type" Style="{StaticResource MutedText}"/>
                         <TextBlock x:Name="AdapterTypeText" Grid.Column="1" Text="—"/>
 
-                        <TextBlock Grid.Row="1" Text="IPv4" Style="{StaticResource MutedText}" Margin="0,9,0,0"/>
-                        <TextBlock x:Name="Ipv4Text" Grid.Row="1" Grid.Column="1" Text="—" Margin="0,9,0,0"/>
+                        <TextBlock Grid.Row="1" Text="IPv4" Style="{StaticResource MutedText}" Margin="0,6,0,0"/>
+                        <TextBlock x:Name="Ipv4Text" Grid.Row="1" Grid.Column="1" Text="—" Margin="0,6,0,0"/>
 
-                        <TextBlock Grid.Row="2" Text="Link speed" Style="{StaticResource MutedText}" Margin="0,9,0,0"/>
-                        <TextBlock x:Name="LinkSpeedText" Grid.Row="2" Grid.Column="1" Text="—" Margin="0,9,0,0"/>
+                        <TextBlock Grid.Row="2" Text="Link speed" Style="{StaticResource MutedText}" Margin="0,6,0,0"/>
+                        <TextBlock x:Name="LinkSpeedText" Grid.Row="2" Grid.Column="1" Text="—" Margin="0,6,0,0"/>
                     </Grid>
                 </StackPanel>
 
@@ -171,6 +185,7 @@
                     <TextBlock x:Name="DatabasePathText" Text="" TextWrapping="Wrap" Foreground="#64748B" FontSize="11" Margin="0,12,0,0"/>
                 </StackPanel>
             </Grid>
+            </ScrollViewer>
         </Border>
     </Grid>
 </Window>
