@@ -2,7 +2,7 @@
 
 Lightweight Windows network usage and diagnostics monitor.
 
-NetTrace V1.1 establishes the NetTrace identity and safely migrates local history from the previous Data Usage Monitor build (Task 001). Task 002 adds connection profiles and network mappings. Built with C#/.NET 8, WPF, and SQLite.
+NetTrace V1.1 establishes the NetTrace identity and safely migrates local history from the previous Data Usage Monitor build (Task 001). Task 002 adds connection profiles and network mappings; Task 003 adds physical connection sessions and event history. Built with C#/.NET 8, WPF, and SQLite.
 
 ## Current features
 
@@ -18,6 +18,7 @@ NetTrace V1.1 establishes the NetTrace identity and safely migrates local histor
 - Local SQLite history
 - Connection profiles with Telco / ISP and Device names
 - Multiple network identities mapped to one profile
+- Physical connection sessions and recent connection events
 - No background service
 - No telemetry
 
@@ -63,7 +64,7 @@ On first launch, if the NetTrace database is absent and `%LOCALAPPDATA%\DataUsag
 
 The copy is validated and atomically placed at the new path without overwriting a database. Copy or validation failures stop startup with an error instead of starting with empty history. SQLite's read-only source connection does not change legacy history; its WAL coordination files may be accessed while the old app is running.
 
-The current schema uses `PRAGMA user_version = 2`. Compatible unversioned databases progress through version 1; version 1 databases gain `ConnectionProfiles` and `NetworkMappings` in a transaction without rebuilding or changing usage history. Version changes commit only after successful migration and validation. `Services\DatabaseMigrator.cs` is the single place for schema upgrades. Incompatible or newer schemas stop startup rather than being altered.
+The current schema uses `PRAGMA user_version = 3`. Compatible unversioned databases progress through version 1; version 1 databases gain `ConnectionProfiles` and `NetworkMappings`, and version 2 databases gain `ConnectionSessions` and `ConnectionEvents`. All upgrades run transactionally without rebuilding or changing existing usage history, profiles, or mappings. Version changes commit only after successful migration and validation. `Services\DatabaseMigrator.cs` is the single place for schema upgrades. Incompatible or newer schemas stop startup rather than being altered.
 
 ## Connection profiles
 
@@ -75,7 +76,23 @@ Wi-Fi recognition reads the actual associated SSID through Windows Native Wi-Fi 
 
 The Connection card distinguishes a recognized profile, a valid unassigned network, an unavailable network identity, and a disconnected connection. **Assign profile** is offered only for a valid unassigned identity. If Windows denies SSID access or an identity API fails, NetTrace displays the reason and keeps bandwidth monitoring independent; it does not create placeholder mappings or change Windows permissions.
 
-Physical connection recognition is independent of the bandwidth adapter selector. Windows network-change events refresh recognition without polling or automatic dialogs. If several physical connections are active, gateway presence and the IPv4 default-route metric determine the preferred connection, with Ethernet as a tie-break. IPv6-only connections are supported without IPv6 route-metric ranking.
+Physical connection recognition is independent of the bandwidth adapter selector. Windows network-change events drive recognition without automatic dialogs. If several physical connections are active, gateway presence and the IPv4 default-route metric determine the preferred connection, with Ethernet as a tie-break. IPv6-only connections are supported without IPv6 route-metric ranking.
+
+## Connection sessions and events
+
+A session is one continuous observed physical network identity and adapter. Different SSIDs create different sessions even when they map to the same profile. Repeated callbacks and friendly-name changes do not split a session. Valid unassigned networks get sessions with no profile; assigning the current network associates only its active session. Completed sessions keep their profile association and captured network identity. Profile names in history follow their stable profile ID.
+
+The Connection card shows the current session duration and traffic. **History** opens the latest 100 sessions and 200 events, with UTC timestamps displayed in local time. Events include connection/disconnection, network change, profile assignment/change, sleep, resume, unexpected-exit recovery, normal application exit, and network-identity unavailability.
+
+Session traffic uses the dashboard's existing one-second byte delta and only accepts samples from the current physical adapter. Recognition changes automatically select that adapter and establish a new baseline; profile edits and repeated observations retain the baseline. Manual adapter selection remains available. If another or virtual adapter is selected, the dashboard still monitors it while physical-session traffic pauses; the Connection card explains which selection is needed. No virtual-interface traffic is attributed to physical sessions.
+
+Progress and confirmed observations are saved about every 30 seconds and on transitions/normal exit. Identity is also refreshed at that batch interval to confirm idle connections. Uncertain transition intervals are discarded rather than counted on a new connection. A sudden termination can lose the current unflushed batch; restart closes the unfinished session exactly at its persisted `LastConfirmedAtUtc`, records recovery, and starts a fresh session after detection. Only one NetTrace run may own a history database at a time.
+
+Startup acquires an exclusive Windows file handle on `usage.db.nettrace.lock` before opening, migrating, or recovering SQLite and keeps it until shutdown. Concurrent instances are rejected, including in another Windows login session. Normal close releases the handle; a hard kill or crash also releases operating-system ownership. The small sidecar remains on disk and is reused, so its mere existence never means the database is locked. No stale PID or manual lock-file cleanup is needed. Startup failures also release ownership.
+
+SQLite indexes cover the single active session, recent sessions/events, profile sessions, and start-time range filtering. Event foreign keys have their own indexes. Earlier v3 databases receive the event relationship indexes transactionally without changing historical rows or the schema version.
+
+NetTrace registers its window for Windows suspend/resume notifications, including connected standby. These messages end the active session on sleep and require a fresh identity observation before a new session starts after resume, including for the same SSID. Sleep time is excluded. When Windows cannot provide identity, NetTrace conservatively ends the old session at its last confirmation and keeps dashboard sampling independent; a recovered identity begins a new session. Completed history is never broadly reassigned.
 
 ## Migration verification
 

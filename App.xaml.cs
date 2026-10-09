@@ -5,14 +5,26 @@ namespace NetTrace;
 
 public partial class App : System.Windows.Application
 {
+    protected override void OnSessionEnding(SessionEndingCancelEventArgs e)
+    {
+        if (MainWindow is NetTrace.MainWindow window) window.CompleteRun();
+        base.OnSessionEnding(e);
+    }
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        if (MainWindow is NetTrace.MainWindow window) window.CompleteRun();
+        base.OnExit(e);
+    }
+
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
 
         try
         {
-            var store = new UsageStore();
-            MainWindow = new MainWindow(store);
+            MainWindow = NetTrace.MainWindow.CreateForDataRoot(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
             MainWindow.Show();
         }
         catch (Exception exception)

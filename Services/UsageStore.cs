@@ -17,19 +17,34 @@ public sealed class UsageStore
 
     // Accept an explicit root so migration can be verified without touching real user data.
     public UsageStore(string localApplicationDataDirectory)
+        : this(localApplicationDataDirectory, null)
+    {
+    }
+
+    public static string GetDatabasePath(string localApplicationDataDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(localApplicationDataDirectory);
+        return Path.GetFullPath(Path.Combine(localApplicationDataDirectory, "NetTrace", "usage.db"));
+    }
+
+    // Application startup supplies its lifetime lease; isolated storage initialization uses a scope.
+    public UsageStore(string localApplicationDataDirectory, DatabaseRunLease? initializationLease)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(localApplicationDataDirectory);
         var directory = Path.Combine(localApplicationDataDirectory, "NetTrace");
         var legacyPath = Path.Combine(localApplicationDataDirectory, "DataUsageMonitor", "usage.db");
-        DatabasePath = Path.Combine(directory, "usage.db");
+        DatabasePath = GetDatabasePath(localApplicationDataDirectory);
         _connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = DatabasePath,
             Mode = SqliteOpenMode.ReadWrite
         }.ToString();
 
+        DatabaseRunLease? scopedLease = null;
         try
         {
+            if (initializationLease is null) scopedLease = new DatabaseRunLease(DatabasePath);
+            else initializationLease.EnsureOwns(DatabasePath);
             Directory.CreateDirectory(directory);
             var createSchema = !DatabaseFileExists(DatabasePath);
             if (createSchema && DatabaseFileExists(legacyPath))
@@ -46,6 +61,10 @@ public sealed class UsageStore
             throw new InvalidOperationException(
                 $"Could not initialize NetTrace history at '{DatabasePath}'.\n{exception.Message}",
                 exception);
+        }
+        finally
+        {
+            scopedLease?.Dispose();
         }
     }
 

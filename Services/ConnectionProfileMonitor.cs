@@ -12,10 +12,14 @@ public sealed class ConnectionProfileMonitor : IDisposable
     private readonly object _workerGate = new();
     private bool _started;
     private bool _disposed;
+    private long _observationSequence;
+    private long _generation;
     private CurrentConnectionState _current = new(ConnectionStatus.Detecting, null, null,
         "Detecting physical connection…");
 
     public event EventHandler? StateChanged;
+    public event EventHandler<ConnectionObservationEventArgs>? ObservationReceived;
+    public long LastObservationSequence { get { lock (_gate) return _observationSequence; } }
 
     public CurrentConnectionState Current
     {
@@ -43,12 +47,20 @@ public sealed class ConnectionProfileMonitor : IDisposable
         Refresh();
     }
 
-    public void Refresh()
+    public long Refresh(bool invalidatePending = false)
     {
         lock (_gate)
         {
             if (!_disposed && _started)
+            {
+                if (invalidatePending)
+                {
+                    _generation++;
+                    _current = new(ConnectionStatus.Detecting, null, null, "Detecting physical connection…");
+                }
                 _refreshTimer.Change(200, Timeout.Infinite);
+            }
+            return _observationSequence;
         }
     }
 
@@ -58,7 +70,12 @@ public sealed class ConnectionProfileMonitor : IDisposable
     {
         lock (_workerGate)
         {
-            lock (_gate) { if (_disposed) return; }
+            long generation;
+            lock (_gate)
+            {
+                if (_disposed) return;
+                generation = _generation;
+            }
             CurrentConnectionState next;
             try
             {
@@ -72,13 +89,19 @@ public sealed class ConnectionProfileMonitor : IDisposable
                     $"Windows could not provide the network identity: {exception.Message}");
             }
 
+            bool changed;
+            ConnectionObservationEventArgs observation;
             lock (_gate)
             {
-                if (_disposed || next == _current) return;
+                if (_disposed || generation != _generation) return;
+                changed = next != _current;
                 _current = next;
+                observation = new(next, DateTimeOffset.UtcNow, ++_observationSequence);
             }
+            // Carry the captured observation so queued UI work cannot collapse A -> B -> A.
+            ObservationReceived?.Invoke(this, observation);
+            if (changed) StateChanged?.Invoke(this, EventArgs.Empty);
         }
-        StateChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private CurrentConnectionState ResolveState(NetworkIdentityResult detection)

@@ -1,7 +1,12 @@
+using System.Diagnostics;
+using System.Reflection;
 using System.Security.Cryptography;
 using Microsoft.Data.Sqlite;
 using NetTrace.Models;
 using NetTrace.Services;
+
+if (args.Length > 0 && args[0] == "--lease-test-child")
+    return RunLeaseChild(args);
 
 var tests = new (string Name, Action Run)[]
 {
@@ -43,7 +48,45 @@ var tests = new (string Name, Action Run)[]
     ("Connection states distinguish recognition, assignment, unavailable identity and disconnection", ConnectionIdentityStates),
     ("Unavailable or disconnected identities never look up stale network mappings", UnavailableIdentityWithoutLookup),
     ("Invalid network identities cannot be resolved or assigned", InvalidNetworkIdentities),
-    ("Permission failures preserve history and recover without creating fake mappings", PermissionRecoveryPreservesUsage)
+    ("Permission failures preserve history and recover without creating fake mappings", PermissionRecoveryPreservesUsage),
+    ("Version-two migration preserves usage, profile and mapping rows and B-trees", VersionTwoUpgrade),
+    ("Legacy version-two migration preserves its original database unchanged", LegacyVersionTwoUpgrade),
+    ("Failed version-three migration rolls back all new schema changes", FailedVersionThreeMigration),
+    ("One valid connection creates one session and repeated observations are idempotent", SessionConnectionDeduplication),
+    ("Physical SSID changes split sessions even when the profile and adapter are unchanged", SessionNetworkTransitions),
+    ("Disconnect and reconnect close and reopen sessions with meaningful events", SessionDisconnectReconnect),
+    ("Sleep and resume split the same physical network into new sessions", SessionSleepResume),
+    ("Unexpected exit recovery ends at the last confirmed observation", SessionUnexpectedExitRecovery),
+    ("Active unassigned session assignment leaves completed historical sessions unchanged", SessionActiveProfileAssignment),
+    ("Valid sampler deltas accumulate once and batched persistence is retry safe", SessionUsageAccumulation),
+    ("Wrong adapter, stale session and invalid samples cannot bleed into a new session", SessionInvalidSamples),
+    ("Identity retrieval failure closes confirmed history without fabricating a new connection", SessionIdentityUnavailable),
+    ("Graceful exit flushes usage and closes the session at UTC exit time", SessionGracefulExit),
+    ("Profile renaming preserves historical identity and session foreign keys", SessionProfileRename),
+    ("Recent, profile and UTC-overlap history queries return deterministic results", SessionHistoryQueries),
+    ("SQLite constraints enforce one active session and protected historical profile references", SessionSchemaConstraints),
+    ("Persisted future event names do not require a schema change", ExtensibleEventHistory),
+    ("Counter resets and baseline changes cannot manufacture bandwidth", BandwidthDeltaSafety),
+    ("Captured network observations preserve rapid A to B to A history", CapturedConnectionObservations),
+    ("Explicit freshness refresh discards a blocked pre-resume native query", InvalidatedNativeObservation),
+    ("Failed physical transition rolls back history and pauses byte attribution", FailedSessionTransition),
+    ("Repeated and out-of-order sample timestamps cannot double count session usage", SessionSampleTimestamps),
+    ("Wall-clock rollback cannot create negative session durations", SessionClockRollback),
+    ("A missing single-active-session constraint stops startup without changing history", InvalidVersionThreeConstraints),
+    ("A database run lease prevents another instance from recovering a live session", DatabaseLeaseProtection),
+    ("Failed sleep persistence retries the original boundary without spanning suspension", FailedSleepPersistence),
+    ("Zero-byte idle samples persist liveness without inventing usage", IdleSessionConfirmation),
+    ("Same-thread duplicate database leases are rejected and repeated disposal is safe", SameThreadDatabaseLease),
+    ("First startup acquires ownership before creating or opening SQLite", DatabaseLeaseBeforeInitialization),
+    ("Independent processes cannot recover a live session and release permits the next startup", CrossProcessDatabaseLease),
+    ("Hard-killed lease owners release OS ownership and stale sessions recover at confirmation", CrashedProcessDatabaseLease),
+    ("A stale lock file cannot permanently prevent future startup", StaleDatabaseLeaseFile),
+    ("Lease release is thread independent and disposal is idempotent", CrossThreadDatabaseLeaseDisposal),
+    ("Wrong-path and disposed leases cannot authorize database initialization", DatabaseLeaseOwnershipValidation),
+    ("Failed database initialization releases its scoped ownership for retry", FailedInitializationReleasesLease),
+    ("History query and foreign-key paths have useful SQLite indices", HistoryQueryIndices),
+    ("Existing version-three databases gain event relationship indices without rewriting history", ExistingVersionThreeIndices),
+    ("Malformed history index definitions fail without publishing schema repairs", MalformedHistoryIndices)
 };
 
 var failed = 0;
@@ -72,7 +115,7 @@ static void CleanInstall()
     Equal(workspace.CurrentPath, store.DatabasePath, "Database path");
     Require(File.Exists(workspace.CurrentPath), "The current database must be created.");
     Require(!Directory.Exists(Path.GetDirectoryName(workspace.LegacyPath)), "A clean install must not create a legacy directory.");
-    Equal(2L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Schema version");
+    Equal(3L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Schema version");
     Equal((0L, 0L), store.GetTotals(new DateOnly(2026, 1, 1), new DateOnly(2026, 1, 31)), "Fresh totals");
 
     using var connection = Open(workspace.CurrentPath);
@@ -95,7 +138,7 @@ static void LegacyUpgrade()
 
     Equal(workspace.CurrentPath, store.DatabasePath, "Migrated database path");
     AssertFixtureTotals(store);
-    Equal(2L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Migrated schema version");
+    Equal(3L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Migrated schema version");
     Equal(0L, ReadInteger(workspace.LegacyPath, "PRAGMA user_version;"), "Legacy schema version");
     Equal(1L, ReadInteger(workspace.CurrentPath, "SELECT count(*) FROM legacy_metadata WHERE value = 'keep this table';"), "Other legacy tables");
     Equal(original, Hash(workspace.LegacyPath), "Legacy database bytes");
@@ -109,7 +152,7 @@ static void ExistingUnversionedDatabase()
     var store = new UsageStore(workspace.Root);
 
     AssertFixtureTotals(store);
-    Equal(2L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Existing database schema version");
+    Equal(3L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Existing database schema version");
     Equal(1L, ReadInteger(workspace.CurrentPath, "SELECT count(*) FROM legacy_metadata;"), "Existing unrelated table");
     Require(!File.Exists(workspace.LegacyPath), "Existing NetTrace startup must not create a legacy database.");
 }
@@ -147,7 +190,7 @@ static void PersistedTotals()
     Equal((1_500L, 300L), reopened.GetTotals(today, today), "Today totals");
     Equal((4_500L, 700L), reopened.GetTotals(today.AddDays(-6), today), "Seven-day inclusive totals");
     Equal((9_500L, 1_300L), reopened.GetTotals(today.AddDays(-29), today), "Thirty-day inclusive totals");
-    Equal(2L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Version after reopening");
+    Equal(3L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Version after reopening");
 }
 
 static void WalUpgrade()
@@ -167,7 +210,7 @@ static void WalUpgrade()
 
     Equal((987_654L, 321L), store.GetTotals(new DateOnly(2026, 1, 16), new DateOnly(2026, 1, 16)), "WAL-only history");
     AssertFixtureTotals(store);
-    Equal(2L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "WAL copy schema version");
+    Equal(3L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "WAL copy schema version");
     Equal(databaseHash, Hash(workspace.LegacyPath), "Legacy main file during WAL migration");
     Equal(walHash, Hash(walPath), "Legacy WAL during migration");
     Equal(0L, ReadInteger(workspace.LegacyPath, "PRAGMA user_version;"), "Legacy WAL schema version");
@@ -201,13 +244,13 @@ static void InvalidCurrentSchema()
 static void FutureCurrentVersion()
 {
     using var workspace = new TestWorkspace();
-    CreateFixture(workspace.CurrentPath, version: 3);
+    CreateFixture(workspace.CurrentPath, version: 4);
     var original = Hash(workspace.CurrentPath);
 
     ExpectStartupFailure(workspace.Root);
 
     Equal(original, Hash(workspace.CurrentPath), "Future current database bytes");
-    Equal(3L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Future current version");
+    Equal(4L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Future current version");
 }
 
 static void InvalidVersionedCurrentSchema()
@@ -225,14 +268,14 @@ static void InvalidVersionedCurrentSchema()
 static void FutureLegacyVersion()
 {
     using var workspace = new TestWorkspace();
-    CreateFixture(workspace.LegacyPath, version: 3);
+    CreateFixture(workspace.LegacyPath, version: 4);
     var original = Hash(workspace.LegacyPath);
 
     ExpectStartupFailure(workspace.Root);
 
     Require(!File.Exists(workspace.CurrentPath), "A future legacy schema must not be published as a usable current database.");
     Equal(original, Hash(workspace.LegacyPath), "Future legacy database bytes");
-    Equal(3L, ReadInteger(workspace.LegacyPath, "PRAGMA user_version;"), "Future legacy version");
+    Equal(4L, ReadInteger(workspace.LegacyPath, "PRAGMA user_version;"), "Future legacy version");
 }
 
 static void CorruptLegacy()
@@ -306,7 +349,7 @@ static void VersionOneUpgrade()
     var store = new UsageStore(workspace.Root);
 
     AssertFixtureTotals(store);
-    Equal(2L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Version-one upgrade version");
+    Equal(3L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Version-one upgrade version");
     Equal(originalSchema, ReadText(workspace.CurrentPath, "SELECT sql FROM sqlite_schema WHERE name = 'daily_usage';"), "Usage table definition after upgrade");
     Equal(originalRootPage, ReadInteger(workspace.CurrentPath, "SELECT rootpage FROM sqlite_schema WHERE name = 'daily_usage';"), "Usage table remains in its original B-tree");
     Equal(3L, ReadInteger(workspace.CurrentPath, "SELECT count(*) FROM daily_usage;"), "Original daily rows");
@@ -574,13 +617,9 @@ static void AtomicAssignmentInsertionFailure()
 static void InvalidVersionTwoConstraints()
 {
     using var workspace = new TestWorkspace();
-    var store = new UsageStore(workspace.Root);
-    store.AddUsage(new DateOnly(2026, 1, 15), 1_000, 100);
-    var profiles = new ProfileStore(store);
-    var profile = profiles.CreateProfile("DITO", "D2 Router");
-    profiles.AssignMapping(profile.Id, "WiFi", "DITO_HOME");
+    CreateVersionTwoFixture(workspace.CurrentPath);
     using (var connection = Open(workspace.CurrentPath))
-        Execute(connection, "DROP INDEX IX_NetworkMappings_ProfileId;");
+        Execute(connection, "DELETE FROM daily_usage; INSERT INTO daily_usage VALUES ('2026-01-15', 1000, 100); DELETE FROM NetworkMappings WHERE Id=52; DROP INDEX IX_NetworkMappings_ProfileId;");
 
     ExpectStartupFailure(workspace.Root);
 
@@ -960,6 +999,930 @@ static void CreateFixture(string path, int version = 0, string? schema = null)
     Execute(connection, $"PRAGMA user_version={version};");
 }
 
+static void CreateVersionTwoFixture(string path)
+{
+    CreateFixture(path, version: 2);
+    using var connection = Open(path);
+    Execute(connection, """
+        CREATE TABLE ConnectionProfiles (
+            Id INTEGER PRIMARY KEY,
+            TelcoName TEXT NOT NULL,
+            DeviceName TEXT NOT NULL,
+            CreatedAt TEXT NOT NULL,
+            UpdatedAt TEXT NOT NULL
+        );
+        CREATE TABLE NetworkMappings (
+            Id INTEGER PRIMARY KEY,
+            ProfileId INTEGER NOT NULL REFERENCES ConnectionProfiles(Id) ON DELETE RESTRICT,
+            NetworkType TEXT NOT NULL,
+            NetworkIdentifier TEXT NOT NULL COLLATE BINARY,
+            FriendlyName TEXT,
+            CreatedAt TEXT NOT NULL,
+            UNIQUE (NetworkType, NetworkIdentifier)
+        );
+        CREATE INDEX IX_NetworkMappings_ProfileId ON NetworkMappings(ProfileId);
+        INSERT INTO ConnectionProfiles VALUES (41, 'DITO', 'D2 Router', '2026-01-15T01:02:03.0000000+00:00', '2026-01-15T04:05:06.0000000+00:00');
+        INSERT INTO NetworkMappings VALUES (51, 41, 'WiFi', 'DITO_HOME', 'Main Wi-Fi', '2026-01-15T01:02:03.0000000+00:00');
+        INSERT INTO NetworkMappings VALUES (52, 41, 'WiFi', 'DITO_HOME_5G', NULL, '2026-01-15T01:02:03.0000000+00:00');
+        """);
+}
+
+static void VersionTwoUpgrade()
+{
+    using var workspace = new TestWorkspace();
+    CreateVersionTwoFixture(workspace.CurrentPath);
+    var originalTables = new[] { "daily_usage", "ConnectionProfiles", "NetworkMappings" }
+        .ToDictionary(table => table, table => (
+            Sql: ReadText(workspace.CurrentPath, $"SELECT sql FROM sqlite_schema WHERE name='{table}';"),
+            Root: ReadInteger(workspace.CurrentPath, $"SELECT rootpage FROM sqlite_schema WHERE name='{table}';")));
+    var originalProfile = ReadText(workspace.CurrentPath, "SELECT Id || '|' || TelcoName || '|' || DeviceName || '|' || CreatedAt || '|' || UpdatedAt FROM ConnectionProfiles;");
+    var originalMappings = ReadText(workspace.CurrentPath, "SELECT group_concat(row, ';') FROM (SELECT Id || '|' || ProfileId || '|' || NetworkType || '|' || NetworkIdentifier || '|' || coalesce(FriendlyName, '<null>') || '|' || CreatedAt AS row FROM NetworkMappings ORDER BY Id);");
+
+    var store = new UsageStore(workspace.Root);
+
+    Equal(3L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Version-two upgrade version");
+    AssertFixtureTotals(store);
+    foreach (var (table, original) in originalTables)
+    {
+        Equal(original.Sql, ReadText(workspace.CurrentPath, $"SELECT sql FROM sqlite_schema WHERE name='{table}';"), $"{table} schema remains unchanged");
+        Equal(original.Root, ReadInteger(workspace.CurrentPath, $"SELECT rootpage FROM sqlite_schema WHERE name='{table}';"), $"{table} B-tree remains unchanged");
+    }
+    Equal(originalProfile, ReadText(workspace.CurrentPath, "SELECT Id || '|' || TelcoName || '|' || DeviceName || '|' || CreatedAt || '|' || UpdatedAt FROM ConnectionProfiles;"), "All profile fields preserved");
+    Equal(originalMappings, ReadText(workspace.CurrentPath, "SELECT group_concat(row, ';') FROM (SELECT Id || '|' || ProfileId || '|' || NetworkType || '|' || NetworkIdentifier || '|' || coalesce(FriendlyName, '<null>') || '|' || CreatedAt AS row FROM NetworkMappings ORDER BY Id);"), "All mapping fields preserved");
+    Equal(0L, ReadInteger(workspace.CurrentPath, "SELECT count(*) FROM ConnectionSessions;"), "Migration invents no historical sessions");
+    Equal(0L, ReadInteger(workspace.CurrentPath, "SELECT count(*) FROM ConnectionEvents;"), "Migration invents no connection events");
+    Equal(41L, new ProfileStore(store).ResolveProfile("WiFi", "DITO_HOME_5G")!.Id, "Migrated recognition still works");
+}
+
+static void LegacyVersionTwoUpgrade()
+{
+    using var workspace = new TestWorkspace();
+    CreateVersionTwoFixture(workspace.LegacyPath);
+    var original = Hash(workspace.LegacyPath);
+
+    var store = new UsageStore(workspace.Root);
+
+    AssertFixtureTotals(store);
+    Equal(3L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Copied version-two database reaches version three");
+    Equal(2L, ReadInteger(workspace.LegacyPath, "PRAGMA user_version;"), "Original version-two database is not migrated in place");
+    Equal(original, Hash(workspace.LegacyPath), "Legacy version-two database bytes remain unchanged");
+    Equal(41L, new ProfileStore(store).ResolveProfile("WiFi", "DITO_HOME")!.Id, "Legacy profile recognition preserved");
+    Equal(2L, ReadInteger(workspace.CurrentPath, "SELECT count(*) FROM NetworkMappings;"), "Legacy recognition rules preserved");
+}
+
+static void FailedVersionThreeMigration()
+{
+    using var workspace = new TestWorkspace();
+    CreateVersionTwoFixture(workspace.CurrentPath);
+    using (var connection = Open(workspace.CurrentPath))
+        Execute(connection, "CREATE TABLE ConnectionEvents(sentinel TEXT); INSERT INTO ConnectionEvents VALUES ('keep conflicting event data');");
+
+    ExpectStartupFailure(workspace.Root);
+
+    Equal(2L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Failed migration keeps version two");
+    Equal(0L, ReadInteger(workspace.CurrentPath, "SELECT count(*) FROM sqlite_schema WHERE name='ConnectionSessions';"), "Partially created sessions roll back");
+    Equal("keep conflicting event data", ReadText(workspace.CurrentPath, "SELECT sentinel FROM ConnectionEvents;"), "Conflicting pre-existing data is not replaced");
+    Equal(126_456L, ReadInteger(workspace.CurrentPath, "SELECT sum(downloaded) FROM daily_usage;"), "Usage totals survive migration failure");
+    Equal(1L, ReadInteger(workspace.CurrentPath, "SELECT count(*) FROM ConnectionProfiles;"), "Profiles survive migration failure");
+    Equal(2L, ReadInteger(workspace.CurrentPath, "SELECT count(*) FROM NetworkMappings;"), "Mappings survive migration failure");
+}
+
+static CurrentConnectionState Connected(NetworkIdentity network, ConnectionProfile? profile = null) =>
+    new(profile is null ? ConnectionStatus.ConnectedUnassigned : ConnectionStatus.ConnectedRecognized,
+        network, profile, null);
+
+static CurrentConnectionState Disconnected() => new(ConnectionStatus.Disconnected, null, null, "Disconnected");
+
+static NetworkIdentity Wifi(string ssid = "DITO_HOME", string adapterId = "physical-wifi") =>
+    new("WiFi", ssid, ssid, adapterId);
+
+static void SessionConnectionDeduplication()
+{
+    using var test = new SessionTestContext();
+    var network = Wifi();
+    test.Tracker.ObserveConnection(Connected(network));
+    var id = test.Tracker.Current!.Id;
+    for (var index = 0; index < 10; index++)
+    {
+        test.Clock.Advance(TimeSpan.FromSeconds(1));
+        test.Tracker.ObserveConnection(Connected(network));
+    }
+    test.Tracker.Flush();
+
+    Equal(id, test.Tracker.Current!.Id, "Repeated observations preserve the active session ID");
+    Equal(1, test.History.GetRecentSessions().Count, "Repeated callbacks do not create sessions");
+    Equal(1, test.History.GetRecentEvents().Count, "Repeated callbacks do not create events");
+    Equal("Connected", test.History.GetRecentEvents()[0].EventType, "First connected event");
+    Equal(test.Clock.GetUtcNow(), test.History.GetActiveSession()!.LastConfirmedAtUtc, "Identical observations confirm liveness");
+}
+
+static void SessionNetworkTransitions()
+{
+    using var test = new SessionTestContext();
+    var profile = test.Profiles.CreateProfile("DITO", "D2 Router");
+    var first = Wifi("SSID A");
+    var second = Wifi("SSID B");
+    test.Profiles.AssignMapping(profile.Id, first.NetworkType, first.NetworkIdentifier);
+    test.Profiles.AssignMapping(profile.Id, second.NetworkType, second.NetworkIdentifier);
+    test.Tracker.ObserveConnection(Connected(first, profile));
+    var firstId = test.Tracker.Current!.Id;
+    test.Clock.Advance(TimeSpan.FromSeconds(1));
+    Require(test.Tracker.RecordSample(firstId, first.AdapterId, 1, test.Clock.GetUtcNow(), 4_096, 256), "First session sample accepted");
+    test.Clock.Advance(TimeSpan.FromMinutes(1));
+    test.Tracker.ObserveConnection(Connected(second, profile));
+
+    var rows = test.History.GetRecentSessions();
+    Equal(2, rows.Count, "Different identities on one profile create different sessions");
+    var old = rows.Single(session => session.Id == firstId);
+    Equal("SSID A", old.NetworkIdentifier, "Closed session stores its original SSID");
+    Equal("NetworkChanged", old.EndReason, "Physical switch closes old session with reason");
+    Equal(4_096L, old.DownloadBytes, "Transition flushes old download usage");
+    Equal(256L, old.UploadBytes, "Transition flushes old upload usage");
+    Require(old.EndedAtUtc is not null, "Old session is closed");
+    Equal("SSID B", test.Tracker.Current!.NetworkIdentifier, "New session stores new SSID");
+    Equal(profile.Id, test.Tracker.Current.ProfileId!.Value, "Both sessions may use the same profile");
+    Equal(0L, test.Tracker.Current.DownloadBytes, "Old counters do not bleed into new session");
+    Equal(1, test.History.GetRecentEvents().Count(item => item.EventType == "NetworkChanged"), "One meaningful network changed event");
+    Equal(1L, ReadInteger(test.DatabasePath, "SELECT count(*) FROM ConnectionSessions WHERE EndedAtUtc IS NULL;"), "Only one new active session");
+}
+
+static void SessionDisconnectReconnect()
+{
+    using var test = new SessionTestContext();
+    test.Tracker.ObserveConnection(Disconnected());
+    test.Tracker.ObserveConnection(Disconnected());
+    Equal(0, test.History.GetRecentSessions().Count, "Startup disconnection creates no session");
+    Equal(0, test.History.GetRecentEvents().Count, "Repeated initial disconnection is not a transition");
+    test.Tracker.ObserveConnection(Connected(Wifi()));
+    var firstId = test.Tracker.Current!.Id;
+    test.Clock.Advance(TimeSpan.FromSeconds(10));
+    test.Tracker.ObserveConnection(Disconnected());
+    test.Tracker.ObserveConnection(Disconnected());
+    Require(test.Tracker.Current is null, "Disconnection has no active session");
+    Require(test.History.GetActiveSession() is null, "Disconnection closes persisted active session");
+    Equal("Disconnected", test.History.GetRecentSessions().Single().EndReason, "Explicit disconnection reason");
+    test.Clock.Advance(TimeSpan.FromSeconds(10));
+    test.Tracker.ObserveConnection(Connected(Wifi()));
+    Require(test.Tracker.Current!.Id != firstId, "Reconnect creates a new session");
+    Equal(2, test.History.GetRecentSessions().Count, "Two connected periods produce two sessions");
+    Equal(2, test.History.GetRecentEvents().Count(item => item.EventType == "Connected"), "Each actual reconnect records connected once");
+    Equal(1, test.History.GetRecentEvents().Count(item => item.EventType == "Disconnected"), "Repeated disconnected observation is deduplicated");
+}
+
+static void SessionSleepResume()
+{
+    using var test = new SessionTestContext();
+    test.Tracker.ObserveConnection(Connected(Wifi()));
+    var firstId = test.Tracker.Current!.Id;
+    test.Clock.Advance(TimeSpan.FromMinutes(3));
+    var sleepAt = test.Clock.GetUtcNow();
+    test.Tracker.Sleep();
+    test.Tracker.Sleep();
+    Require(test.Tracker.Current is null, "Sleep closes current session");
+    var old = test.History.GetRecentSessions().Single();
+    Equal("Sleep", old.EndReason, "Sleep end reason");
+    Equal(sleepAt, old.EndedAtUtc!.Value, "Sleep is an explicit end observation");
+    test.Clock.Advance(TimeSpan.FromHours(2));
+    test.Tracker.ObserveConnection(Connected(Wifi()));
+    Require(test.Tracker.Current is null, "Queued network observations cannot start a session during sleep");
+    test.Tracker.Resume();
+    test.Tracker.Resume();
+    Require(test.Tracker.Current is null, "Resume waits for fresh detection");
+    test.Tracker.ObserveConnection(Connected(Wifi()));
+    Require(test.Tracker.Current!.Id != firstId, "Same SSID after sleep creates a new session");
+    Equal(2, test.History.GetRecentSessions().Count, "Sleep interval is not bridged");
+    Equal(1, test.History.GetRecentEvents().Count(item => item.EventType == "Sleep"), "Duplicate sleep notification is ignored");
+    Equal(1, test.History.GetRecentEvents().Count(item => item.EventType == "Resume"), "Duplicate resume notification is ignored");
+}
+
+static void SessionUnexpectedExitRecovery()
+{
+    using var test = new SessionTestContext();
+    var firstNetwork = Wifi();
+    test.Tracker.ObserveConnection(Connected(firstNetwork));
+    var firstId = test.Tracker.Current!.Id;
+    test.Clock.Advance(TimeSpan.FromSeconds(30));
+    var confirmed = test.Clock.GetUtcNow();
+    Require(test.Tracker.RecordSample(firstId, firstNetwork.AdapterId, 1, confirmed, 8_192, 512), "Sample accepted before unexpected exit");
+    test.Tracker.Flush();
+    test.Clock.Advance(TimeSpan.FromHours(8));
+    var startup = test.Clock.GetUtcNow();
+    var restarted = new ConnectionSessionTracker(new ConnectionHistoryStore(new UsageStore(test.Root)), test.Clock);
+
+    Require(restarted.Current is null, "Recovery does not carry the previous run's active session");
+    var recovered = test.History.GetRecentSessions().Single();
+    Equal(confirmed, recovered.EndedAtUtc!.Value, "Crash recovery stops at last persisted observation");
+    Equal(confirmed, recovered.LastConfirmedAtUtc, "Recovery does not move confirmation into the startup gap");
+    Equal("UnexpectedExit", recovered.EndReason, "Recovered session reason is explicit");
+    Equal(8_192L, recovered.DownloadBytes, "Persisted crash usage survives recovery");
+    var recoveryEvent = test.History.GetRecentEvents().Single(item => item.EventType == "SessionRecoveredAfterUnexpectedExit");
+    Equal(firstId, recoveryEvent.SessionId!.Value, "Recovery event links the old session");
+    Equal(startup, recoveryEvent.OccurredAtUtc, "Recovery itself is recorded at new startup");
+    restarted.ObserveConnection(Connected(firstNetwork));
+    Require(restarted.Current!.Id != firstId, "Restart creates a new session even on the same SSID");
+    Equal(startup, restarted.Current.StartedAtUtc, "New session begins at current detection");
+    Equal(1L, ReadInteger(test.DatabasePath, "SELECT count(*) FROM ConnectionSessions WHERE EndedAtUtc IS NULL;"), "Recovery leaves only the new session active");
+}
+
+static void SessionActiveProfileAssignment()
+{
+    using var test = new SessionTestContext();
+    var network = Wifi("NewHotspot");
+    test.Tracker.ObserveConnection(Connected(network));
+    var historicalId = test.Tracker.Current!.Id;
+    Require(test.Tracker.Current.ProfileId is null, "Unknown valid network starts unassigned");
+    test.Clock.Advance(TimeSpan.FromMinutes(1));
+    test.Tracker.ObserveConnection(Disconnected());
+    test.Clock.Advance(TimeSpan.FromMinutes(1));
+    test.Tracker.ObserveConnection(Connected(network));
+    var activeId = test.Tracker.Current!.Id;
+    var profile = test.Profiles.CreateProfile("DITO", "Vivo Phone");
+    test.Profiles.AssignMapping(profile.Id, network.NetworkType, network.NetworkIdentifier);
+    test.Clock.Advance(TimeSpan.FromSeconds(1));
+    test.Tracker.ObserveConnection(Connected(network, profile));
+    test.Tracker.ObserveConnection(Connected(network, profile));
+
+    Equal(activeId, test.Tracker.Current!.Id, "Assignment associates the existing active session");
+    Equal(profile.Id, test.History.GetActiveSession()!.ProfileId!.Value, "Active association is persisted immediately");
+    Require(test.History.GetRecentSessions().Single(session => session.Id == historicalId).ProfileId is null, "Completed unassigned session is not rewritten");
+    Equal(2, test.History.GetRecentSessions().Count, "Assignment does not split the physical session");
+    Equal(1, test.History.GetRecentEvents().Count(item => item.EventType == "ProfileAssigned"), "Assignment is recorded once");
+}
+
+static void SessionUsageAccumulation()
+{
+    using var test = new SessionTestContext();
+    var network = Wifi();
+    test.Tracker.ObserveConnection(Connected(network));
+    var id = test.Tracker.Current!.Id;
+    test.Clock.Advance(TimeSpan.FromSeconds(1));
+    var sampledAt = test.Clock.GetUtcNow();
+    Require(test.Tracker.RecordSample(id, network.AdapterId, 1, sampledAt, 1_000, 200), "Valid first delta accepted");
+    Require(!test.Tracker.RecordSample(id, network.AdapterId, 1, sampledAt, 1_000, 200), "Duplicate sequence is rejected");
+    test.Clock.Advance(TimeSpan.FromSeconds(1));
+    Require(test.Tracker.RecordSample(id, network.AdapterId, 2, test.Clock.GetUtcNow(), 500, 50), "Second distinct delta accepted");
+    Equal(1_500L, test.Tracker.Current!.DownloadBytes, "Session download counts each sample once");
+    Equal(250L, test.Tracker.Current.UploadBytes, "Session upload counts each sample once");
+    Equal(0L, test.History.GetActiveSession()!.DownloadBytes, "Samples are batched instead of writing SQLite every second");
+    test.Tracker.Flush();
+    test.Tracker.Flush();
+    var persisted = new ConnectionHistoryStore(test.DatabasePath).GetActiveSession()!;
+    Equal(1_500L, persisted.DownloadBytes, "Repeated flush cannot double count persisted downloads");
+    Equal(250L, persisted.UploadBytes, "Repeated flush cannot double count persisted uploads");
+    Equal(test.Clock.GetUtcNow(), persisted.LastConfirmedAtUtc, "Periodic flush stores last confirmation");
+}
+
+static void SessionInvalidSamples()
+{
+    using var test = new SessionTestContext();
+    var first = Wifi("A");
+    test.Tracker.ObserveConnection(Connected(first));
+    var oldId = test.Tracker.Current!.Id;
+    test.Clock.Advance(TimeSpan.FromSeconds(1));
+    Require(!test.Tracker.RecordSample(oldId, "virtual-vpn", 1, test.Clock.GetUtcNow(), 999_999, 999_999), "Virtual or unrelated adapter cannot contribute");
+    Require(!test.Tracker.RecordSample(oldId, first.AdapterId, 1, test.Clock.GetUtcNow(), -1, 10), "Negative delta cannot contribute");
+    test.Tracker.ObserveConnection(Connected(Wifi("B", "physical-other")));
+    var newId = test.Tracker.Current!.Id;
+    test.Clock.Advance(TimeSpan.FromSeconds(1));
+    Require(!test.Tracker.RecordSample(oldId, first.AdapterId, 2, test.Clock.GetUtcNow(), 1_000, 100), "Old session's in-flight sample cannot enter the new session");
+    Require(!test.Tracker.RecordSample(newId, first.AdapterId, 2, test.Clock.GetUtcNow(), 1_000, 100), "Old adapter sample cannot enter the new session");
+    Require(test.Tracker.RecordSample(newId, "physical-other", 3, test.Clock.GetUtcNow(), 100, 10), "Matching physical adapter sample accepted");
+    test.Tracker.Flush();
+    Equal(100L, test.History.GetActiveSession()!.DownloadBytes, "Only correct adapter bytes are persisted");
+    Equal(10L, test.History.GetActiveSession()!.UploadBytes, "Only correct adapter uploads are persisted");
+}
+
+static void SessionIdentityUnavailable()
+{
+    using var test = new SessionTestContext();
+    var network = Wifi();
+    test.Tracker.ObserveConnection(Connected(network));
+    var id = test.Tracker.Current!.Id;
+    test.Clock.Advance(TimeSpan.FromSeconds(1));
+    var confirmed = test.Clock.GetUtcNow();
+    Require(test.Tracker.RecordSample(id, network.AdapterId, 1, confirmed, 100, 10), "Valid observation before permission failure");
+    test.Clock.Advance(TimeSpan.FromMinutes(1));
+    var unavailable = new CurrentConnectionState(ConnectionStatus.ConnectedIdentityUnavailable, null, null,
+        "Windows could not provide the network identity because location access was denied.");
+    test.Tracker.ObserveConnection(unavailable);
+    test.Tracker.ObserveConnection(unavailable);
+
+    Require(test.Tracker.Current is null, "Unavailable identity does not create fake sessions");
+    var old = test.History.GetRecentSessions().Single();
+    Equal("IdentityUnavailable", old.EndReason, "Failure has its own reason rather than pretending disconnected");
+    Equal(confirmed, old.EndedAtUtc!.Value, "Failure closes at last known identity confirmation");
+    Equal(100L, old.DownloadBytes, "Known usage is retained");
+    Equal(0L, ReadInteger(test.DatabasePath, "SELECT count(*) FROM NetworkMappings;"), "Permission failure creates no fake recognition rule");
+    Equal(0, test.History.GetRecentEvents().Count(item => item.EventType == "Disconnected"), "Identity failure is not represented as a confirmed disconnection");
+    test.Tracker.ObserveConnection(Connected(network));
+    Require(test.Tracker.Current!.Id != id, "Fresh identity after an unknown interval creates a fresh session");
+}
+
+static void SessionGracefulExit()
+{
+    using var test = new SessionTestContext();
+    var network = Wifi();
+    test.Tracker.ObserveConnection(Connected(network));
+    var id = test.Tracker.Current!.Id;
+    test.Clock.Advance(TimeSpan.FromSeconds(1));
+    Require(test.Tracker.RecordSample(id, network.AdapterId, 1, test.Clock.GetUtcNow(), 2_048, 128), "Pending sample accepted before exit");
+    test.Clock.Advance(TimeSpan.FromSeconds(5));
+    var exitedAt = test.Clock.GetUtcNow();
+    test.Tracker.Close();
+    test.Tracker.Close();
+
+    Require(test.History.GetActiveSession() is null, "Graceful application exit closes the database session");
+    var ended = test.History.GetRecentSessions().Single();
+    Equal("ApplicationExit", ended.EndReason, "Normal exit reason is explicit");
+    Equal(exitedAt, ended.EndedAtUtc!.Value, "Normal close records exit UTC time");
+    Equal(exitedAt, ended.LastConfirmedAtUtc, "Normal close confirms the final observation");
+    Equal(2_048L, ended.DownloadBytes, "Normal close flushes pending download bytes");
+    Equal(128L, ended.UploadBytes, "Normal close flushes pending upload bytes");
+    var restarted = new ConnectionSessionTracker(new ConnectionHistoryStore(test.DatabasePath), test.Clock);
+    Equal(0, test.History.GetRecentEvents().Count(item => item.EventType == "SessionRecoveredAfterUnexpectedExit"), "Clean exit needs no recovery event");
+}
+
+static void SessionProfileRename()
+{
+    using var test = new SessionTestContext();
+    var network = Wifi();
+    var profile = test.Profiles.CreateProfile("DITO", "D2 Router");
+    test.Tracker.ObserveConnection(Connected(network, profile));
+    var id = test.Tracker.Current!.Id;
+    test.Clock.Advance(TimeSpan.FromMinutes(1));
+    var renamed = test.Profiles.UpdateProfile(profile.Id, "DITO", "Home Router");
+    test.Tracker.ObserveConnection(Connected(network, renamed));
+    test.Tracker.ObserveConnection(Connected(network, renamed));
+
+    Equal(id, test.Tracker.Current!.Id, "Renaming a profile does not split the session");
+    var persisted = test.History.GetActiveSession()!;
+    Equal(profile.Id, persisted.ProfileId!.Value, "Session foreign key retains the stable profile ID");
+    Equal("DITO — Home Router", persisted.ProfileDisplayName, "Historical projection uses the current profile name");
+    Equal("DITO_HOME", persisted.NetworkIdentifier, "Stored historical SSID remains unchanged");
+    Equal(1, test.History.GetRecentEvents().Count(item => item.EventType == "ProfileChanged"), "Rename is represented once");
+    test.Tracker.ObserveConnection(Disconnected());
+    Equal(1, test.History.GetSessionsByProfile(profile.Id).Count, "Renamed profile still finds its completed history");
+}
+
+static void SessionHistoryQueries()
+{
+    using var test = new SessionTestContext();
+    var profile = test.Profiles.CreateProfile("Home Fiber", "Main Router");
+    var firstStart = test.Clock.GetUtcNow();
+    test.Tracker.ObserveConnection(Connected(Wifi("A"), profile));
+    var firstId = test.Tracker.Current!.Id;
+    test.Clock.Advance(TimeSpan.FromMinutes(10));
+    test.Tracker.ObserveConnection(Disconnected());
+    test.Clock.Advance(TimeSpan.FromMinutes(10));
+    test.Tracker.ObserveConnection(Connected(Wifi("B")));
+    var secondId = test.Tracker.Current!.Id;
+    test.Clock.Advance(TimeSpan.FromMinutes(10));
+    test.Tracker.Flush();
+
+    Equal(secondId, test.History.GetRecentSessions(1).Single().Id, "Recent sessions honor descending order and limit");
+    Equal(firstId, test.History.GetSessionsByProfile(profile.Id).Single().Id, "Profile query filters sessions");
+    var overlapStart = firstStart.AddMinutes(5).ToOffset(TimeSpan.FromHours(8));
+    var overlapEnd = firstStart.AddMinutes(15).ToOffset(TimeSpan.FromHours(-5));
+    Equal(firstId, test.History.GetSessions(overlapStart, overlapEnd).Single().Id, "Date range finds overlapping sessions and normalizes timezones");
+    Equal(2, test.History.GetSessions(firstStart, firstStart.AddHours(1)).Count, "Date range includes completed and current observations");
+    Require(test.History.GetRecentSessions().All(session => session.StartedAtUtc.Offset == TimeSpan.Zero && session.LastConfirmedAtUtc.Offset == TimeSpan.Zero && (session.EndedAtUtc is null || session.EndedAtUtc.Value.Offset == TimeSpan.Zero)), "Session query timestamps are UTC");
+    Require(test.History.GetRecentEvents().All(item => item.OccurredAtUtc.Offset == TimeSpan.Zero), "Event query timestamps are UTC");
+    Equal(1, test.History.GetRecentEvents(1).Count, "Recent events honor the requested limit");
+    ExpectFailure(() => test.History.GetSessions(overlapEnd, overlapStart), "Reversed range validation");
+}
+
+static void SessionSchemaConstraints()
+{
+    using var test = new SessionTestContext();
+    var network = Wifi();
+    var profile = test.Profiles.CreateProfile("DITO", "D2 Router");
+    test.Tracker.ObserveConnection(Connected(network, profile));
+    using var connection = Open(test.DatabasePath);
+    Execute(connection, "PRAGMA foreign_keys=ON;");
+    using var tableCommand = connection.CreateCommand();
+    tableCommand.CommandText = "PRAGMA table_info(ConnectionSessions);";
+    using (var reader = tableCommand.ExecuteReader())
+    {
+        var profileIdNullable = false;
+        while (reader.Read())
+            if (reader.GetString(1) == "ProfileId") profileIdNullable = reader.GetInt64(3) == 0;
+        Require(profileIdNullable, "Session schema permits legitimate unassigned history");
+    }
+    ExpectFailure(() => Execute(connection, $"DELETE FROM ConnectionProfiles WHERE Id={profile.Id};"), "Session-only profile references cannot be cascade deleted");
+    ExpectFailure(() => Execute(connection, "INSERT INTO ConnectionSessions(ProfileId, NetworkType, NetworkIdentifier, NetworkFriendlyName, AdapterId, StartedAtUtc, LastConfirmedAtUtc, DownloadBytes, UploadBytes) SELECT ProfileId, NetworkType, NetworkIdentifier, NetworkFriendlyName, AdapterId, StartedAtUtc, LastConfirmedAtUtc, DownloadBytes, UploadBytes FROM ConnectionSessions WHERE EndedAtUtc IS NULL;"), "A second active session is forbidden by SQLite");
+    Equal(1L, ReadInteger(test.DatabasePath, "SELECT count(*) FROM ConnectionSessions WHERE EndedAtUtc IS NULL;"), "Constraint failure preserves the existing active session");
+}
+
+static void ExtensibleEventHistory()
+{
+    using var test = new SessionTestContext();
+    var instantWithOffset = new DateTimeOffset(2026, 1, 15, 12, 0, 0, TimeSpan.FromHours(8));
+    test.History.RecordEvent(instantWithOffset, "CustomFutureEvent", null, null, null, "Stored generic event without enabling a future feature.");
+    var item = test.History.GetRecentEvents().Single();
+    Equal("CustomFutureEvent", item.EventType, "New event names fit the existing schema");
+    Equal(instantWithOffset.ToUniversalTime(), item.OccurredAtUtc, "Event API stores UTC even for offset input");
+    Equal(TimeSpan.Zero, item.OccurredAtUtc.Offset, "Event API reads canonical UTC");
+}
+
+static void BandwidthDeltaSafety()
+{
+    var started = new DateTimeOffset(2026, 1, 15, 0, 0, 0, TimeSpan.Zero);
+    var first = new NetworkSnapshot(20_000, 5_000, started);
+    Require(BandwidthDeltaCalculator.Calculate(null, first) is null, "First observation establishes a baseline");
+    var second = new NetworkSnapshot(21_000, 5_200, started.AddSeconds(1));
+    var valid = BandwidthDeltaCalculator.Calculate(first, second)!;
+    Equal(1_000L, valid.DownloadBytes, "Shared dashboard delta downloads");
+    Equal(200L, valid.UploadBytes, "Shared dashboard delta uploads");
+    Equal(1d, valid.ElapsedSeconds, "Shared elapsed sampling duration");
+    Require(BandwidthDeltaCalculator.Calculate(second, second) is null, "Duplicate observation cannot manufacture traffic");
+    Require(BandwidthDeltaCalculator.Calculate(second, first) is null, "Out-of-order sample cannot manufacture traffic");
+    var reset = new NetworkSnapshot(10, 2, started.AddSeconds(2));
+    var resetDelta = BandwidthDeltaCalculator.Calculate(second, reset)!;
+    Equal(0L, resetDelta.DownloadBytes, "Reset download counter produces no spike");
+    Equal(0L, resetDelta.UploadBytes, "Reset upload counter produces no spike");
+    var afterReset = new NetworkSnapshot(110, 22, started.AddSeconds(3));
+    var recovered = BandwidthDeltaCalculator.Calculate(reset, afterReset)!;
+    Equal(100L, recovered.DownloadBytes, "Sampling resumes from reset baseline");
+    Equal(20L, recovered.UploadBytes, "Uploads resume from reset baseline");
+    Require(BandwidthDeltaCalculator.Calculate(null, afterReset) is null, "Physical adapter change establishes a fresh baseline");
+}
+
+static void CapturedConnectionObservations()
+{
+    using var test = new SessionTestContext();
+    var identity = new FakeNetworkIdentityService { Network = Wifi("A") };
+    using var monitor = new ConnectionProfileMonitor(identity, new ProfileResolver(test.Profiles));
+    var observations = new System.Collections.Concurrent.ConcurrentQueue<ConnectionObservationEventArgs>();
+    var stateChanges = 0;
+    monitor.ObservationReceived += (_, observation) => observations.Enqueue(observation);
+    monitor.StateChanged += (_, _) => Interlocked.Increment(ref stateChanges);
+    monitor.Start();
+    WaitUntil(() => observations.Count == 1, "First captured connection observation");
+    identity.Network = Wifi("B");
+    identity.RaiseNetworkChanged();
+    WaitUntil(() => observations.Count == 2, "Second captured connection observation");
+    identity.Network = Wifi("A");
+    identity.RaiseNetworkChanged();
+    WaitUntil(() => observations.Count == 3, "Third captured connection observation");
+    identity.RaiseNetworkChanged();
+    WaitUntil(() => observations.Count == 4, "Repeated connection confirms observation without a state change");
+
+    var captured = observations.ToArray();
+    Require(captured.Select(item => item.State.Network!.NetworkIdentifier).SequenceEqual(new[] { "A", "B", "A", "A" }), "Callbacks carry their own captured state instead of rereading only the latest A");
+    Require(captured.Select(item => item.Sequence).SequenceEqual(new long[] { 1, 2, 3, 4 }), "Observation sequences preserve order");
+    Equal(3, Volatile.Read(ref stateChanges), "Repeated observation keeps old StateChanged notification deduplicated");
+    foreach (var observation in captured)
+        test.Tracker.ObserveConnection(observation.State, observation.ObservedAtUtc);
+    Equal(3, test.History.GetRecentSessions().Count, "Delayed delivery preserves all three continuous physical periods");
+    Equal(2, test.History.GetRecentEvents().Count(item => item.EventType == "NetworkChanged"), "Only the actual A-to-B and B-to-A transitions create events");
+}
+
+static void InvalidatedNativeObservation()
+{
+    using var workspace = new TestWorkspace();
+    var profiles = new ProfileStore(new UsageStore(workspace.Root));
+    using var entered = new ManualResetEventSlim();
+    using var release = new ManualResetEventSlim();
+    var identity = new FakeNetworkIdentityService
+    {
+        Network = Wifi("BeforeSleep"),
+        CaptureBeforeBlocking = true,
+        DetectionStarted = entered,
+        ReleaseDetection = release
+    };
+    using var monitor = new ConnectionProfileMonitor(identity, new ProfileResolver(profiles));
+    var observations = new System.Collections.Concurrent.ConcurrentQueue<ConnectionObservationEventArgs>();
+    monitor.ObservationReceived += (_, observation) => observations.Enqueue(observation);
+    monitor.Start();
+    Require(entered.Wait(TimeSpan.FromSeconds(5)), "Pre-resume native query started");
+    try
+    {
+        identity.Network = Wifi("AfterResume");
+        monitor.Refresh(invalidatePending: true);
+    }
+    finally
+    {
+        release.Set();
+    }
+    WaitUntil(() => observations.Count > 0, "Fresh post-resume query completed");
+    Require(observations.All(item => item.State.Network!.NetworkIdentifier == "AfterResume"), "Invalidated pre-resume detection never reaches session history");
+    Equal("AfterResume", monitor.Current.Network!.NetworkIdentifier, "Current state uses a fresh native query");
+}
+
+static void FailedSessionTransition()
+{
+    using var test = new SessionTestContext();
+    var network = Wifi("A");
+    test.Tracker.ObserveConnection(Connected(network));
+    var id = test.Tracker.Current!.Id;
+    var missingProfile = new ConnectionProfile(999_999, "Missing ISP", "Missing device", test.Clock.GetUtcNow(), test.Clock.GetUtcNow());
+    test.Clock.Advance(TimeSpan.FromSeconds(1));
+    ExpectFailure(() => test.Tracker.ObserveConnection(Connected(Wifi("B"), missingProfile)), "Unknown profile rejects the atomic network switch");
+    Equal(id, test.History.GetActiveSession()!.Id, "Failed switch rolls back closing the old session");
+    Equal(1, test.History.GetRecentSessions().Count, "Failed switch creates no partial new session");
+    Equal(1, test.History.GetRecentEvents().Count, "Failed switch creates no false event");
+    Require(!test.Tracker.RecordSample(id, network.AdapterId, 1, test.Clock.GetUtcNow(), 1_000, 100), "Uncertain identity after failure pauses attribution");
+    test.Tracker.ObserveConnection(Connected(network));
+    test.Clock.Advance(TimeSpan.FromSeconds(1));
+    Require(test.Tracker.RecordSample(id, network.AdapterId, 2, test.Clock.GetUtcNow(), 10, 1), "Successful physical observation restores attribution");
+    ExpectFailure(() => test.Tracker.ObserveConnection(Connected(network, missingProfile)), "Unknown profile rejects active assignment");
+    Require(test.History.GetActiveSession()!.ProfileId is null, "Failed assignment leaves the old profile association intact");
+    test.Clock.Advance(TimeSpan.FromSeconds(1));
+    Require(!test.Tracker.RecordSample(id, network.AdapterId, 3, test.Clock.GetUtcNow(), 1_000, 100), "Failed profile mutation also pauses uncertain attribution");
+    test.Tracker.ObserveConnection(Connected(network));
+    test.Tracker.Flush();
+    Equal(10L, test.History.GetActiveSession()!.DownloadBytes, "No bytes are misattributed after failed mutations");
+}
+
+static void SessionSampleTimestamps()
+{
+    using var test = new SessionTestContext();
+    var network = Wifi();
+    test.Tracker.ObserveConnection(Connected(network));
+    var id = test.Tracker.Current!.Id;
+    var started = test.Clock.GetUtcNow();
+    Require(!test.Tracker.RecordSample(id, network.AdapterId, 1, started.AddSeconds(-1), 1_000, 100), "Sample older than the session is rejected");
+    test.Clock.Advance(TimeSpan.FromSeconds(1));
+    var firstSample = test.Clock.GetUtcNow();
+    Require(test.Tracker.RecordSample(id, network.AdapterId, 2, firstSample, 100, 10), "First current timestamp accepted");
+    Require(!test.Tracker.RecordSample(id, network.AdapterId, 3, firstSample, 1_000, 100), "Duplicate timestamp with a new sequence is still rejected");
+    Require(!test.Tracker.RecordSample(id, network.AdapterId, 4, started, 1_000, 100), "Out-of-order sample with a new sequence is rejected");
+    test.Clock.Advance(TimeSpan.FromSeconds(1));
+    Require(test.Tracker.RecordSample(id, network.AdapterId, 5, test.Clock.GetUtcNow(), 50, 5), "Fresh timestamp continues sampling");
+    test.Tracker.Flush();
+    Equal(150L, test.History.GetActiveSession()!.DownloadBytes, "Only distinct current samples contribute downloads");
+    Equal(15L, test.History.GetActiveSession()!.UploadBytes, "Only distinct current samples contribute uploads");
+}
+
+static void SessionClockRollback()
+{
+    using var test = new SessionTestContext();
+    var network = Wifi();
+    test.Tracker.ObserveConnection(Connected(network));
+    var id = test.Tracker.Current!.Id;
+    test.Clock.Advance(TimeSpan.FromSeconds(5));
+    var lastConfirmed = test.Clock.GetUtcNow();
+    Require(test.Tracker.RecordSample(id, network.AdapterId, 1, lastConfirmed, 10, 1), "Confirmed sample before a system clock adjustment");
+    test.Clock.Advance(TimeSpan.FromHours(-1));
+    test.Tracker.ObserveConnection(Connected(network));
+    test.Tracker.Close();
+    var ended = test.History.GetRecentSessions().Single();
+    Equal(lastConfirmed, ended.LastConfirmedAtUtc, "Wall-clock correction cannot move confirmation backwards");
+    Equal(lastConfirmed, ended.EndedAtUtc!.Value, "Wall-clock correction cannot create an end before confirmed usage");
+    Require(ended.EndedAtUtc >= ended.StartedAtUtc, "Session duration stays nonnegative");
+}
+
+static void InvalidVersionThreeConstraints()
+{
+    using var test = new SessionTestContext();
+    var profile = test.Profiles.CreateProfile("DITO", "D2 Router");
+    var network = Wifi();
+    test.Profiles.AssignMapping(profile.Id, network.NetworkType, network.NetworkIdentifier);
+    test.Tracker.ObserveConnection(Connected(network, profile));
+    test.Usage.AddUsage(new DateOnly(2026, 1, 15), 2_048, 256);
+    using (var connection = Open(test.DatabasePath))
+        Execute(connection, "DROP INDEX UX_ConnectionSessions_Active;");
+
+    ExpectStartupFailure(test.Root);
+
+    Equal(3L, ReadInteger(test.DatabasePath, "PRAGMA user_version;"), "Damaged v3 is not reversioned");
+    Equal(1L, ReadInteger(test.DatabasePath, "SELECT count(*) FROM ConnectionSessions;"), "Startup rejection preserves session rows");
+    Equal(1L, ReadInteger(test.DatabasePath, "SELECT count(*) FROM ConnectionEvents;"), "Startup rejection preserves events");
+    Equal(1L, ReadInteger(test.DatabasePath, "SELECT count(*) FROM ConnectionProfiles;"), "Startup rejection preserves profiles");
+    Equal(1L, ReadInteger(test.DatabasePath, "SELECT count(*) FROM NetworkMappings;"), "Startup rejection preserves mappings");
+    Equal(2_048L, ReadInteger(test.DatabasePath, "SELECT sum(downloaded) FROM daily_usage;"), "Startup rejection preserves existing daily usage");
+    Equal(0L, ReadInteger(test.DatabasePath, "SELECT count(*) FROM sqlite_schema WHERE name='UX_ConnectionSessions_Active';"), "Damaged schema is rejected without unsolicited rebuilding");
+}
+
+static void DatabaseLeaseProtection()
+{
+    using var workspace = new TestWorkspace();
+    _ = new UsageStore(workspace.Root);
+    using (var activeRun = new DatabaseRunLease(workspace.CurrentPath))
+    {
+        var diagnostic = Task.Run(() =>
+        {
+            try
+            {
+                using var competingRun = new DatabaseRunLease(workspace.CurrentPath);
+                return "";
+            }
+            catch (InvalidOperationException exception)
+            {
+                return exception.Message;
+            }
+        }).GetAwaiter().GetResult();
+        Require(diagnostic.Contains("already monitoring", StringComparison.OrdinalIgnoreCase), "A competing run cannot recover the live run's active session");
+    }
+    using var subsequentRun = new DatabaseRunLease(workspace.CurrentPath);
+}
+
+static void FailedSleepPersistence()
+{
+    using var test = new SessionTestContext();
+    var network = Wifi();
+    test.Tracker.ObserveConnection(Connected(network));
+    var id = test.Tracker.Current!.Id;
+    using (var connection = Open(test.DatabasePath))
+        Execute(connection, "CREATE TRIGGER fail_sleep BEFORE UPDATE OF EndedAtUtc ON ConnectionSessions WHEN NEW.EndReason='Sleep' BEGIN SELECT RAISE(ABORT, 'simulated sleep persistence failure'); END;");
+    test.Clock.Advance(TimeSpan.FromMinutes(1));
+    var sleepAt = test.Clock.GetUtcNow();
+    ExpectFailure(test.Tracker.Sleep, "Simulated session closure write failure");
+    Require(test.Tracker.IsSleeping, "Failed persistence still blocks samples during physical suspension");
+    test.Clock.Advance(TimeSpan.FromHours(2));
+    Require(!test.Tracker.RecordSample(id, network.AdapterId, 1, test.Clock.GetUtcNow(), 1_000, 100), "No suspended interval bytes enter the old session");
+    test.Tracker.ObserveConnection(Connected(Wifi("QueuedNetwork")));
+    Equal(id, test.Tracker.Current!.Id, "Queued observation cannot switch a suspended session");
+    ExpectFailure(test.Tracker.Resume, "Resume retries the unresolved sleep boundary before accepting networks");
+    Require(test.Tracker.IsSleeping, "Repeated write failure remains safely suspended");
+    using (var connection = Open(test.DatabasePath))
+        Execute(connection, "DROP TRIGGER fail_sleep;");
+    test.Tracker.Resume();
+    Require(test.Tracker.Current is null, "Successful retry closes the old sleep session before fresh detection");
+    var ended = test.History.GetRecentSessions().Single();
+    Equal(sleepAt, ended.EndedAtUtc!.Value, "Retry records original sleep time instead of resume time");
+    Equal("Sleep", ended.EndReason, "Retry preserves the original sleep cause");
+    test.Tracker.ObserveConnection(Connected(network));
+    Require(test.Tracker.Current!.Id != id, "Fresh resumed network starts a different session");
+    Equal(1, test.History.GetRecentEvents().Count(item => item.EventType == "Sleep"), "Failed transactions do not duplicate Sleep events");
+    Equal(1, test.History.GetRecentEvents().Count(item => item.EventType == "Resume"), "Successful resume produces one event");
+}
+
+static void IdleSessionConfirmation()
+{
+    using var test = new SessionTestContext();
+    var network = Wifi();
+    test.Tracker.ObserveConnection(Connected(network));
+    var id = test.Tracker.Current!.Id;
+    test.Clock.Advance(TimeSpan.FromSeconds(30));
+    var confirmed = test.Clock.GetUtcNow();
+    Require(test.Tracker.RecordSample(id, network.AdapterId, 1, confirmed, 0, 0), "An idle sample still confirms the physical observation");
+    test.Tracker.Flush();
+    Equal(confirmed, test.History.GetActiveSession()!.LastConfirmedAtUtc, "Idle liveness persists periodically");
+    Equal(0L, test.History.GetActiveSession()!.DownloadBytes, "Idle sample invents no downloads");
+    Equal(0L, test.History.GetActiveSession()!.UploadBytes, "Idle sample invents no uploads");
+    test.Clock.Advance(TimeSpan.FromHours(1));
+    _ = new ConnectionSessionTracker(new ConnectionHistoryStore(test.DatabasePath), test.Clock);
+    Equal(confirmed, test.History.GetRecentSessions().Single().EndedAtUtc!.Value, "Idle unexpected exit still uses the last confirmed observation");
+}
+
+static void SameThreadDatabaseLease()
+{
+    using var workspace = new TestWorkspace();
+    _ = new UsageStore(workspace.Root);
+    var lease = new DatabaseRunLease(workspace.CurrentPath);
+    try
+    {
+        var failure = ExpectFailure(() =>
+        {
+            using var duplicate = new DatabaseRunLease(workspace.CurrentPath.ToUpperInvariant());
+        }, "Same-thread duplicate lease must not bypass the process guard through mutex reentrancy");
+        Require(failure.Message.Contains("already monitoring", StringComparison.OrdinalIgnoreCase), "Duplicate lease provides a useful already-running diagnostic");
+        using var independent = new DatabaseRunLease(workspace.LegacyPath);
+    }
+    finally
+    {
+        lease.Dispose();
+        lease.Dispose();
+    }
+    using var reopened = new DatabaseRunLease(workspace.CurrentPath);
+}
+
+static void DatabaseLeaseBeforeInitialization()
+{
+    using var workspace = new TestWorkspace();
+    Require(!File.Exists(workspace.CurrentPath), "Fixture must begin without a SQLite database");
+    using var owner = new DatabaseRunLease(workspace.CurrentPath);
+    Require(owner.IsHeld, "The first startup owns its lease before database initialization");
+    var failure = ExpectFailure(() => _ = new UsageStore(workspace.Root), "Unowned startup must fail before SQLite creation");
+    Require(failure.Message.Contains("already monitoring", StringComparison.OrdinalIgnoreCase), "Competing startup provides a useful ownership diagnostic");
+    Require(!File.Exists(workspace.CurrentPath), "Rejected startup must not create, migrate or open the database");
+    var usage = new UsageStore(workspace.Root, owner);
+    Equal(workspace.CurrentPath, usage.DatabasePath, "Held initialization ownership points to the same database");
+    Equal(3L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Owned startup initializes schema v3");
+    Require(owner.IsHeld, "Initialization does not release the caller's run ownership");
+}
+
+static void CrossProcessDatabaseLease()
+{
+    using var workspace = new TestWorkspace();
+    using var owner = new LeaseChildProcess(workspace.Root, "hold");
+    Equal("READY", owner.ReadLine(), "The first independent process acquired and persisted its active session");
+    var history = new ConnectionHistoryStore(workspace.CurrentPath);
+    var first = history.GetActiveSession()!;
+    Require(first is not null, "Owner's active session exists");
+    SqliteConnection.ClearAllPools();
+    var originalHash = Hash(workspace.CurrentPath);
+
+    using (var competing = new LeaseChildProcess(workspace.Root, "start"))
+    {
+        Equal("BLOCKED", competing.ReadLine(), "Second independent process is rejected before initialization/recovery");
+        competing.ExpectExit(0);
+    }
+    Equal(originalHash, Hash(workspace.CurrentPath), "Rejected second startup leaves the entire database unchanged");
+    Equal(first, history.GetActiveSession(), "The second process cannot modify the first process's active session");
+    Equal(0, history.GetRecentEvents().Count(item => item.EventType == "SessionRecoveredAfterUnexpectedExit"), "Live ownership never generates a recovery event");
+
+    owner.Release();
+    Equal("RELEASED", owner.ReadLine(), "Normal shutdown closes the session and releases ownership");
+    owner.ExpectExit(0);
+    Equal("ApplicationExit", history.GetRecentSessions().Single().EndReason, "Normal owner shutdown closes cleanly");
+    using var next = new LeaseChildProcess(workspace.Root, "start");
+    Equal("ACQUIRED", next.ReadLine(), "The next independent process can acquire immediately after release");
+    next.ExpectExit(0);
+    Equal(2, history.GetRecentSessions().Count, "The next run creates its own session");
+    Require(history.GetActiveSession() is null, "Both graceful child runs close their own sessions");
+}
+
+static void CrashedProcessDatabaseLease()
+{
+    using var workspace = new TestWorkspace();
+    using var owner = new LeaseChildProcess(workspace.Root, "hold");
+    Equal("READY", owner.ReadLine(), "Crash fixture owns a persisted session");
+    var history = new ConnectionHistoryStore(workspace.CurrentPath);
+    var stale = history.GetActiveSession()!;
+    owner.KillOwnedProcess();
+    Require(File.Exists(workspace.CurrentPath + ".nettrace.lock"), "Crash leaves a harmless lock-file entry on disk");
+    Equal(stale, history.GetActiveSession(), "Killing an owner bypasses graceful session cleanup");
+
+    using (var next = new LeaseChildProcess(workspace.Root, "start"))
+    {
+        Equal("ACQUIRED", next.ReadLine(), "The OS releases exclusive ownership when the owner process is killed");
+        next.ExpectExit(0);
+    }
+    var recovered = history.GetRecentSessions().Single(item => item.Id == stale.Id);
+    Equal(stale.LastConfirmedAtUtc, recovered.EndedAtUtc!.Value, "Recovery closes at the last persisted confirmation");
+    Equal("UnexpectedExit", recovered.EndReason, "Hard-killed session has an explicit recovery reason");
+    Equal(stale.DownloadBytes, recovered.DownloadBytes, "Persisted session downloads survive process death");
+    Equal(stale.UploadBytes, recovered.UploadBytes, "Persisted session uploads survive process death");
+    Equal(1, history.GetRecentEvents().Count(item => item.EventType == "SessionRecoveredAfterUnexpectedExit"), "Recovery is recorded exactly once");
+    Require(history.GetActiveSession() is null, "A subsequent graceful exit leaves no active session");
+    using var final = new DatabaseRunLease(workspace.CurrentPath);
+    Require(final.IsHeld, "Neither the killed process nor its stale sidecar can permanently lock out startup");
+}
+
+static void StaleDatabaseLeaseFile()
+{
+    using var workspace = new TestWorkspace();
+    Directory.CreateDirectory(Path.GetDirectoryName(workspace.CurrentPath)!);
+    var lockPath = workspace.CurrentPath + ".nettrace.lock";
+    File.WriteAllText(lockPath, "stale owner metadata must never grant or block ownership");
+    using (var lease = new DatabaseRunLease(workspace.CurrentPath))
+    {
+        Require(lease.IsHeld, "An unheld preexisting lock file is reusable");
+        var store = new UsageStore(workspace.Root, lease);
+        Equal(3L, ReadInteger(store.DatabasePath, "PRAGMA user_version;"), "Stale sidecar does not block fresh database startup");
+    }
+    Require(File.Exists(lockPath), "Shutdown does not delete and recreate the shared lock-file name");
+    using var next = new DatabaseRunLease(workspace.CurrentPath);
+    Require(next.IsHeld, "A retained lock file can be acquired again");
+}
+
+static void CrossThreadDatabaseLeaseDisposal()
+{
+    using var workspace = new TestWorkspace();
+    var lease = new DatabaseRunLease(workspace.CurrentPath);
+    try
+    {
+        Task.Run(lease.Dispose).WaitAsync(TimeSpan.FromSeconds(10)).GetAwaiter().GetResult();
+        Require(!lease.IsHeld, "A different thread can release process-lifetime ownership");
+        lease.Dispose();
+        ExpectFailure(() => lease.EnsureOwns(workspace.CurrentPath), "Released lease cannot authorize initialization");
+        using var replacement = new DatabaseRunLease(workspace.CurrentPath);
+        Require(replacement.IsHeld, "Cross-thread release permits immediate reacquisition");
+    }
+    finally { lease.Dispose(); }
+}
+
+static void DatabaseLeaseOwnershipValidation()
+{
+    using var first = new TestWorkspace();
+    using var second = new TestWorkspace();
+    using var owner = new DatabaseRunLease(first.CurrentPath);
+    ExpectFailure(() => _ = new UsageStore(second.Root, owner), "A different database's lease must be rejected");
+    Require(!File.Exists(second.CurrentPath), "Wrong-path ownership must not create or migrate SQLite");
+    Require(owner.IsHeld, "Rejected wrong-path initialization does not dispose the rightful owner's lease");
+    owner.Dispose();
+    ExpectFailure(() => _ = new UsageStore(first.Root, owner), "Disposed ownership must be rejected");
+    Require(!File.Exists(first.CurrentPath), "Disposed ownership must not create or migrate SQLite");
+    using var replacement = new DatabaseRunLease(first.CurrentPath);
+    Require(replacement.IsHeld, "Ownership verification failures do not leave process-local poison state");
+}
+
+static void FailedInitializationReleasesLease()
+{
+    using var workspace = new TestWorkspace();
+    Directory.CreateDirectory(Path.GetDirectoryName(workspace.CurrentPath)!);
+    using (var connection = Open(workspace.CurrentPath))
+        Execute(connection, "CREATE TABLE unrelated(value TEXT); INSERT INTO unrelated VALUES('preserve'); PRAGMA user_version=1;");
+    var originalHash = Hash(workspace.CurrentPath);
+    ExpectStartupFailure(workspace.Root);
+    Equal(originalHash, Hash(workspace.CurrentPath), "Failed initialization preserves the incompatible database");
+    using var retry = new DatabaseRunLease(workspace.CurrentPath);
+    Require(retry.IsHeld, "A failed initializer releases ownership without waiting for process termination");
+}
+
+static void HistoryQueryIndices()
+{
+    using var test = new SessionTestContext();
+    test.Tracker.ObserveConnection(Connected(Wifi()));
+    using var connection = Open(test.DatabasePath);
+    var cases = new (string Sql, string Index)[]
+    {
+        ("SELECT Id FROM ConnectionSessions WHERE EndedAtUtc IS NULL", "UX_ConnectionSessions_Active"),
+        ("SELECT Id FROM ConnectionSessions ORDER BY StartedAtUtc DESC,Id DESC LIMIT 100", "IX_ConnectionSessions_StartedAtUtc"),
+        ("SELECT Id FROM ConnectionSessions WHERE ProfileId=1 ORDER BY StartedAtUtc DESC,Id DESC LIMIT 100", "IX_ConnectionSessions_ProfileId"),
+        ("SELECT Id FROM ConnectionSessions WHERE StartedAtUtc < '2027-01-01' AND COALESCE(EndedAtUtc,LastConfirmedAtUtc)>='2026-01-01' ORDER BY StartedAtUtc DESC,Id DESC", "IX_ConnectionSessions_StartedAtUtc"),
+        ("SELECT Id FROM ConnectionEvents ORDER BY OccurredAtUtc DESC,Id DESC LIMIT 100", "IX_ConnectionEvents_OccurredAtUtc"),
+        ("SELECT Id FROM ConnectionEvents WHERE SessionId=1", "IX_ConnectionEvents_SessionId"),
+        ("SELECT Id FROM ConnectionEvents WHERE ProfileId=1", "IX_ConnectionEvents_ProfileId")
+    };
+    foreach (var (sql, index) in cases)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "EXPLAIN QUERY PLAN " + sql;
+        using var reader = command.ExecuteReader();
+        var details = new List<string>();
+        while (reader.Read()) details.Add(reader.GetString(3));
+        Require(details.Any(detail => detail.Contains(index, StringComparison.Ordinal)), $"SQLite uses {index} for its common history access path: {string.Join("; ", details)}");
+    }
+}
+
+static void ExistingVersionThreeIndices()
+{
+    using var test = new SessionTestContext();
+    test.Tracker.ObserveConnection(Connected(Wifi()));
+    var originalSession = test.History.GetActiveSession();
+    var originalEvents = test.History.GetRecentEvents().ToArray();
+    using (var connection = Open(test.DatabasePath))
+        Execute(connection, "DROP INDEX IX_ConnectionEvents_SessionId; DROP INDEX IX_ConnectionEvents_ProfileId;");
+    _ = new UsageStore(test.Root);
+    Equal(3L, ReadInteger(test.DatabasePath, "PRAGMA user_version;"), "Index-only compatibility maintenance preserves v3");
+    Equal(originalSession, test.History.GetActiveSession(), "Index maintenance does not recover or rewrite active session rows");
+    Require(originalEvents.SequenceEqual(test.History.GetRecentEvents()), "Index maintenance does not rewrite event history");
+    Equal(2L, ReadInteger(test.DatabasePath, "SELECT count(*) FROM sqlite_schema WHERE name IN ('IX_ConnectionEvents_SessionId','IX_ConnectionEvents_ProfileId') AND type='index';"), "Both missing event relationship indices are restored");
+}
+
+static void MalformedHistoryIndices()
+{
+    foreach (var replacement in new[]
+    {
+        "DROP INDEX IX_ConnectionEvents_SessionId; CREATE INDEX IX_ConnectionEvents_SessionId ON ConnectionEvents(ProfileId);",
+        "DROP INDEX IX_ConnectionSessions_StartedAtUtc; CREATE INDEX IX_ConnectionSessions_StartedAtUtc ON ConnectionSessions(StartedAtUtc ASC,Id DESC);",
+        "DROP INDEX IX_ConnectionSessions_ProfileId; CREATE INDEX IX_ConnectionSessions_ProfileId ON ConnectionSessions(ProfileId,Id DESC);"
+    })
+    {
+        using var test = new SessionTestContext();
+        test.Tracker.ObserveConnection(Connected(Wifi()));
+        var active = test.History.GetActiveSession();
+        using (var connection = Open(test.DatabasePath))
+            Execute(connection, "DROP INDEX IX_ConnectionEvents_ProfileId;" + replacement);
+        var originalHash = Hash(test.DatabasePath);
+        ExpectStartupFailure(test.Root);
+        Equal(originalHash, Hash(test.DatabasePath), "Rejected index definitions roll back all attempted index creation");
+        Equal(0L, ReadInteger(test.DatabasePath, "SELECT count(*) FROM sqlite_schema WHERE name='IX_ConnectionEvents_ProfileId';"), "Failed validation does not publish an unrelated index repair");
+        Equal(active, test.History.GetActiveSession(), "Rejected index definitions preserve the active session");
+        Equal(3L, ReadInteger(test.DatabasePath, "PRAGMA user_version;"), "Rejected index definitions preserve schema version");
+    }
+}
+
+static int RunLeaseChild(string[] arguments)
+{
+    if (arguments.Length != 3) throw new ArgumentException("Lease child requires a test root and mode.");
+    var root = Path.GetFullPath(arguments[1]);
+    var testParent = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "NetTrace.RegressionTests"));
+    if (!string.Equals(Directory.GetParent(root)?.FullName, testParent, StringComparison.OrdinalIgnoreCase) ||
+        !Guid.TryParseExact(Path.GetFileName(root), "N", out _) || !Directory.Exists(root))
+        throw new InvalidOperationException("Lease subprocess refuses any root outside an existing owned temporary test directory.");
+    if (arguments[2] is not ("hold" or "start")) throw new ArgumentException("Unknown lease child mode.");
+    DatabaseRunLease lease;
+    try { lease = new DatabaseRunLease(Path.Combine(root, "NetTrace", "usage.db")); }
+    catch (InvalidOperationException exception) when (exception.Message.Contains("already monitoring", StringComparison.OrdinalIgnoreCase))
+    {
+        Console.WriteLine("BLOCKED");
+        return 0;
+    }
+    using (lease)
+    {
+        var usage = new UsageStore(root, lease);
+        var clock = new ManualTimeProvider();
+        var tracker = new ConnectionSessionTracker(new ConnectionHistoryStore(usage), clock);
+        var network = Wifi("LeaseTestSSID");
+        tracker.ObserveConnection(Connected(network));
+        clock.Advance(TimeSpan.FromSeconds(30));
+        Require(tracker.RecordSample(tracker.Current!.Id, network.AdapterId, 1, clock.GetUtcNow(), 1_024, 128), "Child sample is accepted");
+        tracker.Flush();
+        if (arguments[2] == "hold")
+        {
+            Console.WriteLine("READY");
+            if (Console.ReadLine() != "release") throw new InvalidOperationException("Lease owner received no release command.");
+        }
+        tracker.Close();
+    }
+    Console.WriteLine(arguments[2] == "hold" ? "RELEASED" : "ACQUIRED");
+    return 0;
+}
+
 static void AssertFixtureTotals(UsageStore store)
 {
     Equal((123_456L, 7_890L), store.GetTotals(new DateOnly(2026, 1, 15), new DateOnly(2026, 1, 15)), "Migrated daily totals");
@@ -1050,6 +2013,66 @@ static void Require(bool condition, string description)
         throw new InvalidOperationException(description);
 }
 
+// Every child is started by this test process against its own temporary workspace.
+// Timeouts are bounded; cleanup can kill only the Process instance this helper created.
+sealed class LeaseChildProcess : IDisposable
+{
+    private readonly Process _process;
+
+    public LeaseChildProcess(string root, string mode)
+    {
+        var executable = Environment.ProcessPath ?? throw new InvalidOperationException("Cannot locate the regression process host.");
+        var start = new ProcessStartInfo(executable)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WindowStyle = ProcessWindowStyle.Hidden,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        if (Path.GetFileNameWithoutExtension(executable).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
+            start.ArgumentList.Add(Assembly.GetExecutingAssembly().Location);
+        start.ArgumentList.Add("--lease-test-child");
+        start.ArgumentList.Add(root);
+        start.ArgumentList.Add(mode);
+        _process = Process.Start(start) ?? throw new InvalidOperationException("Failed to start the owned lease test process.");
+    }
+
+    public string ReadLine()
+    {
+        var line = _process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(15)).GetAwaiter().GetResult();
+        if (line is null)
+            throw new InvalidOperationException($"Lease child exited without its expected response: {_process.StandardError.ReadToEnd()}");
+        return line;
+    }
+
+    public void Release()
+    {
+        _process.StandardInput.WriteLine("release");
+        _process.StandardInput.Flush();
+    }
+
+    public void ExpectExit(int expectedExitCode)
+    {
+        if (!_process.WaitForExit(15_000)) throw new TimeoutException("Owned lease test process did not exit in time.");
+        if (_process.ExitCode != expectedExitCode)
+            throw new InvalidOperationException($"Lease child exited with {_process.ExitCode}, expected {expectedExitCode}: {_process.StandardError.ReadToEnd()}");
+    }
+
+    public void KillOwnedProcess()
+    {
+        if (!_process.HasExited) _process.Kill(entireProcessTree: true);
+        if (!_process.WaitForExit(10_000)) throw new TimeoutException("Owned lease test process did not terminate in time.");
+    }
+
+    public void Dispose()
+    {
+        try { KillOwnedProcess(); }
+        finally { _process.Dispose(); }
+    }
+}
+
 sealed class TestWorkspace : IDisposable
 {
     private readonly string _parent = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "NetTrace.RegressionTests"));
@@ -1071,6 +2094,35 @@ sealed class TestWorkspace : IDisposable
             throw new InvalidOperationException("Refusing to remove a test directory outside the temporary test parent.");
         Directory.Delete(resolved, recursive: true);
     }
+}
+
+sealed class ManualTimeProvider : TimeProvider
+{
+    private DateTimeOffset _utcNow = new(2026, 1, 15, 0, 0, 0, TimeSpan.Zero);
+    public override DateTimeOffset GetUtcNow() => _utcNow;
+    public void Advance(TimeSpan elapsed) => _utcNow = _utcNow.Add(elapsed);
+}
+
+sealed class SessionTestContext : IDisposable
+{
+    private readonly TestWorkspace _workspace = new();
+    public string Root => _workspace.Root;
+    public string DatabasePath => _workspace.CurrentPath;
+    public UsageStore Usage { get; }
+    public ProfileStore Profiles { get; }
+    public ConnectionHistoryStore History { get; }
+    public ManualTimeProvider Clock { get; } = new();
+    public ConnectionSessionTracker Tracker { get; }
+
+    public SessionTestContext()
+    {
+        Usage = new UsageStore(Root);
+        Profiles = new ProfileStore(Usage);
+        History = new ConnectionHistoryStore(Usage);
+        Tracker = new ConnectionSessionTracker(History, Clock);
+    }
+
+    public void Dispose() => _workspace.Dispose();
 }
 
 sealed class FakeNetworkIdentityService : INetworkIdentityService
@@ -1097,16 +2149,18 @@ sealed class FakeNetworkIdentityService : INetworkIdentityService
     public NetworkIdentityAvailability? Availability { get; set; }
     public ManualResetEventSlim? DetectionStarted { get; set; }
     public ManualResetEventSlim? ReleaseDetection { get; set; }
+    public bool CaptureBeforeBlocking { get; set; }
     public event EventHandler? NetworkChanged;
 
     public NetworkIdentityResult GetCurrentNetwork()
     {
         Interlocked.Increment(ref _detections);
+        var capturedNetwork = Network;
         DetectionStarted?.Set();
         ReleaseDetection?.Wait();
         if (Failure is { } failure)
             throw failure;
-        var network = Network;
+        var network = CaptureBeforeBlocking ? capturedNetwork : Network;
         return new(Availability ?? (network is null ? NetworkIdentityAvailability.Disconnected : NetworkIdentityAvailability.Available),
             network, DetectionMessage);
     }

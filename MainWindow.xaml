@@ -77,7 +77,7 @@
                 <StackPanel>
                     <TextBlock Text="DOWNLOAD" Style="{StaticResource MutedText}"/>
                     <TextBlock x:Name="DownloadRateText" Text="0 B/s" FontSize="34" FontWeight="SemiBold" Margin="0,8,0,0"/>
-                    <TextBlock x:Name="DownloadSessionText" Text="Session: 0 B" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+                    <TextBlock x:Name="DownloadSessionText" Text="App session: 0 B" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
                 </StackPanel>
             </Border>
 
@@ -85,7 +85,7 @@
                 <StackPanel>
                     <TextBlock Text="UPLOAD" Style="{StaticResource MutedText}"/>
                     <TextBlock x:Name="UploadRateText" Text="0 B/s" FontSize="34" FontWeight="SemiBold" Margin="0,8,0,0"/>
-                    <TextBlock x:Name="UploadSessionText" Text="Session: 0 B" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+                    <TextBlock x:Name="UploadSessionText" Text="App session: 0 B" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
                 </StackPanel>
             </Border>
         </Grid>
@@ -134,6 +134,7 @@
 
                 <StackPanel>
                     <DockPanel>
+                        <Button x:Name="ViewHistoryButton" Content="History" Click="ViewHistory_OnClick" DockPanel.Dock="Right" Padding="8,0" Margin="8,0,0,0"/>
                         <Button x:Name="ManageProfilesButton" Content="Profiles" Click="ManageProfiles_OnClick" DockPanel.Dock="Right" Padding="8,0" Margin="12,0,0,0"/>
                         <TextBlock Text="CONNECTION" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
                     </DockPanel>
@@ -144,6 +145,10 @@
                                    TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
                     </DockPanel>
                     <TextBlock x:Name="CurrentNetworkText" Style="{StaticResource MutedText}" Margin="0,2,0,0" TextWrapping="Wrap"/>
+                    <TextBlock Text="CONNECTION SESSION" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+                    <TextBlock x:Name="CurrentSessionText" Text="No active session" FontWeight="SemiBold" Margin="0,2,0,0"/>
+                    <TextBlock x:Name="CurrentSessionUsageText" Text="↓ 0 B   ↑ 0 B" Style="{StaticResource MutedText}" Margin="0,2,0,0" TextWrapping="Wrap"/>
+                    <TextBlock x:Name="SessionMessageText" Text="" Foreground="#FBBF24" FontSize="11" TextWrapping="Wrap"/>
                     <StackPanel Orientation="Horizontal" Margin="0,6,0,5">
                         <TextBlock Text="Adapter: " Style="{StaticResource MutedText}"/>
                         <TextBlock x:Name="AdapterNameText" Text="No active adapter" FontSize="13"/>

@@ -16,7 +16,17 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _timer;
     private readonly ProfileStore _profiles;
     private readonly ConnectionProfileMonitor _profileMonitor;
+    private readonly ConnectionHistoryStore _history;
+    private readonly ConnectionSessionTracker _sessions;
+    private readonly DatabaseRunLease _runLease;
+    private readonly WindowsPowerLifecycle _powerLifecycle;
     private volatile bool _closing;
+    private bool _suspended;
+    private bool _sessionPersistenceFailed;
+    private bool _persistNextObservation;
+    private string? _usagePersistenceMessage;
+    private long _lastHandledObservationSequence;
+    private long _sampleSequence;
     private bool _loadingAdapters;
     private NetworkIdentity? _lastPhysicalNetwork;
     private string? _lastDetectionMessage;
@@ -43,55 +53,115 @@ public partial class MainWindow : Window
     {
     }
 
-    public MainWindow(UsageStore store, INetworkIdentityService identityService)
+    public static MainWindow CreateForDataRoot(string localApplicationDataDirectory, INetworkIdentityService? identityService = null)
     {
-        ArgumentNullException.ThrowIfNull(store);
-        _store = store;
-        _profiles = new ProfileStore(store);
-        _profileMonitor = new ConnectionProfileMonitor(identityService, new ProfileResolver(_profiles));
-        InitializeComponent();
-
-        DatabasePathText.Text = _store.DatabasePath;
-        LoadAdapters();
-
-        _timer = new DispatcherTimer
+        DatabaseRunLease? lease = null;
+        var ownershipTransferred = false;
+        try
         {
-            Interval = TimeSpan.FromSeconds(1)
-        };
-        _timer.Tick += Timer_OnTick;
-
-        Closed += (_, _) =>
+            lease = new DatabaseRunLease(UsageStore.GetDatabasePath(localApplicationDataDirectory));
+            var store = new UsageStore(localApplicationDataDirectory, lease);
+            ownershipTransferred = true;
+            return new MainWindow(store, identityService ?? new NetworkIdentityService(), lease);
+        }
+        catch
         {
-            _closing = true;
-            _timer.Stop();
-            try { FlushPending(); }
-            finally { _profileMonitor.Dispose(); }
-        };
-        RefreshTotals();
-        _profileMonitor.StateChanged += ProfileMonitor_OnStateChanged;
-        _profileMonitor.Start();
-        _timer.Start();
+            try
+            {
+                if (!ownershipTransferred) identityService?.Dispose();
+            }
+            catch (Exception cleanupException)
+            {
+                Trace.TraceWarning($"Could not clean up network identity detection after startup failure: {cleanupException.Message}");
+            }
+            finally { lease?.Dispose(); }
+            throw;
+        }
     }
 
-    private void ProfileMonitor_OnStateChanged(object? sender, EventArgs e)
+    public MainWindow(UsageStore store, INetworkIdentityService identityService, DatabaseRunLease? runLease = null)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentNullException.ThrowIfNull(identityService);
+        _store = store;
+        try
+        {
+            _runLease = runLease ?? new DatabaseRunLease(store.DatabasePath);
+            _runLease.EnsureOwns(store.DatabasePath);
+            _history = new ConnectionHistoryStore(store);
+            _sessions = new ConnectionSessionTracker(_history);
+            _profiles = new ProfileStore(store);
+            _profileMonitor = new ConnectionProfileMonitor(identityService, new ProfileResolver(_profiles));
+            InitializeComponent();
+
+            DatabasePathText.Text = _store.DatabasePath;
+            LoadAdapters();
+
+            _timer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(1)
+            };
+            _timer.Tick += Timer_OnTick;
+            _powerLifecycle = new WindowsPowerLifecycle(this);
+            _powerLifecycle.Suspending += (_, _) => SuspendMonitoring();
+            _powerLifecycle.Resuming += (_, _) => ResumeMonitoring();
+            RefreshTotals();
+            _profileMonitor.ObservationReceived += ProfileMonitor_OnObservationReceived;
+            _profileMonitor.Start();
+            _timer.Start();
+            Closed += (_, _) => CompleteRun();
+        }
+        catch
+        {
+            _timer?.Stop();
+            try { _powerLifecycle?.Dispose(); }
+            finally
+            {
+                try
+                {
+                    if (_profileMonitor is not null) _profileMonitor.Dispose();
+                    else identityService.Dispose();
+                }
+                finally { _runLease?.Dispose(); }
+            }
+            throw;
+        }
+    }
+
+    private void ProfileMonitor_OnObservationReceived(object? sender, ConnectionObservationEventArgs observation)
     {
         if (_closing || Dispatcher.HasShutdownStarted) return;
         Dispatcher.BeginInvoke(new Action(() =>
         {
-            if (_closing) return;
-            var state = _profileMonitor.Current;
+            if (_closing || _suspended || observation.Sequence <= _lastHandledObservationSequence) return;
+            _lastHandledObservationSequence = observation.Sequence;
+            var state = observation.State;
+            var previousSessionId = _sessions.Current?.Id;
+            var physicalChanged = !SamePhysicalNetwork(state.Network, _lastPhysicalNetwork);
+            if (physicalChanged) _previousSnapshot = null;
+            UpdateSessionHistory(() =>
+            {
+                _sessions.ObserveConnection(state, observation.ObservedAtUtc);
+                if (_persistNextObservation)
+                {
+                    _sessions.Flush();
+                    _persistNextObservation = false;
+                }
+            });
             if (state.Network != _lastPhysicalNetwork || state.Message != _lastDetectionMessage
                 || state.Status != _lastConnectionStatus || _selectedAdapter is null)
             {
                 _lastPhysicalNetwork = state.Network;
                 _lastDetectionMessage = state.Message;
                 _lastConnectionStatus = state.Status;
-                try { LoadAdapters(); }
+                try { LoadAdapters(physicalChanged ? state.Network?.AdapterId : null); }
                 catch (System.Net.NetworkInformation.NetworkInformationException exception)
                 {
                     Trace.TraceWarning($"Could not refresh network adapters: {exception.Message}");
                 }
             }
+            // A new SSID on the same adapter also needs a fresh counter baseline.
+            if (physicalChanged || previousSessionId != _sessions.Current?.Id) _previousSnapshot = null;
             CurrentProfileText.Text = state.Status switch
             {
                 ConnectionStatus.ConnectedRecognized => state.Profile!.DisplayName,
@@ -106,7 +176,106 @@ public partial class MainWindow : Window
                 : state.Network.DisplayName;
             AssignProfileButton.Visibility = state.CanAssign
                 ? Visibility.Visible : Visibility.Collapsed;
+            RefreshCurrentSession();
         }));
+    }
+
+    private static bool SamePhysicalNetwork(NetworkIdentity? left, NetworkIdentity? right) =>
+        left is null ? right is null : right is not null
+        && left.NetworkType == right.NetworkType && left.NetworkIdentifier == right.NetworkIdentifier
+        && string.Equals(left.AdapterId, right.AdapterId, StringComparison.OrdinalIgnoreCase);
+
+    private void UpdateSessionHistory(Action action)
+    {
+        try
+        {
+            action();
+            _sessionPersistenceFailed = false;
+            SessionMessageText.Text = _usagePersistenceMessage ?? "";
+        }
+        catch (Exception exception)
+        {
+            _sessionPersistenceFailed = true;
+            SessionMessageText.Text = $"Connection history could not be saved: {exception.Message}";
+            Trace.TraceError(SessionMessageText.Text);
+        }
+    }
+
+    private void RefreshCurrentSession()
+    {
+        var session = _sessions.Current;
+        if (session is null || _sessions.IsSleeping)
+        {
+            CurrentSessionText.Text = _suspended ? "Paused for sleep" : "No active session";
+            CurrentSessionUsageText.Text = "↓ 0 B   ↑ 0 B";
+            return;
+        }
+        var duration = DateTimeOffset.UtcNow - session.StartedAtUtc;
+        if (duration < TimeSpan.Zero) duration = TimeSpan.Zero;
+        CurrentSessionText.Text = duration.TotalHours >= 1
+            ? $"{(long)duration.TotalHours}h {duration.Minutes}m"
+            : $"{duration.Minutes}m {duration.Seconds}s";
+        CurrentSessionUsageText.Text = $"↓ {ByteFormatter.Format(session.DownloadBytes)}   ↑ {ByteFormatter.Format(session.UploadBytes)}";
+        if (!string.Equals(_selectedAdapter?.Id, session.AdapterId, StringComparison.OrdinalIgnoreCase))
+            CurrentSessionUsageText.Text += " • Select the current connection's adapter to record its traffic";
+    }
+
+    private void ViewHistory_OnClick(object sender, RoutedEventArgs e)
+    {
+        UpdateSessionHistory(() => _sessions.Flush());
+        try { new ConnectionHistoryWindow(_history) { Owner = this }.ShowDialog(); }
+        catch (Exception exception)
+        {
+            SessionMessageText.Text = $"Connection history could not be opened: {exception.Message}";
+        }
+    }
+
+    private void SuspendMonitoring()
+    {
+        if (_closing || _suspended) return;
+        _suspended = true;
+        _timer.Stop();
+        _previousSnapshot = null;
+        try { FlushPendingForLifecycle(); }
+        finally
+        {
+            UpdateSessionHistory(() => _sessions.Sleep());
+            _profileMonitor.Refresh(invalidatePending: true);
+            RefreshCurrentSession();
+        }
+    }
+
+    private void ResumeMonitoring()
+    {
+        if (_closing || !_suspended) return;
+        _lastHandledObservationSequence = _profileMonitor.Refresh(invalidatePending: true);
+        UpdateSessionHistory(() => _sessions.Resume());
+        _previousSnapshot = null;
+        _lastPhysicalNetwork = null;
+        _suspended = false;
+        _timer.Start();
+        RefreshCurrentSession();
+    }
+
+    public void CompleteRun()
+    {
+        if (_closing) return;
+        _closing = true;
+        _timer.Stop();
+        try { FlushPendingForLifecycle(); }
+        finally
+        {
+            try { UpdateSessionHistory(() => _sessions.Close()); }
+            finally
+            {
+                try { _powerLifecycle.Dispose(); }
+                finally
+                {
+                    try { _profileMonitor.Dispose(); }
+                    finally { _runLease.Dispose(); }
+                }
+            }
+        }
     }
 
     private void ManageProfiles_OnClick(object sender, RoutedEventArgs e) => OpenProfiles(null);
@@ -133,10 +302,11 @@ public partial class MainWindow : Window
         }
     }
 
-    private void LoadAdapters()
+    private void LoadAdapters(string? preferredAdapterId = null)
     {
         var adapters = _monitor.GetActiveAdapters();
-        var selected = adapters.FirstOrDefault(adapter => adapter.Id == _selectedAdapter?.Id)
+        var selected = adapters.FirstOrDefault(adapter => string.Equals(adapter.Id, preferredAdapterId, StringComparison.OrdinalIgnoreCase))
+            ?? adapters.FirstOrDefault(adapter => adapter.Id == _selectedAdapter?.Id)
             ?? adapters.FirstOrDefault();
         _loadingAdapters = true;
         try
@@ -149,7 +319,7 @@ public partial class MainWindow : Window
         if (selected?.Id != _selectedAdapter?.Id)
         {
             FlushPending();
-            _previousSnapshot = selected is null ? null : _monitor.Capture(selected.Id);
+            _previousSnapshot = null;
         }
         _selectedAdapter = selected;
         UpdateAdapterDetails();
@@ -162,18 +332,19 @@ public partial class MainWindow : Window
         FlushPending();
 
         _selectedAdapter = AdapterComboBox.SelectedItem as AdapterInfo;
-        _previousSnapshot = _selectedAdapter is null
-            ? null
-            : _monitor.Capture(_selectedAdapter.Id);
+        _previousSnapshot = null;
 
         UpdateAdapterDetails();
     }
 
     private void Timer_OnTick(object? sender, EventArgs e)
     {
+        if (_suspended || _closing) return;
         if (_selectedAdapter is null)
         {
             SetOffline("No adapter selected");
+            PersistWhenDue();
+            RefreshCurrentSession();
             return;
         }
 
@@ -189,55 +360,89 @@ public partial class MainWindow : Window
         {
             SetOffline("Adapter disconnected");
             _previousSnapshot = null;
+            PersistWhenDue();
+            RefreshCurrentSession();
             return;
         }
 
         SetOnline();
 
-        if (_previousSnapshot is not null)
+        var latest = _profileMonitor.Current;
+        var pendingPhysicalChange = latest.Status != ConnectionStatus.Detecting
+            && !SamePhysicalNetwork(latest.Network, _lastPhysicalNetwork);
+        var delta = BandwidthDeltaCalculator.Calculate(pendingPhysicalChange ? null : _previousSnapshot, current);
+        if (delta is not null)
         {
-            var elapsedSeconds = Math.Max(
-                0.001,
-                (current.Timestamp - _previousSnapshot.Timestamp).TotalSeconds);
-
-            var receivedDelta = current.BytesReceived - _previousSnapshot.BytesReceived;
-            var sentDelta = current.BytesSent - _previousSnapshot.BytesSent;
-
-            // A negative delta means the Windows adapter counter reset/restarted.
-            if (receivedDelta < 0) receivedDelta = 0;
-            if (sentDelta < 0) sentDelta = 0;
+            var receivedDelta = delta.DownloadBytes;
+            var sentDelta = delta.UploadBytes;
 
             _sessionDownloaded += receivedDelta;
             _sessionUploaded += sentDelta;
             _pendingDownloaded += receivedDelta;
             _pendingUploaded += sentDelta;
 
-            DownloadRateText.Text = ByteFormatter.FormatRate(receivedDelta / elapsedSeconds);
-            UploadRateText.Text = ByteFormatter.FormatRate(sentDelta / elapsedSeconds);
-            DownloadSessionText.Text = $"Session: {ByteFormatter.Format(_sessionDownloaded)}";
-            UploadSessionText.Text = $"Session: {ByteFormatter.Format(_sessionUploaded)}";
+            DownloadRateText.Text = ByteFormatter.FormatRate(receivedDelta / delta.ElapsedSeconds);
+            UploadRateText.Text = ByteFormatter.FormatRate(sentDelta / delta.ElapsedSeconds);
+            DownloadSessionText.Text = $"App session: {ByteFormatter.Format(_sessionDownloaded)}";
+            UploadSessionText.Text = $"App session: {ByteFormatter.Format(_sessionUploaded)}";
         }
+        else
+        {
+            DownloadRateText.Text = "0 B/s";
+            UploadRateText.Text = "0 B/s";
+        }
+
+        if (!pendingPhysicalChange && _sessions.Current is { } session
+            && latest.Network is { } network && network.NetworkType == session.NetworkType
+            && network.NetworkIdentifier == session.NetworkIdentifier
+            && string.Equals(network.AdapterId, session.AdapterId, StringComparison.OrdinalIgnoreCase))
+            _sessions.RecordSample(session.Id, _selectedAdapter.Id, ++_sampleSequence,
+                current.Timestamp.ToUniversalTime(), delta?.DownloadBytes ?? 0, delta?.UploadBytes ?? 0);
 
         _previousSnapshot = current;
 
-        if (DateTimeOffset.Now - _lastFlush >= TimeSpan.FromSeconds(30))
-            FlushPending();
-
+        PersistWhenDue();
         RefreshTotals();
+        RefreshCurrentSession();
+    }
+
+    private void PersistWhenDue()
+    {
+        if (DateTimeOffset.Now - _lastFlush < TimeSpan.FromSeconds(30)) return;
+        var retryObservation = _sessionPersistenceFailed;
+        FlushPending();
+        var retryResume = _sessions.IsSleeping && !_suspended;
+        if (retryResume) UpdateSessionHistory(() => _sessions.Resume());
+        // Refresh identity at the existing batch interval to confirm idle/manual-selection sessions.
+        // This adds no counter and provides a real observation for crash recovery.
+        _persistNextObservation = true;
+        var cutoff = _profileMonitor.Refresh(invalidatePending: retryObservation || retryResume);
+        if (retryResume) _lastHandledObservationSequence = Math.Max(_lastHandledObservationSequence, cutoff);
     }
 
     private void FlushPending()
     {
-        if (_pendingDownloaded <= 0 && _pendingUploaded <= 0)
+        if (_pendingDownloaded > 0 || _pendingUploaded > 0)
         {
-            _lastFlush = DateTimeOffset.Now;
-            return;
+            _store.AddUsage(_pendingDay, _pendingDownloaded, _pendingUploaded);
+            _pendingDownloaded = 0;
+            _pendingUploaded = 0;
+            _usagePersistenceMessage = null;
         }
-
-        _store.AddUsage(_pendingDay, _pendingDownloaded, _pendingUploaded);
-        _pendingDownloaded = 0;
-        _pendingUploaded = 0;
+        UpdateSessionHistory(() => _sessions.Flush());
         _lastFlush = DateTimeOffset.Now;
+    }
+
+    private void FlushPendingForLifecycle()
+    {
+        try { FlushPending(); }
+        catch (Exception exception)
+        {
+            // Keep the failed batch and still handle the Windows sleep/exit boundary.
+            _usagePersistenceMessage = $"Usage history could not be saved: {exception.Message}";
+            SessionMessageText.Text = _usagePersistenceMessage;
+            Trace.TraceError(_usagePersistenceMessage);
+        }
     }
 
     private void RefreshTotals()

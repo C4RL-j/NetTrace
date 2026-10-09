@@ -1,0 +1,46 @@
+<Window x:Class="NetTrace.ConnectionHistoryWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="NetTrace connection history" Width="1000" Height="520"
+        MinWidth="760" MinHeight="360" WindowStartupLocation="CenterOwner"
+        Background="#0A1020" Foreground="#F8FAFC">
+    <Grid Margin="18">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <DockPanel Margin="0,0,0,12">
+            <Button Content="Refresh" Click="Refresh_OnClick" DockPanel.Dock="Right" Padding="12,4"/>
+            <TextBlock Text="Recent connection history" FontSize="22" FontWeight="SemiBold"/>
+        </DockPanel>
+        <TabControl Grid.Row="1">
+            <TabItem Header="Sessions">
+                <DataGrid x:Name="SessionsGrid" IsReadOnly="True" AutoGenerateColumns="False"
+                          CanUserAddRows="False" CanUserDeleteRows="False" EnableRowVirtualization="True">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Started (local)" Binding="{Binding Started}" Width="140"/>
+                        <DataGridTextColumn Header="Ended (local)" Binding="{Binding Ended}" Width="140"/>
+                        <DataGridTextColumn Header="Profile" Binding="{Binding Profile}" Width="170"/>
+                        <DataGridTextColumn Header="Network" Binding="{Binding Network}" Width="180"/>
+                        <DataGridTextColumn Header="Download" Binding="{Binding Download}" Width="90"/>
+                        <DataGridTextColumn Header="Upload" Binding="{Binding Upload}" Width="90"/>
+                        <DataGridTextColumn Header="End reason" Binding="{Binding Reason}" Width="130"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </TabItem>
+            <TabItem Header="Events">
+                <DataGrid x:Name="EventsGrid" IsReadOnly="True" AutoGenerateColumns="False"
+                          CanUserAddRows="False" CanUserDeleteRows="False" EnableRowVirtualization="True">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Time (local)" Binding="{Binding Time}" Width="140"/>
+                        <DataGridTextColumn Header="Event" Binding="{Binding Type}" Width="210"/>
+                        <DataGridTextColumn Header="Description" Binding="{Binding Message}" Width="*"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </TabItem>
+        </TabControl>
+        <TextBlock x:Name="HistoryMessageText" Grid.Row="2" Text="Latest 100 sessions and 200 events. Times are displayed in local time."
+                   Foreground="#94A3B8" TextWrapping="Wrap" Margin="0,10,0,0"/>
+    </Grid>
+</Window>

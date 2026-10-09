@@ -4,7 +4,7 @@ namespace NetTrace.Services;
 
 internal static class DatabaseMigrator
 {
-    internal const int CurrentSchemaVersion = 2;
+    internal const int CurrentSchemaVersion = 3;
 
     internal static void Initialize(SqliteConnection connection, bool createSchema)
     {
@@ -48,6 +48,11 @@ internal static class DatabaseMigrator
                     CreateProfileSchema(command);
                     ValidateProfileSchema(command);
                     break;
+                case 2:
+                    ValidateProfileSchema(command);
+                    CreateHistorySchema(command);
+                    ValidateHistorySchema(command);
+                    break;
                 default:
                     throw new InvalidOperationException($"No migration is available from schema version {version}.");
             }
@@ -58,11 +63,13 @@ internal static class DatabaseMigrator
         }
 
         ValidateProfileSchema(command);
-        command.CommandText = "PRAGMA foreign_key_check(NetworkMappings);";
+        ValidateHistorySchema(command);
+        EnsureHistoryRelationshipIndexes(command);
+        command.CommandText = "PRAGMA foreign_key_check;";
         using (var reader = command.ExecuteReader())
         {
             if (reader.Read())
-                throw new InvalidOperationException("The profile database contains a mapping without a valid profile. Keep the database for recovery.");
+                throw new InvalidOperationException("The connection database contains an invalid history or profile relationship. Keep the database for recovery.");
         }
 
         transaction.Commit();
@@ -91,6 +98,160 @@ internal static class DatabaseMigrator
             """;
         command.ExecuteNonQuery();
     }
+
+    private static void CreateHistorySchema(SqliteCommand command)
+    {
+        command.CommandText = """
+            CREATE TABLE ConnectionSessions (
+                Id INTEGER PRIMARY KEY,
+                ProfileId INTEGER REFERENCES ConnectionProfiles(Id) ON DELETE RESTRICT,
+                NetworkType TEXT NOT NULL CHECK(length(trim(NetworkType)) > 0),
+                NetworkIdentifier TEXT NOT NULL COLLATE BINARY CHECK(length(NetworkIdentifier) > 0),
+                NetworkFriendlyName TEXT NOT NULL,
+                AdapterId TEXT NOT NULL,
+                StartedAtUtc TEXT NOT NULL,
+                LastConfirmedAtUtc TEXT NOT NULL,
+                EndedAtUtc TEXT,
+                EndReason TEXT,
+                DownloadBytes INTEGER NOT NULL DEFAULT 0 CHECK(DownloadBytes >= 0),
+                UploadBytes INTEGER NOT NULL DEFAULT 0 CHECK(UploadBytes >= 0),
+                CHECK(LastConfirmedAtUtc >= StartedAtUtc),
+                CHECK(EndedAtUtc IS NULL OR EndedAtUtc >= LastConfirmedAtUtc),
+                CHECK((EndedAtUtc IS NULL AND EndReason IS NULL) OR
+                      (EndedAtUtc IS NOT NULL AND EndReason IS NOT NULL))
+            );
+            CREATE UNIQUE INDEX UX_ConnectionSessions_Active ON ConnectionSessions((1)) WHERE EndedAtUtc IS NULL;
+            CREATE INDEX IX_ConnectionSessions_StartedAtUtc ON ConnectionSessions(StartedAtUtc DESC, Id DESC);
+            CREATE INDEX IX_ConnectionSessions_ProfileId ON ConnectionSessions(ProfileId, StartedAtUtc DESC);
+            CREATE TABLE ConnectionEvents (
+                Id INTEGER PRIMARY KEY,
+                OccurredAtUtc TEXT NOT NULL,
+                EventType TEXT NOT NULL CHECK(length(trim(EventType)) > 0),
+                SessionId INTEGER REFERENCES ConnectionSessions(Id) ON DELETE RESTRICT,
+                ProfileId INTEGER REFERENCES ConnectionProfiles(Id) ON DELETE RESTRICT,
+                NetworkType TEXT,
+                NetworkIdentifier TEXT COLLATE BINARY,
+                Message TEXT NOT NULL
+            );
+            CREATE INDEX IX_ConnectionEvents_OccurredAtUtc ON ConnectionEvents(OccurredAtUtc DESC, Id DESC);
+            CREATE INDEX IX_ConnectionEvents_SessionId ON ConnectionEvents(SessionId);
+            CREATE INDEX IX_ConnectionEvents_ProfileId ON ConnectionEvents(ProfileId);
+            """;
+        command.ExecuteNonQuery();
+    }
+
+    private static void EnsureHistoryRelationshipIndexes(SqliteCommand command)
+    {
+        // Early version-3 databases may predate these additive indexes. The surrounding
+        // initialization transaction adds them without rewriting history or changing its version.
+        command.CommandText = """
+            CREATE INDEX IF NOT EXISTS IX_ConnectionEvents_SessionId ON ConnectionEvents(SessionId);
+            CREATE INDEX IF NOT EXISTS IX_ConnectionEvents_ProfileId ON ConnectionEvents(ProfileId);
+            """;
+        command.ExecuteNonQuery();
+        ValidateHistoryIndex(command, "IX_ConnectionEvents_SessionId", "ConnectionEvents", [("SessionId", false)]);
+        ValidateHistoryIndex(command, "IX_ConnectionEvents_ProfileId", "ConnectionEvents", [("ProfileId", false)]);
+    }
+
+    private static void ValidateHistorySchema(SqliteCommand command)
+    {
+        ValidateColumns(command, "ConnectionSessions", new[]
+        {
+            ("Id", "INTEGER", false, 1L),
+            ("ProfileId", "INTEGER", false, 0L),
+            ("NetworkType", "TEXT", true, 0L),
+            ("NetworkIdentifier", "TEXT", true, 0L),
+            ("NetworkFriendlyName", "TEXT", true, 0L),
+            ("AdapterId", "TEXT", true, 0L),
+            ("StartedAtUtc", "TEXT", true, 0L),
+            ("LastConfirmedAtUtc", "TEXT", true, 0L),
+            ("EndedAtUtc", "TEXT", false, 0L),
+            ("EndReason", "TEXT", false, 0L),
+            ("DownloadBytes", "INTEGER", true, 0L),
+            ("UploadBytes", "INTEGER", true, 0L)
+        });
+        ValidateColumns(command, "ConnectionEvents", new[]
+        {
+            ("Id", "INTEGER", false, 1L),
+            ("OccurredAtUtc", "TEXT", true, 0L),
+            ("EventType", "TEXT", true, 0L),
+            ("SessionId", "INTEGER", false, 0L),
+            ("ProfileId", "INTEGER", false, 0L),
+            ("NetworkType", "TEXT", false, 0L),
+            ("NetworkIdentifier", "TEXT", false, 0L),
+            ("Message", "TEXT", true, 0L)
+        });
+        ValidateHistoryRelationships(command, "ConnectionSessions", new[]
+        {
+            ("ProfileId", "ConnectionProfiles")
+        });
+        ValidateHistoryRelationships(command, "ConnectionEvents", new[]
+        {
+            ("SessionId", "ConnectionSessions"), ("ProfileId", "ConnectionProfiles")
+        });
+        command.CommandText = "SELECT sql FROM sqlite_schema WHERE type='index' AND name='UX_ConnectionSessions_Active';";
+        var activeIndex = command.ExecuteScalar()?.ToString();
+        var normalized = activeIndex is null ? "" : string.Concat(activeIndex.Where(character => !char.IsWhiteSpace(character)));
+        if (!normalized.Equals(
+            "CREATEUNIQUEINDEXUX_ConnectionSessions_ActiveONConnectionSessions((1))WHEREEndedAtUtcISNULL",
+            StringComparison.OrdinalIgnoreCase))
+            throw InvalidHistorySchema("The database must enforce at most one unfinished session.");
+        ValidateHistoryIndex(command, "IX_ConnectionSessions_StartedAtUtc", "ConnectionSessions",
+            [("StartedAtUtc", true), ("Id", true)]);
+        ValidateHistoryIndex(command, "IX_ConnectionSessions_ProfileId", "ConnectionSessions",
+            [("ProfileId", false), ("StartedAtUtc", true)]);
+        ValidateHistoryIndex(command, "IX_ConnectionEvents_OccurredAtUtc", "ConnectionEvents",
+            [("OccurredAtUtc", true), ("Id", true)]);
+    }
+
+    private static void ValidateHistoryIndex(
+        SqliteCommand command, string index, string table, (string Name, bool Descending)[] expected)
+    {
+        command.CommandText = $"PRAGMA index_list({table});";
+        var found = false;
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+                found |= reader.GetString(1) == index && reader.GetInt64(2) == 0 && reader.GetInt64(4) == 0;
+        }
+
+        command.CommandText = $"PRAGMA index_xinfo({index});";
+        var columns = new List<(string Name, bool Descending, string Collation)>();
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                if (reader.GetInt64(5) != 0)
+                    columns.Add((reader.IsDBNull(2) ? "" : reader.GetString(2),
+                        reader.GetInt64(3) != 0, reader.GetString(4)));
+            }
+        }
+
+        if (!found || columns.Count != expected.Length || expected.Where((column, position) =>
+            !columns[position].Name.Equals(column.Name, StringComparison.OrdinalIgnoreCase)
+            || columns[position].Descending != column.Descending
+            || !columns[position].Collation.Equals("BINARY", StringComparison.OrdinalIgnoreCase)).Any())
+            throw InvalidHistorySchema($"The expected {index} history index is missing or incompatible.");
+    }
+
+    private static void ValidateHistoryRelationships(
+        SqliteCommand command, string table, (string Column, string Parent)[] expected)
+    {
+        command.CommandText = $"PRAGMA foreign_key_list({table});";
+        using var reader = command.ExecuteReader();
+        var found = new List<(string Column, string Parent)>();
+        while (reader.Read())
+        {
+            if (reader.GetInt64(1) != 0 || reader.GetString(4) != "Id" || reader.GetString(6) != "RESTRICT")
+                throw InvalidHistorySchema($"The {table} relationships must use stable IDs and restricted deletion.");
+            found.Add((reader.GetString(3), reader.GetString(2)));
+        }
+        if (found.Count != expected.Length || expected.Any(relationship => !found.Contains(relationship)))
+            throw InvalidHistorySchema($"The {table} relationships are missing or incompatible.");
+    }
+
+    private static InvalidOperationException InvalidHistorySchema(string detail) => new(
+        $"The connection history schema is incompatible. {detail} Its data and schema version have not been changed.");
 
     private static void ValidateUsageSchema(SqliteCommand command)
     {
@@ -195,7 +356,7 @@ internal static class DatabaseMigrator
         var type = command.ExecuteScalar()?.ToString();
         command.Parameters.Clear();
         if (type != "table")
-            throw InvalidProfileSchema($"The {table} table is missing.");
+            throw InvalidTableSchema(table, $"The {table} table is missing.");
 
         command.CommandText = $"PRAGMA table_info({table});";
         var actual = new Dictionary<string, (string Type, bool NotNull, long PrimaryKey)>(StringComparer.OrdinalIgnoreCase);
@@ -209,8 +370,11 @@ internal static class DatabaseMigrator
             !actual.TryGetValue(column.Name, out var found)
             || !found.Type.Equals(column.Type, StringComparison.OrdinalIgnoreCase)
             || found.NotNull != column.NotNull || found.PrimaryKey != column.PrimaryKey))
-            throw InvalidProfileSchema($"The {table} columns do not match the supported schema.");
+            throw InvalidTableSchema(table, $"The {table} columns do not match the supported schema.");
     }
+
+    private static InvalidOperationException InvalidTableSchema(string table, string detail) =>
+        table is "ConnectionSessions" or "ConnectionEvents" ? InvalidHistorySchema(detail) : InvalidProfileSchema(detail);
 
     private static InvalidOperationException InvalidProfileSchema(string detail) => new(
         $"The connection profile schema is incompatible. {detail} Its data and schema version have not been changed.");
