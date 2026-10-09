@@ -1,4 +1,7 @@
 using System.Diagnostics;
+using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using System.Reflection;
 using System.Security.Cryptography;
 using Microsoft.Data.Sqlite;
@@ -86,7 +89,52 @@ var tests = new (string Name, Action Run)[]
     ("Failed database initialization releases its scoped ownership for retry", FailedInitializationReleasesLease),
     ("History query and foreign-key paths have useful SQLite indices", HistoryQueryIndices),
     ("Existing version-three databases gain event relationship indices without rewriting history", ExistingVersionThreeIndices),
-    ("Malformed history index definitions fail without publishing schema repairs", MalformedHistoryIndices)
+    ("Malformed history index definitions fail without publishing schema repairs", MalformedHistoryIndices),
+    ("An empty native interface inventory reports no VPN", VpnNoAdapters),
+    ("Dormant and disconnected VPN adapters are not active tunnels", VpnDormantAdapter),
+    ("Connected native tunnel candidates are detected conservatively", VpnActiveTunnel),
+    ("Hyper-V, VMware, VirtualBox and loopback interfaces are not VPNs", VpnOrdinaryVirtualAdapters),
+    ("Exact native VPN driver identities recognize renamed active adapters", VpnDriverCandidates),
+    ("Friendly VPN names and descriptions alone do not prove a tunnel", VpnNameOnlyHints),
+    ("Hardware interfaces cannot become VPN candidates from driver or name hints", VpnHardwareNotCandidate),
+    ("IPv6 transition mechanisms do not masquerade as VPN tunnels", VpnTransitionTunnels),
+    ("An opaque active tunnel is indeterminate rather than guessed", VpnOpaqueTunnel),
+    ("A connected native RAS VPN is recognized without invented interface identifiers", VpnRasConnected),
+    ("Dormant native RAS VPN connections are not connected tunnels", VpnRasDormant),
+    ("PPP and dial-up connections are not assumed to be VPNs", VpnPppNotAssumed),
+    ("Incomplete native inventory reports uncertainty instead of a false no-VPN result", VpnIncompleteInventory),
+    ("Native API failures produce a safe indeterminate state", VpnApiFailure),
+    ("Each VPN state query reads current native connection status", VpnStateRefresh),
+    ("Unknown operational or media status cannot prove an active tunnel", VpnUnconfirmedStatus),
+    ("TAP always-connected media configuration cannot prove an active VPN", VpnTapAlwaysConnected),
+    ("RAS dormant, reconnecting and unknown substates cannot prove a live VPN", VpnRasConnectionSubstates),
+    ("Detected tunnels without route evidence remain unverified", VpnRoutesMissing),
+    ("Effective VPN defaults verify full routing independently for IPv4 and IPv6", VpnRoutesFullDefaults),
+    ("Specific VPN prefixes with a physical default verify split routing", VpnRoutesSplitPrefixes),
+    ("Route plus interface metrics determine the effective default", VpnRoutesCombinedMetrics),
+    ("Competing paired half-defaults use longest-prefix matching", VpnRoutesHalfDefaults),
+    ("IPv4 full routing and IPv6 split routing retain independent results", VpnRoutesIndependentFamilies),
+    ("Metric ties affecting VPN routes stay unverified", VpnRoutesMetricTies),
+    ("Repeated and reordered route observations produce deterministic evidence", VpnRoutesDeterminism),
+    ("Incomplete and failed native route reads preserve uncertainty", VpnRoutesIncomplete),
+    ("Down, expired, loopback and disabled default routes cannot prove a tunnel", VpnRoutesUnusable),
+    ("Missing route metadata or mismatched interface GUIDs cannot prove ownership", VpnRoutesOwnership),
+    ("RAS-only VPN detection cannot invent a route interface relationship", VpnRoutesRasWithoutInterface),
+    ("Interface and route metric addition cannot overflow into a winning route", VpnRoutesMetricOverflow),
+    ("More-specific public bypasses are uncertainty rather than a guessed full tunnel", VpnRoutesPublicBypass),
+    ("Private LAN and local routes do not defeat verified general VPN routing", VpnRoutesLocalExceptions),
+    ("A partial general-route pair cannot manufacture full tunnel coverage", VpnRoutesPartialCoverage),
+    ("Malformed or wrong-family route evidence is rejected conservatively", VpnRoutesMalformed),
+    ("Verification of non-detected or uncertain VPN state makes no routing claims", VpnRoutesNoDetectedTunnel),
+    ("Fresh native route reads replace previous verification without stale results", VpnRoutesRefresh),
+    ("Verified IPv4 full routing remains full when IPv6 is provably unavailable", VpnFamilyIpv4OnlyFull),
+    ("Verified IPv4 split routing remains split when IPv6 is provably unavailable", VpnFamilyIpv4OnlySplit),
+    ("Usable unverified IPv6 prevents an aggregate full VPN claim", VpnFamilyUsableWithoutVpnPaths),
+    ("Verified IPv6 full routing remains full when IPv4 is provably unavailable", VpnFamilyIpv6OnlyFull),
+    ("No usable IP family cannot manufacture a full or split tunnel", VpnFamilyNeitherUsable),
+    ("Unknown native family observations cannot be ignored during aggregation", VpnFamilyUnknownNotIgnored),
+    ("Completed loopback and inactive family snapshots prove unavailability", VpnFamilyUnavailableEvidence),
+    ("Missing or contradictory family metadata cannot claim unavailability", VpnFamilyMetadataSafety)
 };
 
 var failed = 0;
@@ -1886,6 +1934,686 @@ static void MalformedHistoryIndices()
     }
 }
 
+static VpnInterfaceEvidence VpnInterface() => new()
+{
+    InterfaceIndex = 42,
+    InterfaceGuid = new Guid("825018c6-06a8-4721-9b04-9aedfbf70d23"),
+    InterfaceName = "Renamed work connection",
+    Description = "Native tunnel device",
+    InterfaceType = 131,
+    TunnelType = 1,
+    OperationalStatus = OperationalStatus.Up,
+    MediaConnectState = 1,
+    StatusFlags = 0
+};
+
+static VpnInterfaceInventory VpnInventory(params VpnInterfaceEvidence[] interfaces) =>
+    new(interfaces, Array.Empty<VpnRasConnectionEvidence>());
+
+static void VpnNoAdapters()
+{
+    var state = VpnDetectionService.Classify(VpnInventory());
+    Equal(VpnStatus.NoVpn, state.Status, "No native interfaces means no detected tunnel");
+    Equal(0, state.Interfaces.Count, "Empty inventory produces no fabricated interface");
+}
+
+static void VpnDormantAdapter()
+{
+    foreach (var status in new[] { OperationalStatus.Down, OperationalStatus.Dormant,
+        OperationalStatus.LowerLayerDown, OperationalStatus.NotPresent })
+    {
+        var evidence = VpnInterface() with { InterfaceType = 6, DriverComponentId = "wintun", OperationalStatus = status };
+        var state = VpnDetectionService.Classify(VpnInventory(evidence));
+        Equal(VpnStatus.NoVpn, state.Status, $"A {status} VPN adapter is not connected");
+        Equal(0, state.Interfaces.Count, "Dormant adapter does not appear among active candidates");
+    }
+
+    var disconnected = VpnInterface() with { MediaConnectState = 2 };
+    Equal(VpnStatus.NoVpn, VpnDetectionService.Classify(VpnInventory(disconnected)).Status,
+        "Disconnected media overrides operational Up");
+    foreach (byte flags in new byte[] { 2, 16, 32, 64, 128 })
+    {
+        var excluded = VpnInterface() with { StatusFlags = flags };
+        Equal(VpnStatus.NoVpn, VpnDetectionService.Classify(VpnInventory(excluded)).Status,
+            $"Filter, disconnected-media and endpoint flags cannot create a tunnel: {flags}");
+    }
+}
+
+static void VpnActiveTunnel()
+{
+    foreach (uint tunnelType in new uint[] { 1, 2, 15 })
+    {
+        var evidence = VpnInterface() with { TunnelType = tunnelType };
+        var state = VpnDetectionService.Classify(VpnInventory(evidence));
+        Equal(VpnStatus.TunnelDetected, state.Status, $"Connected native tunnel type {tunnelType}");
+        Equal(1, state.Interfaces.Count, "Exactly one active native candidate");
+        var candidate = state.Interfaces[0];
+        Equal<uint?>(evidence.InterfaceIndex, candidate.InterfaceIndex, "Native interface index is preserved");
+        Equal<Guid?>(evidence.InterfaceGuid, candidate.InterfaceGuid, "Native interface GUID is preserved");
+        Equal(evidence.InterfaceName, candidate.InterfaceName, "Native interface alias is preserved");
+        Equal(evidence.Description, candidate.Description, "Native interface description is preserved");
+        Equal<uint?>(evidence.InterfaceType, candidate.InterfaceType, "Native interface type is preserved");
+        Equal<uint?>(evidence.TunnelType, candidate.TunnelType, "Native tunnel type is preserved");
+        Equal<OperationalStatus?>(evidence.OperationalStatus, candidate.OperationalStatus, "Native operational status is preserved");
+        Require(!string.IsNullOrWhiteSpace(candidate.Evidence), "Candidate retains its recognition evidence.");
+    }
+}
+
+static void VpnOrdinaryVirtualAdapters()
+{
+    var inventory = VpnInventory(
+        VpnInterface() with { InterfaceType = 6, Description = "Hyper-V Virtual Ethernet Adapter", DriverComponentId = "vms_mp", DriverService = "VMSMP" },
+        VpnInterface() with { InterfaceIndex = 43, InterfaceType = 6, Description = "VMware Virtual Ethernet Adapter", DriverComponentId = "vmware_virtual_ethernet", DriverService = "VMnetAdapter" },
+        VpnInterface() with { InterfaceIndex = 44, InterfaceType = 6, Description = "VirtualBox Host-Only Ethernet Adapter", DriverComponentId = "sun_vboxnetadp", DriverService = "VBoxNetAdp" },
+        VpnInterface() with { InterfaceIndex = 45, InterfaceType = 6, Description = "Ordinary virtual switch", DriverComponentId = "ordinary_virtual_adapter" },
+        VpnInterface() with { InterfaceIndex = 46, InterfaceType = 24, Description = "Software Loopback Interface", DriverComponentId = "wintun" });
+    var state = VpnDetectionService.Classify(inventory);
+    Equal(VpnStatus.NoVpn, state.Status, "Common virtualization and loopback devices are not tunnels");
+    Equal(0, state.Interfaces.Count, "Ordinary virtual devices do not create VPN candidates");
+}
+
+static void VpnDriverCandidates()
+{
+    foreach (var component in new[] { "wintun", "wireguard", "tap0901", "ovpn-dco", "WiNtUn" })
+    {
+        var evidence = VpnInterface() with { InterfaceType = 6, TunnelType = 0,
+            InterfaceName = "User renamed this adapter", Description = "User-facing generic description",
+            DriverComponentId = component };
+        var state = VpnDetectionService.Classify(VpnInventory(evidence));
+        Equal(VpnStatus.TunnelDetected, state.Status, $"Exact {component} native component identity");
+        Equal(1, state.Interfaces.Count, "Driver evidence yields one candidate");
+    }
+
+    var serviceEvidence = VpnInterface() with { InterfaceType = 6, DriverService = "WireGuard" };
+    Equal(VpnStatus.TunnelDetected, VpnDetectionService.Classify(VpnInventory(serviceEvidence)).Status,
+        "Exact native driver service recognizes an adapter without a component ID");
+    var nearMatch = VpnInterface() with { InterfaceType = 6, DriverComponentId = "not-wintun", DriverService = "wireguard-helper" };
+    Equal(VpnStatus.NoVpn, VpnDetectionService.Classify(VpnInventory(nearMatch)).Status,
+        "A substring or similarly named service does not prove a VPN driver");
+}
+
+static void VpnNameOnlyHints()
+{
+    foreach (var hint in new[] { "VPN", "WireGuard", "OpenVPN", "TAP-Windows Adapter V9", "My corporate tunnel" })
+    {
+        var evidence = VpnInterface() with { InterfaceType = 6, InterfaceName = hint,
+            Description = hint, DriverComponentId = "ordinary_virtual_adapter" };
+        Equal(VpnStatus.NoVpn, VpnDetectionService.Classify(VpnInventory(evidence)).Status,
+            $"Friendly alias and description '{hint}' are not authoritative VPN evidence");
+    }
+}
+
+static void VpnHardwareNotCandidate()
+{
+    foreach (uint type in new uint[] { 6, 71 })
+    {
+        var evidence = VpnInterface() with { InterfaceType = type, StatusFlags = 1,
+            InterfaceName = "VPN", Description = "WireGuard", DriverComponentId = "wireguard" };
+        Equal(VpnStatus.NoVpn, VpnDetectionService.Classify(VpnInventory(evidence)).Status,
+            "Physical hardware identity overrides misleading VPN metadata");
+    }
+}
+
+static void VpnTransitionTunnels()
+{
+    foreach (uint tunnelType in new uint[] { 11, 13, 14 })
+    {
+        var evidence = VpnInterface() with { TunnelType = tunnelType, InterfaceName = "VPN", Description = "VPN" };
+        Equal(VpnStatus.NoVpn, VpnDetectionService.Classify(VpnInventory(evidence)).Status,
+            $"6to4, ISATAP and Teredo are IPv6 transition mechanisms: {tunnelType}");
+    }
+}
+
+static void VpnOpaqueTunnel()
+{
+    var state = VpnDetectionService.Classify(VpnInventory(VpnInterface() with { TunnelType = 0 }));
+    Equal(VpnStatus.Indeterminate, state.Status, "An active unknown native tunnel is not guessed to be a VPN");
+    Require(!string.IsNullOrWhiteSpace(state.Message), "An uncertain tunnel has a useful diagnostic.");
+}
+
+static void VpnRasConnected()
+{
+    var inventory = new VpnInterfaceInventory(Array.Empty<VpnInterfaceEvidence>(),
+        new[] { new VpnRasConnectionEvidence("Work VPN", "WAN Miniport (IKEv2)", "vpn", 0x2000) });
+    var state = VpnDetectionService.Classify(inventory);
+    Equal(VpnStatus.TunnelDetected, state.Status, "RAS Connected plus VPN device type is positive native evidence");
+    Equal(1, state.Interfaces.Count, "One connected RAS VPN candidate");
+    var candidate = state.Interfaces[0];
+    Equal("Work VPN", candidate.InterfaceName, "RAS connection name is preserved");
+    Equal("WAN Miniport (IKEv2)", candidate.Description, "RAS native device name is preserved");
+    Require(candidate.InterfaceIndex is null && candidate.InterfaceGuid is null && candidate.InterfaceType is null &&
+        candidate.TunnelType is null && candidate.OperationalStatus is null,
+        "RAS entry GUID, logon LUID and connection state cannot masquerade as native interface fields.");
+
+    var failedConnection = new VpnInterfaceInventory(Array.Empty<VpnInterfaceEvidence>(),
+        new[] { new VpnRasConnectionEvidence("Work VPN", "WAN Miniport (IKEv2)", "vpn", 0x2000, 691) });
+    Equal(VpnStatus.Indeterminate, VpnDetectionService.Classify(failedConnection).Status,
+        "RAS connection errors prevent an apparently Connected state from proving a live VPN");
+}
+
+static void VpnRasDormant()
+{
+    foreach (uint connectionState in new uint[] { 0, 0x1000, 0x2001 })
+    {
+        var inventory = new VpnInterfaceInventory(Array.Empty<VpnInterfaceEvidence>(),
+            new[] { new VpnRasConnectionEvidence("Installed VPN", "WAN Miniport (IKEv2)", "vpn", connectionState) });
+        Equal(VpnStatus.NoVpn, VpnDetectionService.Classify(inventory).Status,
+            $"Only RAS Connected, not an existing or transitioning entry, creates a tunnel: {connectionState}");
+    }
+}
+
+static void VpnPppNotAssumed()
+{
+    var inventory = new VpnInterfaceInventory(new[] { VpnInterface() with { InterfaceType = 23, TunnelType = 0 } },
+        new[] { new VpnRasConnectionEvidence("VPN named dial-up", "Phone modem", "modem", 0x2000),
+            new VpnRasConnectionEvidence("VPN named direct link", "Serial cable", "direct", 0x2000) });
+    var state = VpnDetectionService.Classify(inventory);
+    Require(state.Status != VpnStatus.TunnelDetected, "PPP and non-VPN RAS connections cannot prove a VPN.");
+    Equal(0, state.Interfaces.Count, "PPP/dial-up without positive VPN evidence produces no candidate");
+}
+
+static void VpnIncompleteInventory()
+{
+    var inventory = new VpnInterfaceInventory(Array.Empty<VpnInterfaceEvidence>(),
+        Array.Empty<VpnRasConnectionEvidence>(), false, "Windows denied native interface metadata access.");
+    var state = VpnDetectionService.Classify(inventory);
+    Equal(VpnStatus.Indeterminate, state.Status, "Incomplete native observations cannot confidently rule out VPNs");
+    Require(state.Message?.Contains("denied", StringComparison.OrdinalIgnoreCase) == true,
+        "The original native diagnostic remains available.");
+    Equal(0, state.Interfaces.Count, "Failure does not fabricate an interface");
+
+    var partiallyObservedTunnel = inventory with { Interfaces = new[] { VpnInterface() } };
+    Equal(VpnStatus.TunnelDetected, VpnDetectionService.Classify(partiallyObservedTunnel).Status,
+        "An independent positive native observation remains usable despite another inventory failure");
+}
+
+static void VpnApiFailure()
+{
+    var source = new FakeVpnInterfaceSource { Failure = new System.ComponentModel.Win32Exception(5, "Native inventory denied") };
+    var service = new VpnDetectionService(source);
+    var state = service.GetCurrentState();
+    Equal(VpnStatus.Indeterminate, state.Status, "A native API failure cannot report NoVpn");
+    Equal(0, state.Interfaces.Count, "Failed API does not invent VPN candidates");
+    Require(!string.IsNullOrWhiteSpace(state.Message), "Native API failure has a useful diagnostic.");
+    Equal(1, source.Reads, "A state query reads the native source once");
+}
+
+static void VpnStateRefresh()
+{
+    var source = new FakeVpnInterfaceSource { Inventory = VpnInventory(VpnInterface()) };
+    var service = new VpnDetectionService(source);
+    Equal(VpnStatus.TunnelDetected, service.GetCurrentState().Status, "Initially connected native tunnel");
+    source.Inventory = VpnInventory(VpnInterface() with { OperationalStatus = OperationalStatus.Down });
+    Equal(VpnStatus.NoVpn, service.GetCurrentState().Status, "A subsequent query observes the disconnected interface");
+    source.Failure = new System.ComponentModel.Win32Exception(5);
+    Equal(VpnStatus.Indeterminate, service.GetCurrentState().Status, "Later native failure cannot reuse stale detection");
+    source.Failure = null;
+    source.Inventory = VpnInventory();
+    Equal(VpnStatus.NoVpn, service.GetCurrentState().Status, "Detection recovers after a transient native failure");
+    Equal(4, source.Reads, "Each query reads fresh evidence independently");
+}
+
+static void VpnUnconfirmedStatus()
+{
+    var unknownOperation = VpnInterface() with { InterfaceType = 6, DriverComponentId = "wintun", OperationalStatus = OperationalStatus.Unknown };
+    Equal(VpnStatus.Indeterminate, VpnDetectionService.Classify(VpnInventory(unknownOperation)).Status,
+        "Unknown operational status on a known VPN device cannot prove connection or disconnection");
+    var unknownMedia = VpnInterface() with { MediaConnectState = 0 };
+    Equal(VpnStatus.Indeterminate, VpnDetectionService.Classify(VpnInventory(unknownMedia)).Status,
+        "An opaque media state on a native tunnel cannot prove that the tunnel is connected");
+    var unauthenticated = VpnInterface() with { StatusFlags = 8 };
+    Equal(VpnStatus.Indeterminate, VpnDetectionService.Classify(VpnInventory(unauthenticated)).Status,
+        "An unauthenticated native tunnel cannot prove a live connection");
+    var malformedMedia = VpnInterface() with { InterfaceType = 6, DriverComponentId = "wintun", MediaConnectState = 99 };
+    Equal(VpnStatus.Indeterminate, VpnDetectionService.Classify(VpnInventory(malformedMedia)).Status,
+        "A known tunnel driver cannot make an invalid native media state trustworthy");
+}
+
+static void VpnTapAlwaysConnected()
+{
+    var evidence = VpnInterface() with { InterfaceType = 6, TunnelType = 0, DriverComponentId = "tap0901", TapMediaAlwaysConnected = true };
+    var state = VpnDetectionService.Classify(VpnInventory(evidence));
+    Equal(VpnStatus.Indeterminate, state.Status,
+        "An always-connected TAP setting cannot distinguish a dormant adapter from an active VPN");
+    Equal(1, state.Interfaces.Count, "Indeterminate state retains the unconfirmed native TAP metadata");
+    Require(state.Interfaces[0].Evidence.Contains("Always Connected", StringComparison.OrdinalIgnoreCase),
+        "TAP ambiguity is explained without pretending an active VPN was found.");
+}
+
+static void VpnRasConnectionSubstates()
+{
+    foreach (uint substate in new uint[] { 1, 2, 99 })
+    {
+        var inventory = new VpnInterfaceInventory(Array.Empty<VpnInterfaceEvidence>(),
+            new[] { new VpnRasConnectionEvidence("Work VPN", "WAN Miniport (IKEv2)", "vpn", 0x2000,
+                ConnectionSubstate: substate) });
+        var state = VpnDetectionService.Classify(inventory);
+        Equal(VpnStatus.Indeterminate, state.Status,
+            $"RAS Connected with dormant, reconnecting or unknown substate is not a live VPN claim: {substate}");
+    }
+
+    foreach (uint substate in new uint[] { 0, 0x2000 })
+    {
+        var inventory = new VpnInterfaceInventory(Array.Empty<VpnInterfaceEvidence>(),
+            new[] { new VpnRasConnectionEvidence("Work VPN", "WAN Miniport (IKEv2)", "vpn", 0x2000,
+                ConnectionSubstate: substate) });
+        Equal(VpnStatus.TunnelDetected, VpnDetectionService.Classify(inventory).Status,
+            $"RAS Connected with no substate or Reconnected confirms a local tunnel: {substate}");
+    }
+}
+
+static VpnRouteEvidence VpnRoute(string prefix, byte length, uint index = 42,
+    uint routeMetric = 1, uint? interfaceMetric = 0)
+{
+    var address = IPAddress.Parse(prefix);
+    return new(index, index == 42 ? VpnInterface().InterfaceGuid
+            : new Guid("4b62f267-c1ad-4fdc-bc2a-b09daff48690"), address, length,
+        address.AddressFamily == AddressFamily.InterNetwork ? IPAddress.Any : IPAddress.IPv6Any,
+        routeMetric, interfaceMetric, true);
+}
+
+static VpnState DetectedVpn() => VpnDetectionService.Classify(VpnInventory(VpnInterface()));
+
+static VpnTunnelRoutingResult VerifyVpnRoutes(IReadOnlyList<VpnRouteEvidence> ipv4,
+    IReadOnlyList<VpnRouteEvidence>? ipv6 = null)
+{
+    var state = VpnRouteVerifier.Verify(DetectedVpn(),
+        new(AddressFamily.InterNetwork, ipv4),
+        new(AddressFamily.InterNetworkV6, ipv6 ?? new[] { VpnRoute("::", 0) }));
+    Equal(1, state.Tunnels.Count, "One detected interface retains one verification result");
+    return state.Tunnels[0];
+}
+
+static void VpnRoutesMissing()
+{
+    var result = VerifyVpnRoutes(Array.Empty<VpnRouteEvidence>(), Array.Empty<VpnRouteEvidence>());
+    Equal(VpnRoutingMode.Unverified, result.IPv4.Mode, "No IPv4 route proof");
+    Equal(VpnRoutingMode.Unverified, result.IPv6.Mode, "No IPv6 route proof");
+    Equal(VpnRoutingMode.Unverified, result.Mode, "Detection alone cannot establish routing mode");
+    Equal(IpFamilyAvailability.Unavailable, result.IPv4.Availability, "A complete empty IPv4 inventory proves absence");
+    Equal(IpFamilyAvailability.Unavailable, result.IPv6.Availability, "A complete empty IPv6 inventory proves absence");
+    Require(!string.IsNullOrWhiteSpace(result.IPv4.Reason), "Missing-route result explains uncertainty.");
+}
+
+static void VpnRoutesFullDefaults()
+{
+    var result = VerifyVpnRoutes(new[] { VpnRoute("0.0.0.0", 0), VpnRoute("0.0.0.0", 0, 7, 100) },
+        new[] { VpnRoute("::", 0), VpnRoute("::", 0, 7, 100) });
+    Equal(VpnRoutingMode.FullTunnel, result.IPv4.Mode, "The effective IPv4 default uses the detected interface");
+    Equal(VpnRoutingMode.FullTunnel, result.IPv6.Mode, "The effective IPv6 default uses the detected interface");
+    Equal(VpnRoutingMode.FullTunnel, result.Mode, "Both families must be verified full for aggregate FullTunnel");
+    Require(result.IPv4.Routes.Any(route => route.InterfaceIndex == 42 && route.PrefixLength == 0),
+        "Verification retains the native IPv4 evidence.");
+    Equal(DetectedVpn().Interfaces[0], result.Tunnel, "Detection identity remains unchanged by route verification");
+}
+
+static void VpnRoutesSplitPrefixes()
+{
+    var result = VerifyVpnRoutes(new[] { VpnRoute("0.0.0.0", 0, 7), VpnRoute("10.0.0.0", 8) });
+    Equal(VpnRoutingMode.SplitTunnel, result.IPv4.Mode,
+        "A corporate VPN prefix and general physical default prove split IPv4 routing");
+    Equal(VpnRoutingMode.SplitTunnel, result.Mode, "One split family with another verified full family remains split");
+}
+
+static void VpnRoutesCombinedMetrics()
+{
+    var vpn = VpnRoute("0.0.0.0", 0, routeMetric: 1, interfaceMetric: 100);
+    var physical = VpnRoute("0.0.0.0", 0, 7, 10, 1);
+    Equal<ulong?>(101, vpn.EffectiveMetric, "Route cost includes the VPN interface metric");
+    Equal<ulong?>(11, physical.EffectiveMetric, "Route cost includes the competing physical interface metric");
+    Equal(VpnRoutingMode.Unverified, VerifyVpnRoutes(new[] { vpn, physical }).IPv4.Mode,
+        "A losing VPN default alone does not prove VPN traffic");
+    var result = VerifyVpnRoutes(new[] { vpn with { InterfaceMetric = 1 }, physical });
+    Equal(VpnRoutingMode.FullTunnel, result.IPv4.Mode, "Changing interface cost changes the effective default");
+}
+
+static void VpnRoutesHalfDefaults()
+{
+    var result = VerifyVpnRoutes(new[] { VpnRoute("0.0.0.0", 1, routeMetric: 100),
+        VpnRoute("128.0.0.0", 1, routeMetric: 100), VpnRoute("0.0.0.0", 0, 7, 1) },
+        new[] { VpnRoute("::", 1, routeMetric: 100), VpnRoute("8000::", 1, routeMetric: 100), VpnRoute("::", 0, 7, 1) });
+    Equal(VpnRoutingMode.FullTunnel, result.IPv4.Mode, "Paired IPv4 /1 routes outrank a cheaper physical /0");
+    Equal(VpnRoutingMode.FullTunnel, result.IPv6.Mode, "Paired IPv6 /1 routes outrank a cheaper physical /0");
+    Equal(VpnRoutingMode.FullTunnel, result.Mode, "Equivalent paired defaults cover both families");
+}
+
+static void VpnRoutesIndependentFamilies()
+{
+    var result = VerifyVpnRoutes(new[] { VpnRoute("0.0.0.0", 0) },
+        new[] { VpnRoute("::", 0, 7), VpnRoute("2606:4700::", 32) });
+    Equal(VpnRoutingMode.FullTunnel, result.IPv4.Mode, "IPv4 route analysis is independent");
+    Equal(VpnRoutingMode.SplitTunnel, result.IPv6.Mode, "IPv6 specific prefixes do not borrow IPv4 defaults");
+    Equal(VpnRoutingMode.SplitTunnel, result.Mode, "Different verified family modes produce aggregate split routing");
+    var missingV6 = VerifyVpnRoutes(new[] { VpnRoute("0.0.0.0", 0) }, Array.Empty<VpnRouteEvidence>());
+    Equal(VpnRoutingMode.FullTunnel, missingV6.IPv4.Mode, "Missing IPv6 proof does not erase IPv4 evidence");
+    Equal(IpFamilyAvailability.Unavailable, missingV6.IPv6.Availability, "Complete empty IPv6 evidence proves no usable family");
+    Equal(VpnRoutingMode.FullTunnel, missingV6.Mode, "A proven unavailable family does not defeat verified IPv4 full routing");
+}
+
+static void VpnRoutesMetricTies()
+{
+    var result = VerifyVpnRoutes(new[] { VpnRoute("0.0.0.0", 0), VpnRoute("0.0.0.0", 0, 7) });
+    Equal(VpnRoutingMode.Unverified, result.IPv4.Mode, "Equal-cost VPN and physical defaults are ambiguous");
+    Equal(VpnRoutingMode.Unverified, result.Mode, "An ambiguous family prevents a confident aggregate claim");
+    var specificTie = VerifyVpnRoutes(new[] { VpnRoute("0.0.0.0", 0, 7),
+        VpnRoute("8.8.8.0", 24), VpnRoute("8.8.8.0", 24, 7) });
+    Equal(VpnRoutingMode.Unverified, specificTie.IPv4.Mode, "Equal-cost specific VPN and physical paths are ambiguous");
+}
+
+static void VpnRoutesDeterminism()
+{
+    var routes = new[] { VpnRoute("0.0.0.0", 0, 7, 100), VpnRoute("0.0.0.0", 0),
+        VpnRoute("192.168.0.0", 16, 7), VpnRoute("10.20.0.0", 16) };
+    var first = VerifyVpnRoutes(routes);
+    var repeated = VerifyVpnRoutes(routes);
+    var reordered = VerifyVpnRoutes(routes.Reverse().ToArray());
+    Equal(first.Mode, repeated.Mode, "Repeated identical observations do not change routing mode");
+    Equal(first.IPv4.Mode, reordered.IPv4.Mode, "Enumeration order does not choose a route winner");
+    Equal(first.IPv4.Reason, reordered.IPv4.Reason, "Routing explanations remain deterministic");
+    Require(first.IPv4.Routes.SequenceEqual(reordered.IPv4.Routes), "Evidence is sorted independently of enumeration order.");
+    var duplicate = VerifyVpnRoutes(routes.Concat(new[] { routes[1] }).ToArray());
+    Equal(first.IPv4.Mode, duplicate.IPv4.Mode, "Repeated identical rows do not manufacture an equal-cost competitor");
+}
+
+static void VpnRoutesIncomplete()
+{
+    var state = VpnRouteVerifier.Verify(DetectedVpn(),
+        new(AddressFamily.InterNetwork, new[] { VpnRoute("0.0.0.0", 0) }, false, "Windows denied IPv4 route metadata."),
+        new(AddressFamily.InterNetworkV6, new[] { VpnRoute("::", 0) }));
+    Equal(VpnRoutingMode.Unverified, state.Tunnels[0].IPv4.Mode, "Incomplete IPv4 inventory cannot prove effective routing");
+    Equal(VpnRoutingMode.FullTunnel, state.Tunnels[0].IPv6.Mode, "An independent complete family can still be verified");
+    Equal(VpnRoutingMode.Unverified, state.Tunnels[0].Mode, "Partial observation cannot produce aggregate full routing");
+
+    var source = new FakeVpnRouteSource { FailureFamily = AddressFamily.InterNetwork,
+        Failure = new System.ComponentModel.Win32Exception(5, "Native IPv4 route table denied") };
+    var service = new VpnRouteVerifier(new VpnDetectionService(new FakeVpnInterfaceSource
+        { Inventory = VpnInventory(VpnInterface()) }), source);
+    var failed = service.GetCurrentState();
+    Equal(VpnRoutingMode.Unverified, failed.Tunnels[0].IPv4.Mode, "A native route API failure remains uncertainty");
+    Equal(VpnRoutingMode.FullTunnel, failed.Tunnels[0].IPv6.Mode, "One failed family does not suppress another native read");
+}
+
+static void VpnRoutesUnusable()
+{
+    foreach (var candidate in new[] { VpnRoute("0.0.0.0", 0) with { InterfaceUsable = false },
+        VpnRoute("0.0.0.0", 0) with { ValidLifetime = 0 },
+        VpnRoute("0.0.0.0", 0) with { IsLoopback = true },
+        VpnRoute("0.0.0.0", 0) with { DefaultRoutesEnabled = false } })
+    {
+        Equal(VpnRoutingMode.Unverified, VerifyVpnRoutes(new[] { candidate, VpnRoute("0.0.0.0", 0, 7, 100) }).IPv4.Mode,
+            "Unusable, expired, loopback or disabled-default VPN rows cannot establish traffic routing");
+    }
+}
+
+static void VpnRoutesOwnership()
+{
+    foreach (var candidate in new[] { VpnRoute("0.0.0.0", 0) with { InterfaceGuid = new Guid("4b62f267-c1ad-4fdc-bc2a-b09daff48690") },
+        VpnRoute("0.0.0.0", 0) with { InterfaceGuid = null },
+        VpnRoute("0.0.0.0", 0) with { InterfaceIndex = 43 },
+        VpnRoute("0.0.0.0", 0) with { InterfaceMetric = null },
+        VpnRoute("0.0.0.0", 0) with { InterfaceUsable = null },
+        VpnRoute("0.0.0.0", 0) with { DefaultRoutesEnabled = null } })
+    {
+        Equal(VpnRoutingMode.Unverified, VerifyVpnRoutes(new[] { candidate }).IPv4.Mode,
+            "Interface index reuse, missing ownership or missing eligibility metadata cannot prove a VPN path");
+    }
+
+    var detection = DetectedVpn();
+    var offline = detection with { Interfaces = new[] { detection.Interfaces[0] with { OperationalStatus = OperationalStatus.Down } } };
+    var offlineResult = VpnRouteVerifier.Verify(offline,
+        new(AddressFamily.InterNetwork, new[] { VpnRoute("0.0.0.0", 0) }),
+        new(AddressFamily.InterNetworkV6, new[] { VpnRoute("::", 0) }));
+    Equal(VpnRoutingMode.Unverified, offlineResult.Tunnels[0].Mode,
+        "Routes cannot override an unconfirmed candidate operational state");
+}
+
+static void VpnRoutesRasWithoutInterface()
+{
+    var detection = VpnDetectionService.Classify(new(Array.Empty<VpnInterfaceEvidence>(),
+        new[] { new VpnRasConnectionEvidence("Work VPN", "WAN Miniport (IKEv2)", "vpn", 0x2000) }));
+    var state = VpnRouteVerifier.Verify(detection,
+        new(AddressFamily.InterNetwork, new[] { VpnRoute("0.0.0.0", 0) }),
+        new(AddressFamily.InterNetworkV6, new[] { VpnRoute("::", 0) }));
+    Equal(VpnRoutingMode.Unverified, state.Tunnels[0].Mode, "RAS status without a native interface relationship cannot verify routes");
+    Require(state.Tunnels[0].Tunnel.InterfaceIndex is null && state.Tunnels[0].Tunnel.InterfaceGuid is null,
+        "Route verification does not fabricate a RAS interface index or GUID.");
+}
+
+static void VpnRoutesMetricOverflow()
+{
+    var expensive = VpnRoute("0.0.0.0", 0, routeMetric: uint.MaxValue - 1, interfaceMetric: 100);
+    Equal<ulong?>((ulong)uint.MaxValue - 1 + 100, expensive.EffectiveMetric, "Combined native costs use a wide integer");
+    Equal(VpnRoutingMode.Unverified, VerifyVpnRoutes(new[] { expensive, VpnRoute("0.0.0.0", 0, 7, 100) }).IPv4.Mode,
+        "A wrapped uint sum cannot make the VPN default falsely win");
+    var unspecified = VpnRoute("0.0.0.0", 0, routeMetric: uint.MaxValue);
+    Equal<ulong?>(null, unspecified.EffectiveMetric, "Windows route metric -1 is unspecified rather than a known cost");
+    Equal(VpnRoutingMode.Unverified, VerifyVpnRoutes(new[] { unspecified }).IPv4.Mode,
+        "An unspecified route metric cannot establish an effective default");
+}
+
+static void VpnRoutesPublicBypass()
+{
+    var result = VerifyVpnRoutes(new[] { VpnRoute("0.0.0.0", 0), VpnRoute("8.8.8.8", 32, 7, 100) });
+    Equal(VpnRoutingMode.Unverified, result.IPv4.Mode,
+        "A more-specific physical public route may be a VPN endpoint bypass or a real exception");
+    var losingVpnSpecific = VerifyVpnRoutes(new[] { VpnRoute("0.0.0.0", 0, 7),
+        VpnRoute("8.8.8.0", 24, routeMetric: 100), VpnRoute("8.8.8.0", 24, 7, 1) });
+    Equal(VpnRoutingMode.Unverified, losingVpnSpecific.IPv4.Mode,
+        "The presence of a losing VPN prefix does not prove effective split routing");
+}
+
+static void VpnRoutesLocalExceptions()
+{
+    var result = VerifyVpnRoutes(new[] { VpnRoute("0.0.0.0", 0), VpnRoute("192.168.0.0", 16, 7),
+        VpnRoute("127.0.0.0", 8, 7), VpnRoute("224.0.0.0", 4, 7) },
+        new[] { VpnRoute("::", 0), VpnRoute("fe80::", 10, 7), VpnRoute("fc00::", 7, 7), VpnRoute("ff00::", 8, 7) });
+    Equal(VpnRoutingMode.FullTunnel, result.IPv4.Mode, "IPv4 LAN, loopback and multicast exceptions are local context");
+    Equal(VpnRoutingMode.FullTunnel, result.IPv6.Mode, "IPv6 local and multicast exceptions are local context");
+}
+
+static void VpnRoutesPartialCoverage()
+{
+    var result = VerifyVpnRoutes(new[] { VpnRoute("0.0.0.0", 1) });
+    Equal(VpnRoutingMode.Unverified, result.IPv4.Mode, "One half-default alone does not describe general network routing");
+    var mixedHalves = VerifyVpnRoutes(new[] { VpnRoute("0.0.0.0", 1), VpnRoute("128.0.0.0", 1, 7) });
+    Equal(VpnRoutingMode.SplitTunnel, mixedHalves.IPv4.Mode, "One VPN half and one physical half verify split routing");
+}
+
+static void VpnRoutesMalformed()
+{
+    foreach (var malformed in new[] { VpnRoute("0.0.0.0", 33),
+        VpnRoute("0.0.0.0", 0) with { NextHop = IPAddress.IPv6Any },
+        VpnRoute("::", 0) })
+    {
+        Equal(VpnRoutingMode.Unverified, VerifyVpnRoutes(new[] { malformed }).IPv4.Mode,
+            "Invalid prefix lengths and address-family mismatches cannot establish IPv4 routing");
+    }
+}
+
+static void VpnRoutesNoDetectedTunnel()
+{
+    foreach (var status in new[] { VpnStatus.NoVpn, VpnStatus.Indeterminate })
+    {
+        var detection = new VpnState(status, Array.Empty<VpnInterfaceInfo>(), "No confirmed candidate");
+        var state = VpnRouteVerifier.Verify(detection,
+            new(AddressFamily.InterNetwork, new[] { VpnRoute("0.0.0.0", 0) }),
+            new(AddressFamily.InterNetworkV6, new[] { VpnRoute("::", 0) }));
+        Equal(detection, state.Detection, "Route verification preserves the original detector state");
+        Equal(0, state.Tunnels.Count, "A route row cannot promote an unconfirmed interface into a VPN candidate");
+    }
+
+    foreach (var nativeSource in new[] { new FakeVpnInterfaceSource(),
+        new FakeVpnInterfaceSource { Failure = new System.ComponentModel.Win32Exception(5) } })
+    {
+        var routes = new FakeVpnRouteSource();
+        var service = new VpnRouteVerifier(new VpnDetectionService(nativeSource), routes);
+        Equal(0, service.GetCurrentState().Tunnels.Count, "No confirmed candidate means no routing claims");
+        Equal(0, routes.Reads.Count, "NoVPN or indeterminate detection does not trigger native route reads");
+    }
+}
+
+static void VpnRoutesRefresh()
+{
+    var source = new FakeVpnRouteSource();
+    var service = new VpnRouteVerifier(new VpnDetectionService(new FakeVpnInterfaceSource
+        { Inventory = VpnInventory(VpnInterface()) }), source);
+    Equal(VpnRoutingMode.FullTunnel, service.GetCurrentState().Tunnels[0].Mode, "Initially effective VPN defaults");
+    source.IPv4 = new(AddressFamily.InterNetwork, new[] { VpnRoute("0.0.0.0", 0, 7), VpnRoute("10.0.0.0", 8) });
+    Equal(VpnRoutingMode.SplitTunnel, service.GetCurrentState().Tunnels[0].Mode, "A later query observes new split routes");
+    source.IPv4 = new(AddressFamily.InterNetwork, new[] { VpnRoute("0.0.0.0", 0, 7) });
+    Equal(VpnRoutingMode.Unverified, service.GetCurrentState().Tunnels[0].Mode, "Removed routes do not reuse stale full-tunnel proof");
+    Equal(3, source.Reads.Count(family => family == AddressFamily.InterNetwork), "Every state query rereads IPv4 native routes");
+    Equal(3, source.Reads.Count(family => family == AddressFamily.InterNetworkV6), "Every state query rereads IPv6 native routes");
+}
+
+static VpnTunnelRoutingResult VerifyVpnFamilies(VpnRouteInventory ipv4, VpnRouteInventory ipv6) =>
+    VpnRouteVerifier.Verify(DetectedVpn(), ipv4, ipv6).Tunnels.Single();
+
+static void VpnFamilyIpv4OnlyFull()
+{
+    var result = VerifyVpnFamilies(new(AddressFamily.InterNetwork, new[] { VpnRoute("0.0.0.0", 0) }),
+        new(AddressFamily.InterNetworkV6, Array.Empty<VpnRouteEvidence>()));
+    Equal(IpFamilyAvailability.Usable, result.IPv4.Availability, "Active IPv4 forwarding establishes family usability");
+    Equal(VpnRoutingMode.FullTunnel, result.IPv4.Mode, "IPv4 is individually verified full");
+    Equal(IpFamilyAvailability.Unavailable, result.IPv6.Availability, "Complete empty IPv6 snapshot proves unavailability");
+    Equal(VpnRoutingMode.Unverified, result.IPv6.Mode, "Unavailable IPv6 is not falsely marked full");
+    Equal(VpnRoutingMode.FullTunnel, result.Mode, "Only applicable IPv4 contributes to aggregate routing");
+}
+
+static void VpnFamilyIpv4OnlySplit()
+{
+    var result = VerifyVpnFamilies(new(AddressFamily.InterNetwork,
+            new[] { VpnRoute("0.0.0.0", 0, 7), VpnRoute("10.0.0.0", 8) }),
+        new(AddressFamily.InterNetworkV6, Array.Empty<VpnRouteEvidence>()));
+    Equal(IpFamilyAvailability.Usable, result.IPv4.Availability, "Known IPv4 paths establish applicability");
+    Equal(VpnRoutingMode.SplitTunnel, result.IPv4.Mode, "Corporate prefix and physical default verify split routing");
+    Equal(IpFamilyAvailability.Unavailable, result.IPv6.Availability, "Absent IPv6 is independently unavailable");
+    Equal(VpnRoutingMode.SplitTunnel, result.Mode, "Unavailable IPv6 does not hide verified IPv4 split routing");
+}
+
+static void VpnFamilyUsableWithoutVpnPaths()
+{
+    foreach (var ipv6Routes in new[] { new[] { VpnRoute("::", 0, 7) },
+        new[] { VpnRoute("fe80::", 10, 7) },
+        new[] { VpnRoute("::", 0), VpnRoute("::", 0, 7) } })
+    {
+        var result = VerifyVpnFamilies(new(AddressFamily.InterNetwork, new[] { VpnRoute("0.0.0.0", 0) }),
+            new(AddressFamily.InterNetworkV6, ipv6Routes));
+        Equal(IpFamilyAvailability.Usable, result.IPv6.Availability,
+            "A confirmed live physical interface proves IPv6 exists even without VPN routes");
+        Equal(VpnRoutingMode.Unverified, result.IPv6.Mode, "Physical-only or ambiguous usable IPv6 remains unverified");
+        Equal(VpnRoutingMode.Unverified, result.Mode,
+            "A usable unverified family cannot be ignored to claim overall full tunneling");
+    }
+}
+
+static void VpnFamilyIpv6OnlyFull()
+{
+    var result = VerifyVpnFamilies(new(AddressFamily.InterNetwork, Array.Empty<VpnRouteEvidence>()),
+        new(AddressFamily.InterNetworkV6, new[] { VpnRoute("::", 0) }));
+    Equal(IpFamilyAvailability.Unavailable, result.IPv4.Availability, "Complete empty IPv4 snapshot proves unavailability");
+    Equal(IpFamilyAvailability.Usable, result.IPv6.Availability, "Active IPv6 forwarding establishes applicability");
+    Equal(VpnRoutingMode.FullTunnel, result.IPv6.Mode, "IPv6 is individually verified full");
+    Equal(VpnRoutingMode.FullTunnel, result.Mode, "Aggregation is symmetric for IPv6-only routing");
+}
+
+static void VpnFamilyNeitherUsable()
+{
+    var result = VerifyVpnFamilies(new(AddressFamily.InterNetwork, Array.Empty<VpnRouteEvidence>()),
+        new(AddressFamily.InterNetworkV6, Array.Empty<VpnRouteEvidence>()));
+    Equal(IpFamilyAvailability.Unavailable, result.IPv4.Availability, "No applicable IPv4");
+    Equal(IpFamilyAvailability.Unavailable, result.IPv6.Availability, "No applicable IPv6");
+    Equal(VpnRoutingMode.Unverified, result.Mode, "An empty applicable family set cannot prove routing");
+}
+
+static void VpnFamilyUnknownNotIgnored()
+{
+    foreach (var ipv6 in new[]
+    {
+        new VpnRouteInventory(AddressFamily.InterNetworkV6, Array.Empty<VpnRouteEvidence>(), false, "Native IPv6 query denied"),
+        new VpnRouteInventory(AddressFamily.InterNetworkV6, Array.Empty<VpnRouteEvidence>(), false,
+            "Incomplete native inventory", IpFamilyAvailability.Unavailable),
+        new VpnRouteInventory(AddressFamily.InterNetwork, Array.Empty<VpnRouteEvidence>())
+    })
+    {
+        var result = VerifyVpnFamilies(new(AddressFamily.InterNetwork, new[] { VpnRoute("0.0.0.0", 0) }), ipv6);
+        Equal(IpFamilyAvailability.Unknown, result.IPv6.Availability, "API failure, partial or wrong-family observations are uncertainty");
+        Equal(VpnRoutingMode.Unverified, result.IPv6.Mode, "Unknown applicability provides no route proof");
+        Equal(VpnRoutingMode.Unverified, result.Mode, "Unknown family state cannot be ignored during aggregation");
+    }
+
+    var source = new FakeVpnRouteSource { FailureFamily = AddressFamily.InterNetworkV6,
+        Failure = new System.ComponentModel.Win32Exception(5, "Native IPv6 query denied") };
+    var service = new VpnRouteVerifier(new VpnDetectionService(new FakeVpnInterfaceSource
+        { Inventory = VpnInventory(VpnInterface()) }), source);
+    var nativeFailure = service.GetCurrentState().Tunnels.Single();
+    Equal(IpFamilyAvailability.Unknown, nativeFailure.IPv6.Availability, "Thrown native query does not become a successful empty snapshot");
+    Equal(VpnRoutingMode.Unverified, nativeFailure.Mode, "Native query failure cannot falsely promote full routing");
+}
+
+static void VpnFamilyUnavailableEvidence()
+{
+    foreach (var ipv6Routes in new[]
+    {
+        new[] { VpnRoute("::1", 128, 7) with { IsLoopback = true } },
+        new[] { VpnRoute("::", 0, 7) with { InterfaceUsable = false } },
+        new[] { VpnRoute("::1", 128, 7) with { IsLoopback = true },
+            VpnRoute("::", 0, 7) with { InterfaceUsable = false } }
+    })
+    {
+        var result = VerifyVpnFamilies(new(AddressFamily.InterNetwork, new[] { VpnRoute("0.0.0.0", 0) }),
+            new(AddressFamily.InterNetworkV6, ipv6Routes));
+        Equal(IpFamilyAvailability.Unavailable, result.IPv6.Availability,
+            "Completed loopback-only or confirmed inactive interface snapshots prove no usable IPv6");
+        Equal(VpnRoutingMode.FullTunnel, result.Mode, "Known unavailable IPv6 does not weaken verified IPv4 routing");
+    }
+
+    foreach (var liveInterface in new[] { VpnRoute("::", 0, 7) with { ValidLifetime = 0 },
+        VpnRoute("::", 0, 7) with { DefaultRoutesEnabled = false } })
+    {
+        var result = VerifyVpnFamilies(new(AddressFamily.InterNetwork, new[] { VpnRoute("0.0.0.0", 0) }),
+            new(AddressFamily.InterNetworkV6, new[] { liveInterface }));
+        Equal(IpFamilyAvailability.Usable, result.IPv6.Availability,
+            "An expired or disabled route does not erase evidence of a live IPv6 interface");
+        Equal(VpnRoutingMode.Unverified, result.Mode, "A usable family without route proof still prevents aggregate full routing");
+    }
+}
+
+static void VpnFamilyMetadataSafety()
+{
+    foreach (var ipv6 in new[]
+    {
+        new VpnRouteInventory(AddressFamily.InterNetworkV6,
+            new[] { VpnRoute("::", 0, 7) with { InterfaceUsable = null } }),
+        new VpnRouteInventory(AddressFamily.InterNetworkV6,
+            new[] { VpnRoute("::", 0, 7) with { InterfaceUsable = null } },
+            Availability: IpFamilyAvailability.Unavailable),
+        new VpnRouteInventory(AddressFamily.InterNetworkV6,
+            new[] { VpnRoute("::", 0, 7) }, Availability: IpFamilyAvailability.Unavailable),
+        new VpnRouteInventory(AddressFamily.InterNetworkV6,
+            new[] { VpnRoute("::", 0) }, Availability: IpFamilyAvailability.Unavailable)
+    })
+    {
+        var result = VerifyVpnFamilies(new(AddressFamily.InterNetwork, new[] { VpnRoute("0.0.0.0", 0) }), ipv6);
+        Equal(IpFamilyAvailability.Unknown, result.IPv6.Availability,
+            "Missing interface state or contradictory unavailable declarations remain uncertain");
+        Equal(VpnRoutingMode.Unverified, result.Mode, "Contradictory metadata cannot hide a potentially usable family");
+    }
+
+    var explicitlyUsable = VerifyVpnFamilies(new(AddressFamily.InterNetwork, new[] { VpnRoute("0.0.0.0", 0) }),
+        new(AddressFamily.InterNetworkV6, Array.Empty<VpnRouteEvidence>(), Availability: IpFamilyAvailability.Usable));
+    Equal(IpFamilyAvailability.Usable, explicitlyUsable.IPv6.Availability, "Positive family support remains applicable even with no routes");
+    Equal(VpnRoutingMode.Unverified, explicitlyUsable.Mode, "Known applicability without route proof cannot be ignored");
+
+    var knownAndUnknown = VerifyVpnFamilies(new(AddressFamily.InterNetwork, new[] { VpnRoute("0.0.0.0", 0) }),
+        new(AddressFamily.InterNetworkV6, new[] { VpnRoute("::", 0),
+            VpnRoute("2606:4700::", 32, 7) with { InterfaceUsable = null } }));
+    Equal(IpFamilyAvailability.Usable, knownAndUnknown.IPv6.Availability,
+        "A confirmed live interface establishes applicability despite another interface's unknown state");
+    Equal(VpnRoutingMode.Unverified, knownAndUnknown.Mode,
+        "Incomplete competing route metadata still prevents confident route verification");
+}
+
 static int RunLeaseChild(string[] arguments)
 {
     if (arguments.Length != 3) throw new ArgumentException("Lease child requires a test root and mode.");
@@ -2011,6 +2739,39 @@ static void Require(bool condition, string description)
 {
     if (!condition)
         throw new InvalidOperationException(description);
+}
+
+sealed class FakeVpnInterfaceSource : IVpnInterfaceSource
+{
+    public VpnInterfaceInventory Inventory { get; set; } = new(Array.Empty<VpnInterfaceEvidence>(), Array.Empty<VpnRasConnectionEvidence>());
+    public Exception? Failure { get; set; }
+    public int Reads { get; private set; }
+
+    public VpnInterfaceInventory Read()
+    {
+        Reads++;
+        if (Failure is not null) throw Failure;
+        return Inventory;
+    }
+}
+
+sealed class FakeVpnRouteSource : IVpnRouteSource
+{
+    private static readonly Guid TunnelGuid = new("825018c6-06a8-4721-9b04-9aedfbf70d23");
+    public VpnRouteInventory IPv4 { get; set; } = new(AddressFamily.InterNetwork,
+        new[] { new VpnRouteEvidence(42, TunnelGuid, IPAddress.Any, 0, IPAddress.Any, 1, 0, true) });
+    public VpnRouteInventory IPv6 { get; set; } = new(AddressFamily.InterNetworkV6,
+        new[] { new VpnRouteEvidence(42, TunnelGuid, IPAddress.IPv6Any, 0, IPAddress.IPv6Any, 1, 0, true) });
+    public AddressFamily? FailureFamily { get; set; }
+    public Exception? Failure { get; set; }
+    public List<AddressFamily> Reads { get; } = new();
+
+    public VpnRouteInventory Read(AddressFamily addressFamily)
+    {
+        Reads.Add(addressFamily);
+        if (Failure is not null && FailureFamily == addressFamily) throw Failure;
+        return addressFamily == AddressFamily.InterNetwork ? IPv4 : IPv6;
+    }
 }
 
 // Every child is started by this test process against its own temporary workspace.

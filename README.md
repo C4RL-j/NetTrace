@@ -94,6 +94,22 @@ SQLite indexes cover the single active session, recent sessions/events, profile 
 
 NetTrace registers its window for Windows suspend/resume notifications, including connected standby. These messages end the active session on sleep and require a fresh identity observation before a new session starts after resume, including for the same SSID. Sleep time is excluded. When Windows cannot provide identity, NetTrace conservatively ends the old session at its last confirmation and keeps dashboard sampling independent; a recovered identity begins a new session. Completed history is never broadly reassigned.
 
+## VPN detection foundation (Task 004A)
+
+`VpnDetectionService.GetCurrentState()` provides an independent, on-demand snapshot: `NoVpn`, `TunnelDetected`, or `Indeterminate`. Windows native interface status and GUID-matched driver component/service IDs identify operational local tunnel candidates; connected Windows RAS VPNs provide separate native evidence. Adapter aliases, descriptions and process names do not establish a VPN. Dormant/disconnected interfaces, physical hardware, loopback, standard virtualization adapters and IPv6 transition mechanisms are excluded. Ambiguous status, incomplete API results and TAP's Always Connected setting produce uncertainty.
+
+This foundation is not connected to the dashboard, physical recognition, sampling or SQLite. `TunnelDetected` confirms local tunnel evidence, not routing, encryption or endpoint reachability. `NoVpn` means no supported active candidate was found; unrecognized or customized VPN drivers can be missed, and Wintun also supports non-VPN tunnels. RAS-only evidence retains connection/device names but leaves interface identifiers unavailable rather than inventing them. No network settings or permissions are changed.
+
+## VPN routing verification (Task 004B)
+
+`VpnRouteVerifier.GetCurrentState()` reuses Task 004A detection and reads IPv4/IPv6 routes separately through Windows `GetIpForwardTable2`, `GetIpInterfaceEntry` and `GetIfEntry2`. Each tunnel/family result retains prefixes, next hops, interface GUID/index, route/interface metrics, usability and an explanation. A fresh query reads new evidence; no routes are configured or packets sent.
+
+`FullTunnel` requires the detected interface to win effective general routing through a default route or paired `/1` routes, with no effective public bypass. Selection uses longest matching prefix before combined route/interface metrics. All prefix boundaries are evaluated, rather than testing a few destinations. Private/LAN, loopback, link-local and multicast ranges do not defeat general-internet coverage. `SplitTunnel` requires effective VPN forwarding prefixes plus confirmed general routing through another interface. Installed, losing, expired, loopback or inactive routes alone cannot verify routing.
+
+Missing metadata, equal-cost VPN/non-VPN alternatives, failed family queries, incomplete general coverage and public bypasses that could be VPN peer exceptions stay `Unverified`. RAS-only candidates without an interface identity also remain unverified. Source/interface-bound traffic and routing changes after the snapshot can differ from this global-table assessment. This remains a service foundation with no dashboard, database, event, session or byte-accounting integration.
+
+Task 004B.1 separates each family's availability (`Usable`, `Unavailable`, `Unknown`) from its routing decision. A complete, valid snapshot with no usable non-loopback interfaces is unavailable for routing; this does not claim the Windows protocol stack is disabled. Local-only or physical-only family routes still establish usability, so missing VPN/default routes remain unverified. Failed or incomplete queries stay unknown. Combination ignores only confirmed unavailable families: all remaining families must verify Full for `FullTunnel`; a verified Split family yields `SplitTunnel`; any remaining unknown/unverified family, or both unavailable families, yields `Unverified`.
+
 ## Migration verification
 
 Run the isolated migration checks without touching your application data:
