@@ -20,7 +20,7 @@ public sealed class SystemTrayIcon : IDisposable
         ArgumentNullException.ThrowIfNull(exit);
         dispatcher.VerifyAccess();
         _dispatcher = dispatcher;
-        _ownedIcon = (Icon)SystemIcons.Application.Clone();
+        _ownedIcon = LoadApplicationIcon();
         _menu = new Forms.ContextMenuStrip();
         _menu.Items.Add("Open NetTrace", null, (_, _) => Invoke(openDashboard));
         _menu.Items.Add("Exit", null, (_, _) => Invoke(exit));
@@ -44,6 +44,16 @@ public sealed class SystemTrayIcon : IDisposable
             _ownedIcon.Dispose();
             throw;
         }
+    }
+
+    private static Icon LoadApplicationIcon()
+    {
+        var resource = System.Windows.Application.GetResourceStream(
+            new Uri("pack://application:,,,/NetTrace;component/assets/NetTrace.ico", UriKind.Absolute))
+            ?? throw new InvalidOperationException("The embedded NetTrace icon could not be loaded.");
+        using var stream = resource.Stream;
+        using var icon = new Icon(stream, Forms.SystemInformation.SmallIconSize);
+        return (Icon)icon.Clone();
     }
 
     private void Invoke(Action action)

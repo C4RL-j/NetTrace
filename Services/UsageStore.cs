@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using Microsoft.Data.Sqlite;
 
@@ -217,5 +218,45 @@ public sealed class UsageStore
             return (0, 0);
 
         return (reader.GetInt64(0), reader.GetInt64(1));
+    }
+
+    public (double DownloadBytesPerSecond, double UploadBytesPerSecond) GetTrafficPeaks(DateOnly day)
+    {
+        using var connection = new SqliteConnection(_connectionString);
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT downloaded_peak_bytes_per_second, uploaded_peak_bytes_per_second
+            FROM daily_traffic_peaks WHERE day = $day;
+            """;
+        command.Parameters.AddWithValue("$day", day.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+
+        using var reader = command.ExecuteReader();
+        return reader.Read() ? (reader.GetDouble(0), reader.GetDouble(1)) : (0, 0);
+    }
+
+    public void SaveTrafficPeaks(DateOnly day, double downloadBytesPerSecond, double uploadBytesPerSecond)
+    {
+        if (!double.IsFinite(downloadBytesPerSecond) || downloadBytesPerSecond < 0)
+            throw new ArgumentOutOfRangeException(nameof(downloadBytesPerSecond), "A traffic peak must be finite and nonnegative.");
+        if (!double.IsFinite(uploadBytesPerSecond) || uploadBytesPerSecond < 0)
+            throw new ArgumentOutOfRangeException(nameof(uploadBytesPerSecond), "A traffic peak must be finite and nonnegative.");
+
+        using var connection = new SqliteConnection(_connectionString);
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO daily_traffic_peaks(day, downloaded_peak_bytes_per_second, uploaded_peak_bytes_per_second)
+            VALUES ($day, $downloaded, $uploaded)
+            ON CONFLICT(day) DO UPDATE SET
+                downloaded_peak_bytes_per_second = MAX(downloaded_peak_bytes_per_second, excluded.downloaded_peak_bytes_per_second),
+                uploaded_peak_bytes_per_second = MAX(uploaded_peak_bytes_per_second, excluded.uploaded_peak_bytes_per_second);
+            """;
+        command.Parameters.AddWithValue("$day", day.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+        command.Parameters.AddWithValue("$downloaded", downloadBytesPerSecond);
+        command.Parameters.AddWithValue("$uploaded", uploadBytesPerSecond);
+        command.ExecuteNonQuery();
     }
 }

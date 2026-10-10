@@ -24,6 +24,8 @@ internal static class Program
     {
         if (args.Length == 3 && args[0] == "--background-exit-child")
             return RunBackgroundExitChild(args[1], args[2]);
+        if (args.Length >= 3 && args[0] == "--launch-child")
+            return RunLaunchChild(args[1], args[2], args.Skip(3).ToArray());
         var ownedRoot = System.IO.Path.Combine(AppContext.BaseDirectory, "owned-data-" + Guid.NewGuid().ToString("N"));
         MainWindow? window = null;
         try
@@ -197,9 +199,11 @@ internal static class Program
                 "Retained failed usage batch succeeds on retry without double counting");
             SendMessage(handle, 0x0218, new IntPtr(18), IntPtr.Zero);
             SendMessage(handle, 0x0218, new IntPtr(7), IntPtr.Zero);
+            // This fixture drives samples manually; pause before waiting for recognition
+            // so an automatic tick cannot establish a baseline ahead of the assertion.
+            StopSampler(window);
             Await(() => Tracker(window).Current is { } resumed && resumed.Id != unassignedId);
             Field<DispatcherTimer>(window, "_timer").Stop();
-            StopSampler(window);
             Check(Tracker(window).Current!.NetworkIdentifier == "SMOKE_UNASSIGNED" &&
                 Tracker(window).Current!.DownloadBytes == 0 &&
                 history.GetRecentSessions().Single(s => s.Id == unassignedId).EndReason == "Sleep" &&
@@ -263,6 +267,12 @@ internal static class Program
             CheckVpnLifecycle(ownedRoot, adapter.Id);
             CheckBackgroundLifecycle(ownedRoot, adapter.Id);
             CheckActualBackgroundProcessExit(ownedRoot, adapter.Id);
+            CheckStartupLaunchModes(ownedRoot, adapter.Id);
+            CheckStartupSetting(ownedRoot, adapter.Id);
+            CheckActualLaunchProcess(ownedRoot, adapter.Id, background: false);
+            CheckActualLaunchProcess(ownedRoot, adapter.Id, background: true);
+            CheckIcmpBackgroundLifecycle(ownedRoot, adapter.Id);
+            NavigationChecks.Run(ownedRoot, adapter.Id, Check);
             Console.WriteLine($"{_passed}/{_passed} WPF integration checks passed. Isolated data: {ownedRoot}");
             return 0;
         }
@@ -598,13 +608,14 @@ internal static class Program
         var shutdownCount = 0;
         var windowCount = 0;
         using var monitoring = new MonitoringService(store, identity,
-            vpnVerifier: new VpnRouteVerifier(new VpnDetectionService(evidence), routes));
+            vpnVerifier: new VpnRouteVerifier(new VpnDetectionService(evidence), routes),
+            icmpMonitor: new IcmpMonitor(new FakePingSource()));
         monitoring.Start();
         using var context = new TrayApplicationContext(Application.Current, monitoring,
             dashboardFactory: service =>
             {
                 windowCount++;
-                return new MainWindow(service) { ShowActivated = false, ShowInTaskbar = false, Opacity = 0 };
+                return new MainWindow(service, new FakeStartupRegistration()) { ShowActivated = false, ShowInTaskbar = false, Opacity = 0 };
             }, shutdownAction: () => shutdownCount++);
         context.ShowDashboard();
         var firstWindow = context.Dashboard!;
@@ -783,10 +794,11 @@ internal static class Program
             var history = new ConnectionHistoryStore(store);
             var vpn = new VpnSessionStore(store);
             using var monitoring = new MonitoringService(store, new FakeIdentity(Network("CHILD_BACKGROUND", adapterId)),
-                vpnVerifier: new VpnRouteVerifier(new VpnDetectionService(new OwnedVpnEvidence { Enabled = true }), new OwnedVpnRoutes()));
+                vpnVerifier: new VpnRouteVerifier(new VpnDetectionService(new OwnedVpnEvidence { Enabled = true }), new OwnedVpnRoutes()),
+                icmpMonitor: new IcmpMonitor(new FakePingSource()));
             monitoring.Start();
             using var context = new TrayApplicationContext(application, monitoring,
-                dashboardFactory: service => new MainWindow(service) { ShowActivated = false, ShowInTaskbar = false, Opacity = 0 });
+                dashboardFactory: service => new MainWindow(service, new FakeStartupRegistration()) { ShowActivated = false, ShowInTaskbar = false, Opacity = 0 });
             context.ShowDashboard();
             Await(() => history.GetActiveSession() is not null && vpn.GetActiveSession() is not null);
             var parentId = history.GetActiveSession()!.Id;
@@ -821,6 +833,330 @@ internal static class Program
         }
     }
 
+    private static void CheckStartupLaunchModes(string ownedRoot, string adapterId)
+    {
+        Check(!LaunchOptions.IsBackground(Array.Empty<string>()), "Normal launch arguments select the dashboard");
+        Check(LaunchOptions.IsBackground(new[] { "--background" }) &&
+            LaunchOptions.IsBackground(new[] { "unused", "--BACKGROUND", "--background" }),
+            "Background flag supports argument ordering, casing and repetition");
+        Check(!LaunchOptions.IsBackground(new[] { "--backgrounded", "--background=true", "background" }),
+            "Only the complete background flag selects headless launch");
+        foreach (var background in new[] { false, true })
+        {
+            var store = new UsageStore(System.IO.Path.Combine(ownedRoot, "launch-" + background));
+            var history = new ConnectionHistoryStore(store);
+            var vpn = new VpnSessionStore(store);
+            using var monitoring = new MonitoringService(store, new FakeIdentity(Network("LAUNCH", adapterId)),
+                vpnVerifier: new VpnRouteVerifier(new VpnDetectionService(new OwnedVpnEvidence { Enabled = true }), new OwnedVpnRoutes()),
+                icmpMonitor: new IcmpMonitor(new FakePingSource()));
+            var factoryCalls = 0;
+            var shutdownCalls = 0;
+            using var context = new TrayApplicationContext(Application.Current, monitoring,
+                dashboardFactory: service =>
+                {
+                    factoryCalls++;
+                    return new MainWindow(service, new FakeStartupRegistration())
+                        { ShowActivated = false, ShowInTaskbar = false, Opacity = 0 };
+                }, shutdownAction: () => shutdownCalls++);
+            context.Start(background);
+            Check(monitoring.GetSnapshot().IsRunning && (background
+                ? context.Dashboard is null && factoryCalls == 0 && !Application.Current.Windows.OfType<MainWindow>().Any()
+                : context.Dashboard is { IsVisible: true } && factoryCalls == 1),
+                background ? "Background launch starts monitoring without constructing any dashboard"
+                    : "Normal launch starts monitoring and opens a dashboard");
+            Check((bool)NotifyIcon(context).GetType().GetProperty("Visible")!.GetValue(NotifyIcon(context))!,
+                $"Launch mode background={background} creates a visible tray icon");
+            WaitWithoutUi(() => history.GetActiveSession() is not null && vpn.GetActiveSession() is not null);
+            var parent = history.GetActiveSession()!.Id;
+            var child = vpn.GetActiveSession()!.Id;
+            var firstConfirmation = monitoring.GetSnapshot().Session!.LastConfirmedAtUtc;
+            WaitWithoutUi(() => monitoring.GetSnapshot().Session!.LastConfirmedAtUtc > firstConfirmation);
+            Check(history.GetActiveSession()!.Id == parent && vpn.GetActiveSession()!.Id == child,
+                $"Launch mode background={background} samples and retains physical/VPN sessions without dashboard refresh");
+            context.Start(background);
+            Check(factoryCalls == (background ? 0 : 1) && history.GetRecentSessions().Count == 1,
+                $"Repeated launch initialization background={background} creates no duplicate windows or sessions");
+            if (background)
+            {
+                ClickTrayMenu(context, "Open NetTrace");
+                Check(context.Dashboard is { IsVisible: true } && factoryCalls == 1 &&
+                    history.GetActiveSession()!.Id == parent && vpn.GetActiveSession()!.Id == child,
+                    "Tray Open after initial background launch creates the first dashboard without restarting monitoring");
+            }
+            ClickTrayMenu(context, "Exit");
+            Check(shutdownCalls == 1 && !monitoring.GetSnapshot().IsRunning &&
+                history.GetActiveSession() is null && vpn.GetActiveSession() is null &&
+                history.GetRecentSessions().Single().EndReason == "ApplicationExit" &&
+                vpn.GetRecentSessions().Single().EndReason == "ApplicationExit",
+                $"Launch mode background={background} exits with clean physical/VPN closure");
+        }
+    }
+
+    private static void CheckStartupSetting(string ownedRoot, string adapterId)
+    {
+        var registration = new FakeStartupRegistration { Enabled = true };
+        var store = new UsageStore(System.IO.Path.Combine(ownedRoot, "startup-setting"));
+        using var monitoring = new MonitoringService(store, new FakeIdentity(Network("SETTING", adapterId)),
+            vpnVerifier: new VpnRouteVerifier(new VpnDetectionService(new OwnedVpnEvidence()), new OwnedVpnRoutes()),
+            icmpMonitor: new IcmpMonitor(new FakePingSource()));
+        using var context = new TrayApplicationContext(Application.Current, monitoring,
+            dashboardFactory: service => new MainWindow(service, registration)
+                { ShowActivated = false, ShowInTaskbar = false, Opacity = 0 }, shutdownAction: () => { });
+        context.Start();
+        var window = context.Dashboard!;
+        var checkbox = (CheckBox)window.FindName("StartWithWindowsCheckBox");
+        Check(checkbox.IsChecked == true && registration.EnableCalls == 0 && registration.DisableCalls == 0,
+            "Startup checkbox reflects registration on dashboard creation without changing it");
+        var reads = registration.ReadCalls;
+        window.RefreshDashboard();
+        window.RefreshDashboard();
+        Check(registration.ReadCalls == reads, "Dashboard refresh performs no recurring startup-registry reads");
+        ToggleStartup(window, false);
+        Check(!registration.Enabled && checkbox.IsChecked == false && registration.DisableCalls == 1,
+            "Unchecking startup immediately disables registration and reads back its actual state");
+        ToggleStartup(window, true);
+        Check(registration.Enabled && checkbox.IsChecked == true && registration.EnableCalls == 1,
+            "Checking startup immediately enables registration and reads back its actual state");
+        registration.Enabled = false;
+        RefreshStartupOnActivation(window);
+        Check(checkbox.IsChecked == false && registration.EnableCalls == 1 && registration.DisableCalls == 1,
+            "Dashboard activation reflects external registration changes without writing them");
+        registration.FailEnable = true;
+        ToggleStartup(window, true);
+        Check(checkbox.IsChecked == false && Text(window, "StartupSettingMessageText").Contains("Could not update") &&
+            monitoring.GetSnapshot().IsRunning,
+            "Failed startup registration reports an inline error and restores actual unchecked state while monitoring continues");
+        registration.ApplyBeforeFailure = true;
+        ToggleStartup(window, true);
+        Check(registration.Enabled && checkbox.IsChecked == true && Text(window, "StartupSettingMessageText").Contains("Could not update"),
+            "Partial startup write failure displays the actual enabled registration");
+        registration.FailEnable = false;
+        registration.FailDisable = true;
+        ToggleStartup(window, false);
+        Check(registration.Enabled && checkbox.IsChecked == true && monitoring.GetSnapshot().IsRunning,
+            "Failed disable preserves the actual enabled state and does not stop monitoring");
+        registration.FailDisable = false;
+        registration.FailRead = true;
+        RefreshStartupOnActivation(window);
+        Check(checkbox.IsChecked is null && !checkbox.IsEnabled && Text(window, "StartupSettingMessageText").Contains("unavailable") &&
+            monitoring.GetSnapshot().IsRunning,
+            "Unavailable startup registration is shown as unknown without pretending it is disabled");
+        registration.FailRead = false;
+        RefreshStartupOnActivation(window);
+        Check(checkbox.IsChecked == true && checkbox.IsEnabled && Text(window, "StartupSettingMessageText") == "",
+            "Startup setting recovers on activation after a transient read failure");
+        registration.Enabled = false;
+        window.Close();
+        ClickTrayMenu(context, "Open NetTrace");
+        Check(!ReferenceEquals(window, context.Dashboard) &&
+            ((CheckBox)context.Dashboard!.FindName("StartWithWindowsCheckBox")).IsChecked == false &&
+            monitoring.GetSnapshot().IsRunning,
+            "Recreated dashboard reads current registration instead of retaining a stale checkbox value");
+        context.Exit();
+        Check(registration.EnableCalls == 3 && registration.DisableCalls == 2,
+            "Tray exit leaves Windows startup registration untouched");
+    }
+
+    private static void RefreshStartupOnActivation(MainWindow window) =>
+        typeof(MainWindow).GetMethod("OnActivated", PrivateInstance)!.Invoke(window, new object[] { EventArgs.Empty });
+
+    private static void ToggleStartup(MainWindow window, bool value)
+    {
+        var checkbox = (CheckBox)window.FindName("StartWithWindowsCheckBox");
+        checkbox.IsChecked = value;
+        checkbox.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+    }
+
+    private static void CheckActualLaunchProcess(string ownedRoot, string adapterId, bool background)
+    {
+        var start = new ProcessStartInfo("dotnet")
+        {
+            UseShellExecute = false, CreateNoWindow = true,
+            RedirectStandardOutput = true, RedirectStandardError = true
+        };
+        start.ArgumentList.Add(typeof(Program).Assembly.Location);
+        start.ArgumentList.Add("--launch-child");
+        start.ArgumentList.Add(System.IO.Path.Combine(ownedRoot, "actual-launch-" + background));
+        start.ArgumentList.Add(adapterId);
+        if (background) start.ArgumentList.Add("--background");
+        using var child = Process.Start(start) ?? throw new InvalidOperationException("Owned launch child did not start.");
+        var output = child.StandardOutput.ReadToEndAsync();
+        var error = child.StandardError.ReadToEndAsync();
+        var wait = Stopwatch.StartNew();
+        while (!child.HasExited)
+        {
+            if (wait.Elapsed > TimeSpan.FromSeconds(20))
+            {
+                child.Kill(entireProcessTree: true);
+                child.WaitForExit();
+                throw new TimeoutException("Owned launch child did not terminate.");
+            }
+            PumpOnce();
+        }
+        Check(child.ExitCode == 0 && output.GetAwaiter().GetResult().Contains("PASS actual launch", StringComparison.Ordinal),
+            $"Owned WPF process background={background} starts the correct view mode and fully exits via the tray: " + error.GetAwaiter().GetResult());
+    }
+
+    private static int RunLaunchChild(string root, string adapterId, string[] launchArgs)
+    {
+        try
+        {
+            var application = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+            var store = new UsageStore(root);
+            var history = new ConnectionHistoryStore(store);
+            using var monitoring = new MonitoringService(store, new FakeIdentity(Network("CHILD_LAUNCH", adapterId)),
+                vpnVerifier: new VpnRouteVerifier(new VpnDetectionService(new OwnedVpnEvidence()), new OwnedVpnRoutes()),
+                icmpMonitor: new IcmpMonitor(new FakePingSource()));
+            var factoryCalls = 0;
+            using var context = new TrayApplicationContext(application, monitoring,
+                dashboardFactory: service =>
+                {
+                    factoryCalls++;
+                    return new MainWindow(service, new FakeStartupRegistration())
+                        { ShowActivated = false, ShowInTaskbar = false, Opacity = 0 };
+                });
+            var background = LaunchOptions.IsBackground(launchArgs);
+            application.Startup += (_, _) =>
+            {
+                context.Start(background);
+                if (!monitoring.GetSnapshot().IsRunning || (background
+                    ? context.Dashboard is not null || factoryCalls != 0 || application.Windows.OfType<MainWindow>().Any()
+                    : context.Dashboard is not { IsVisible: true } || factoryCalls != 1))
+                    throw new InvalidOperationException("Actual WPF startup created the wrong dashboard state.");
+                WaitWithoutUi(() => history.GetActiveSession() is not null);
+                var confirmed = monitoring.GetSnapshot().Session!.LastConfirmedAtUtc;
+                WaitWithoutUi(() => monitoring.GetSnapshot().Session!.LastConfirmedAtUtc > confirmed);
+                if (background && factoryCalls != 0)
+                    throw new InvalidOperationException("Background sampling unexpectedly created a dashboard.");
+                application.Dispatcher.BeginInvoke(new Action(() => ClickTrayMenu(context, "Exit")));
+            };
+            application.Run();
+            if (monitoring.GetSnapshot().IsRunning || history.GetActiveSession() is not null ||
+                history.GetRecentSessions().Single().EndReason != "ApplicationExit")
+                throw new InvalidOperationException("Launch process did not close monitoring cleanly.");
+            using var next = new DatabaseRunLease(store.DatabasePath);
+            Console.WriteLine("PASS actual launch");
+            return 0;
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine(exception);
+            return 1;
+        }
+    }
+
+    private static void CheckIcmpBackgroundLifecycle(string ownedRoot, string adapterId)
+    {
+        var store = new UsageStore(System.IO.Path.Combine(ownedRoot, "icmp-background"));
+        var history = new ConnectionHistoryStore(store);
+        var source = new FakePingSource();
+        using var icmp = new IcmpMonitor(source, interval: TimeSpan.FromMilliseconds(60));
+        using var monitoring = new MonitoringService(store, new FakeIdentity(Network("ICMP_BACKGROUND", adapterId)),
+            vpnVerifier: new VpnRouteVerifier(new VpnDetectionService(new OwnedVpnEvidence()), new OwnedVpnRoutes()),
+            icmpMonitor: icmp);
+        var windowsCreated = 0;
+        var shutdownCalls = 0;
+        using var context = new TrayApplicationContext(Application.Current, monitoring,
+            dashboardFactory: service =>
+            {
+                windowsCreated++;
+                return new MainWindow(service, new FakeStartupRegistration())
+                    { ShowActivated = false, ShowInTaskbar = false, Opacity = 0 };
+            }, shutdownAction: () => shutdownCalls++);
+        context.Start(background: true);
+        WaitWithoutUi(() => monitoring.LatestIcmpMeasurement is not null && history.GetActiveSession() is not null);
+        var firstResult = monitoring.LatestIcmpMeasurement;
+        WaitWithoutUi(() => source.Calls >= 8 && !ReferenceEquals(firstResult, monitoring.LatestIcmpMeasurement));
+        var result = monitoring.LatestIcmpMeasurement!;
+        var parentId = history.GetActiveSession()!.Id;
+        Check(context.Dashboard is null && windowsCreated == 0 && !Application.Current.Windows.OfType<MainWindow>().Any() &&
+            result.SuccessfulReplies == 4 && result.FailedReplies == 0 && result.AverageLatencyMs == 20 && result.PacketLossPercent == 0,
+            "Tray-only launch completes repeated injected ICMP cycles without a dashboard or dispatcher refresh");
+        Check(result.Target == "1.1.1.1" && result.TimestampUtc.Offset == TimeSpan.Zero && monitoring.GetSnapshot().IsRunning,
+            "Application-owned monitoring exposes timestamped raw ICMP measurements for the configured public IP");
+        ClickTrayMenu(context, "Open NetTrace");
+        var firstWindow = context.Dashboard!;
+        firstWindow.Close();
+        var callsAfterClose = source.Calls;
+        var resultAfterClose = monitoring.LatestIcmpMeasurement;
+        WaitWithoutUi(() => source.Calls >= callsAfterClose + 4 &&
+            !ReferenceEquals(resultAfterClose, monitoring.LatestIcmpMeasurement));
+        Check(context.Dashboard is null && windowsCreated == 1 && monitoring.LatestIcmpMeasurement is not null &&
+            history.GetActiveSession()!.Id == parentId,
+            "Closing a recreated dashboard leaves ICMP monitoring and the existing physical session running");
+        source.Fail = true;
+        WaitWithoutUi(() => monitoring.LatestIcmpMeasurement is { FailedReplies: 4 });
+        Check(monitoring.LatestIcmpMeasurement is { PacketLossPercent: 100, AverageLatencyMs: null } &&
+            monitoring.GetSnapshot().Status == "Monitoring" && history.GetActiveSession()!.Id == parentId,
+            "All ICMP failures report raw loss without declaring Internet Offline or closing the physical session");
+        monitoring.Suspend();
+        WaitWithoutUi(() => typeof(IcmpMonitor).GetField("_cycleCancellation", PrivateInstance)!.GetValue(icmp) is null);
+        var callsAtSleep = source.Calls;
+        var sleepWait = Stopwatch.StartNew();
+        while (sleepWait.Elapsed < TimeSpan.FromMilliseconds(150)) Thread.Sleep(5);
+        Check(source.Calls == callsAtSleep && monitoring.GetSnapshot().IsSuspended,
+            "Existing application suspend pauses ICMP cycles without a second power lifecycle");
+        monitoring.Resume();
+        var resultAtResume = monitoring.LatestIcmpMeasurement;
+        WaitWithoutUi(() => source.Calls >= callsAtSleep + 4 && history.GetActiveSession() is not null &&
+            !ReferenceEquals(resultAtResume, monitoring.LatestIcmpMeasurement));
+        Check(history.GetActiveSession()!.Id != parentId && !monitoring.GetSnapshot().IsSuspended,
+            "Existing application resume restarts raw ICMP monitoring independently of the dashboard");
+        ClickTrayMenu(context, "Exit");
+        icmp.Completion.WaitAsync(TimeSpan.FromSeconds(2)).GetAwaiter().GetResult();
+        var callsAtExit = source.Calls;
+        var exitWait = Stopwatch.StartNew();
+        while (exitWait.Elapsed < TimeSpan.FromMilliseconds(100)) Thread.Sleep(5);
+        Check(source.Calls == callsAtExit && shutdownCalls == 1 && !monitoring.GetSnapshot().IsRunning &&
+            history.GetActiveSession() is null && history.GetRecentSessions().First().EndReason == "ApplicationExit",
+            "Tray Exit cancels the application-owned ICMP worker and retains clean physical shutdown");
+        using var next = new DatabaseRunLease(store.DatabasePath);
+        Check(next.IsHeld, "ICMP shutdown leaves database ownership released for the next run");
+    }
+
+    private sealed class FakePingSource : IPingSource
+    {
+        private int _calls;
+        public int Calls => Volatile.Read(ref _calls);
+        public volatile bool Fail;
+        public Task<IcmpPingReply> SendAsync(IPAddress target, TimeSpan timeout, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Interlocked.Increment(ref _calls);
+            return Task.FromResult(new IcmpPingReply(Fail ? IPStatus.TimedOut : IPStatus.Success, 20));
+        }
+    }
+
+    private sealed class FakeStartupRegistration : IWindowsStartupRegistration
+    {
+        public bool Enabled;
+        public bool FailRead;
+        public bool FailEnable;
+        public bool FailDisable;
+        public bool ApplyBeforeFailure;
+        public int ReadCalls;
+        public int EnableCalls;
+        public int DisableCalls;
+        public bool IsEnabled()
+        {
+            ReadCalls++;
+            if (FailRead) throw new InvalidOperationException("Owned startup read denied.");
+            return Enabled;
+        }
+        public void Enable()
+        {
+            EnableCalls++;
+            if (!FailEnable || ApplyBeforeFailure) Enabled = true;
+            if (FailEnable) throw new InvalidOperationException("Owned startup write denied.");
+        }
+        public void Disable()
+        {
+            DisableCalls++;
+            if (FailDisable) throw new InvalidOperationException("Owned startup delete denied.");
+            Enabled = false;
+        }
+    }
+
     private sealed class OwnedVpnRoutes : IVpnRouteSource
     {
         public static readonly Guid TunnelGuid = Guid.Parse("aae68bce-af13-4456-9193-31ded9c79ab7");
@@ -848,9 +1184,12 @@ internal static class Program
     private static MainWindow CreateOwnedWindow(UsageStore store, FakeIdentity identity, VpnRouteVerifier? verifier = null,
         bool start = true)
     {
-        var monitoring = new MonitoringService(store, identity, vpnVerifier: verifier);
+        // Physical-only fixtures must not inherit VPN events from the test machine.
+        verifier ??= new VpnRouteVerifier(new VpnDetectionService(new OwnedVpnEvidence()), new OwnedVpnRoutes());
+        var monitoring = new MonitoringService(store, identity, vpnVerifier: verifier,
+            icmpMonitor: new IcmpMonitor(new FakePingSource()));
         var context = new TrayApplicationContext(Application.Current, monitoring,
-            dashboardFactory: service => new MainWindow(service)
+            dashboardFactory: service => new MainWindow(service, new FakeStartupRegistration())
                 { ShowActivated = false, ShowInTaskbar = false, Opacity = 0 },
             shutdownAction: () => { });
         context.ShowDashboard();
@@ -948,6 +1287,7 @@ internal static class Program
         StopSampler(window);
         Field<DispatcherTimer>(window, "_timer").Stop();
         Power(window).Dispose();
+        Field<IcmpMonitor>(window, "_icmpMonitor").Dispose();
         Field<VpnSessionMonitor>(window, "_vpnSessions").Dispose();
         Monitor(window).Dispose();
         Field<DatabaseRunLease>(window, "_runLease").Dispose();

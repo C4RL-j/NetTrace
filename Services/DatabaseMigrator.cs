@@ -4,7 +4,7 @@ namespace NetTrace.Services;
 
 internal static class DatabaseMigrator
 {
-    internal const int CurrentSchemaVersion = 4;
+    internal const int CurrentSchemaVersion = 5;
 
     internal static void Initialize(SqliteConnection connection, bool createSchema)
     {
@@ -59,6 +59,13 @@ internal static class DatabaseMigrator
                     CreateVpnSessionSchema(command);
                     ValidateVpnSessionSchema(command);
                     break;
+                case 4:
+                    ValidateProfileSchema(command);
+                    ValidateHistorySchema(command);
+                    ValidateVpnSessionSchema(command);
+                    CreateTrafficPeakSchema(command);
+                    ValidateTrafficPeakSchema(command);
+                    break;
                 default:
                     throw new InvalidOperationException($"No migration is available from schema version {version}.");
             }
@@ -73,6 +80,7 @@ internal static class DatabaseMigrator
         EnsureHistoryRelationshipIndexes(command);
         ValidateVpnSessionSchema(command);
         EnsureVpnEventTriggers(command);
+        ValidateTrafficPeakSchema(command);
         command.CommandText = "PRAGMA foreign_key_check;";
         using (var reader = command.ExecuteReader())
         {
@@ -82,6 +90,71 @@ internal static class DatabaseMigrator
 
         transaction.Commit();
     }
+
+    // A strict infinity bound rejects nonfinite values; SQLite can round a decimal
+    // double.MaxValue literal up to infinity, making a <= MaxValue check ineffective.
+    private const string TrafficPeakTableSql = """
+        CREATE TABLE daily_traffic_peaks (
+            day TEXT NOT NULL PRIMARY KEY CHECK(
+                length(day) = 10
+                AND day GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+                AND day >= '0001-01-01' AND day <= '9999-12-31'
+                AND date(day, '+0 days') IS day),
+            downloaded_peak_bytes_per_second REAL NOT NULL CHECK(
+                typeof(downloaded_peak_bytes_per_second) = 'real'
+                AND downloaded_peak_bytes_per_second >= 0
+                AND downloaded_peak_bytes_per_second < 1e999),
+            uploaded_peak_bytes_per_second REAL NOT NULL CHECK(
+                typeof(uploaded_peak_bytes_per_second) = 'real'
+                AND uploaded_peak_bytes_per_second >= 0
+                AND uploaded_peak_bytes_per_second < 1e999)
+        );
+        """;
+
+    private static void CreateTrafficPeakSchema(SqliteCommand command)
+    {
+        // Additive only: existing totals, profiles, physical sessions and VPN history are untouched.
+        // A conflicting table aborts this transaction rather than accepting an unknown schema.
+        command.CommandText = TrafficPeakTableSql;
+        command.ExecuteNonQuery();
+    }
+
+    private static void ValidateTrafficPeakSchema(SqliteCommand command)
+    {
+        ValidateColumns(command, "daily_traffic_peaks", new[]
+        {
+            ("day", "TEXT", true, 1L),
+            ("downloaded_peak_bytes_per_second", "REAL", true, 0L),
+            ("uploaded_peak_bytes_per_second", "REAL", true, 0L)
+        });
+
+        command.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='daily_traffic_peaks';";
+        var actualSql = command.ExecuteScalar()?.ToString();
+        if (actualSql is null || !NormalizeSchemaSql(actualSql).Equals(
+            NormalizeSchemaSql(TrafficPeakTableSql), StringComparison.OrdinalIgnoreCase))
+            throw InvalidTrafficPeakSchema("The daily_traffic_peaks constraints are missing or incompatible.");
+
+        // Constraints can have been bypassed externally; do not silently reinterpret invalid history.
+        command.CommandText = """
+            SELECT 1 FROM daily_traffic_peaks
+            WHERE day IS NULL OR length(day) <> 10
+                OR day NOT GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+                OR day < '0001-01-01' OR day > '9999-12-31'
+                OR date(day, '+0 days') IS NOT day
+                OR typeof(downloaded_peak_bytes_per_second) <> 'real'
+                OR downloaded_peak_bytes_per_second < 0
+                OR downloaded_peak_bytes_per_second >= 1e999
+                OR typeof(uploaded_peak_bytes_per_second) <> 'real'
+                OR uploaded_peak_bytes_per_second < 0
+                OR uploaded_peak_bytes_per_second >= 1e999
+            LIMIT 1;
+            """;
+        if (command.ExecuteScalar() is not null)
+            throw InvalidTrafficPeakSchema("A stored traffic peak has an invalid date or rate.");
+    }
+
+    private static InvalidOperationException InvalidTrafficPeakSchema(string detail) => new(
+        $"The daily traffic peak schema is incompatible. {detail} Its data and schema version have not been changed.");
 
     private static void CreateProfileSchema(SqliteCommand command)
     {
@@ -622,6 +695,7 @@ internal static class DatabaseMigrator
     {
         "ConnectionSessions" or "ConnectionEvents" => InvalidHistorySchema(detail),
         "VpnSessions" => InvalidVpnSessionSchema(detail),
+        "daily_traffic_peaks" => InvalidTrafficPeakSchema(detail),
         _ => InvalidProfileSchema(detail)
     };
 

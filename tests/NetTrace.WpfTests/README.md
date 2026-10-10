@@ -1,6 +1,6 @@
 # NetTrace WPF integration tests
 
-The 101 Windows-only STA integration checks use isolated temporary databases and injected
+The 174 Windows-only STA integration checks use isolated temporary databases and injected
 physical/VPN identities. They exercise the existing dashboard, persistence,
 profile, power, recovery and ownership behavior together with Task 005A tray and
 background lifecycle behavior. They retain the previous 77 WPF lifecycle checks,
@@ -9,6 +9,28 @@ and add background/tray checks for window recreation, timer/subscription cleanup
 sampling, VPN persistence, power handling and clean shutdown. An owned child WPF
 process verifies that dashboard closure keeps its process alive and actual Tray
 Exit terminates its application loop and releases database ownership.
+
+Task 005B adds checks for normal/background launch arguments, no dashboard construction
+in background mode, live physical/VPN sampling before opening a view, tray restoration,
+idempotent initialization and clean exit. Startup checkbox checks inject an in-memory
+registration service: they verify immediate updates, read-back after failed or partial
+writes, external changes, transient read failures and dashboard recreation. Separate
+owned WPF child processes exercise normal and `--background` startup through the real
+application loop and Tray Exit. These checks never modify the Windows Run key.
+
+Network Health 001 adds eight background integration checks using an injected ping
+source. They verify repeated completed cycles before any dashboard is constructed,
+continued probing after dashboard closure, raw measurement access, all-failure loss
+without changing connection status, the existing suspend/resume lifecycle and clean
+Tray Exit. All existing monitoring fixtures use fake ICMP sources, including child
+processes; the harness sends no ICMP traffic to the public internet.
+
+UI Foundation 001 adds 37 checks for all five navigation pages, the active underline,
+header hit targets, stable sampler/session state, dashboard summaries, startup
+registration and the existing Profiles, Assign Profile and History dialogs. They
+also exercise dashboard closure, tray restoration and clean exit through the new
+shell. The harness renders each page at the normal and minimum window sizes into
+`navigation-previews` beneath its isolated data directory for layout review.
 
 ```powershell
 dotnet run --project tests/NetTrace.WpfTests/NetTrace.WpfTests.csproj

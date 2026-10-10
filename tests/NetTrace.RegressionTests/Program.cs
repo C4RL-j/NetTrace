@@ -5,8 +5,10 @@ using System.Net.Sockets;
 using System.Reflection;
 using System.Security.Cryptography;
 using Microsoft.Data.Sqlite;
+using Microsoft.Win32;
 using NetTrace.Models;
 using NetTrace.Services;
+using NetTrace.Utils;
 
 if (args.Length > 0 && args[0] == "--lease-test-child")
     return RunLeaseChild(args);
@@ -185,8 +187,35 @@ var tests = new (string Name, Action Run)[]
     ("Profile assignment and editing resolve immediately without a dashboard", BackgroundProfileRecognition),
     ("Headless sleep and resume retain fresh physical and VPN interval boundaries", BackgroundSleepResume),
     ("Core shutdown flushes usage, closes VPN and physical history and releases its lease", BackgroundCleanExit),
-    ("Core shutdown joins blocked VPN work before releasing database ownership", BackgroundShutdownJoin)
-};
+    ("Core shutdown joins blocked VPN work before releasing database ownership", BackgroundShutdownJoin),
+    ("Live traffic uses decimal megabits with a consistent Mbps unit", LiveTrafficMegabits),
+    ("Live traffic rounds actual sampled bytes without an intermediate byte-unit conversion", LiveTrafficPrecision),
+    ("Invalid live traffic cannot display negative or nonfinite rates", LiveTrafficInvalidRates),
+    ("Data quantities retain their existing byte-unit formatting", DataQuantityFormatting),
+    ("Fresh schema five stores daily passive traffic peaks independently of usage", TrafficPeaksFreshSchema),
+    ("Version-four migration preserves every existing table and all connection history", TrafficPeaksVersionFourUpgrade),
+    ("A conflicting peak table rolls back version-five migration and preserves old history", TrafficPeaksFailedMigration),
+    ("Fractional daily peaks survive reopening and repeated maxima upserts", TrafficPeaksPersistence),
+    ("Peak repositories and SQLite reject invalid rates and dates", TrafficPeaksValidation),
+    ("Damaged current peak schemas and externally invalid peak rows fail startup safely", TrafficPeaksInvalidCurrentSchema),
+    ("Passive peaks reuse the existing live sample without counting it twice", TrafficPeaksCoreAccumulation),
+    ("Peak persistence stays batched and process restart retains today's peak", TrafficPeaksCoreBatchAndRestart),
+    ("Local-day rollover while offline or sleeping never displays yesterday's peak", TrafficPeaksCoreRollover),
+    ("Failed peak persistence retains independently dirty days through rollover", TrafficPeaksCoreMultiDayRetry),
+    ("A failed peak write retries without losing or double-counting usage", TrafficPeaksCoreWriteRetry),
+    ("Failed daily usage cannot prevent peak flush or clean physical and VPN closure", TrafficPeaksCoreUsageFailure),
+    ("Physical identity transitions and counter resets cannot manufacture a passive peak", TrafficPeaksCoreBaselineSafety),
+    ("Missing per-user startup registration is disabled without creating a registry key", StartupRegistrationAbsent),
+    ("Windows startup writes one correctly quoted background command for paths with spaces", StartupRegistrationCommand),
+    ("Enabling startup twice is idempotent and preserves other startup entries", StartupRegistrationIdempotent),
+    ("Disabling startup removes only NetTrace's named registration", StartupRegistrationDisableScope),
+    ("Startup enable and disable immediately reflect persisted current-user state", StartupRegistrationToggle),
+    ("External startup command changes are observed without rewriting the registration", StartupRegistrationExternalChanges),
+    ("Nonstring or expandable startup values cannot masquerade as NetTrace registration", StartupRegistrationValueKinds),
+    ("Invalid or missing startup executable paths cannot create a registration", StartupRegistrationInvalidPaths),
+    ("Unicode and apostrophes in an executable path remain one quoted startup argument", StartupRegistrationUnicodePath),
+    ("Equivalent absolute executable paths produce the same canonical registration", StartupRegistrationCanonicalPath)
+}.Concat(IcmpHealthTests.Cases).ToArray();
 
 var failed = 0;
 foreach (var (name, run) in tests)
@@ -214,7 +243,7 @@ static void CleanInstall()
     Equal(workspace.CurrentPath, store.DatabasePath, "Database path");
     Require(File.Exists(workspace.CurrentPath), "The current database must be created.");
     Require(!Directory.Exists(Path.GetDirectoryName(workspace.LegacyPath)), "A clean install must not create a legacy directory.");
-    Equal(4L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Schema version");
+    Equal(5L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Schema version");
     Equal((0L, 0L), store.GetTotals(new DateOnly(2026, 1, 1), new DateOnly(2026, 1, 31)), "Fresh totals");
 
     using var connection = Open(workspace.CurrentPath);
@@ -237,7 +266,7 @@ static void LegacyUpgrade()
 
     Equal(workspace.CurrentPath, store.DatabasePath, "Migrated database path");
     AssertFixtureTotals(store);
-    Equal(4L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Migrated schema version");
+    Equal(5L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Migrated schema version");
     Equal(0L, ReadInteger(workspace.LegacyPath, "PRAGMA user_version;"), "Legacy schema version");
     Equal(1L, ReadInteger(workspace.CurrentPath, "SELECT count(*) FROM legacy_metadata WHERE value = 'keep this table';"), "Other legacy tables");
     Equal(original, Hash(workspace.LegacyPath), "Legacy database bytes");
@@ -251,7 +280,7 @@ static void ExistingUnversionedDatabase()
     var store = new UsageStore(workspace.Root);
 
     AssertFixtureTotals(store);
-    Equal(4L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Existing database schema version");
+    Equal(5L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Existing database schema version");
     Equal(1L, ReadInteger(workspace.CurrentPath, "SELECT count(*) FROM legacy_metadata;"), "Existing unrelated table");
     Require(!File.Exists(workspace.LegacyPath), "Existing NetTrace startup must not create a legacy database.");
 }
@@ -289,7 +318,7 @@ static void PersistedTotals()
     Equal((1_500L, 300L), reopened.GetTotals(today, today), "Today totals");
     Equal((4_500L, 700L), reopened.GetTotals(today.AddDays(-6), today), "Seven-day inclusive totals");
     Equal((9_500L, 1_300L), reopened.GetTotals(today.AddDays(-29), today), "Thirty-day inclusive totals");
-    Equal(4L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Version after reopening");
+    Equal(5L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Version after reopening");
 }
 
 static void WalUpgrade()
@@ -309,7 +338,7 @@ static void WalUpgrade()
 
     Equal((987_654L, 321L), store.GetTotals(new DateOnly(2026, 1, 16), new DateOnly(2026, 1, 16)), "WAL-only history");
     AssertFixtureTotals(store);
-    Equal(4L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "WAL copy schema version");
+    Equal(5L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "WAL copy schema version");
     Equal(databaseHash, Hash(workspace.LegacyPath), "Legacy main file during WAL migration");
     Equal(walHash, Hash(walPath), "Legacy WAL during migration");
     Equal(0L, ReadInteger(workspace.LegacyPath, "PRAGMA user_version;"), "Legacy WAL schema version");
@@ -343,13 +372,13 @@ static void InvalidCurrentSchema()
 static void FutureCurrentVersion()
 {
     using var workspace = new TestWorkspace();
-    CreateFixture(workspace.CurrentPath, version: 5);
+    CreateFixture(workspace.CurrentPath, version: 6);
     var original = Hash(workspace.CurrentPath);
 
     ExpectStartupFailure(workspace.Root);
 
     Equal(original, Hash(workspace.CurrentPath), "Future current database bytes");
-    Equal(5L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Future current version");
+    Equal(6L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Future current version");
 }
 
 static void InvalidVersionedCurrentSchema()
@@ -367,14 +396,14 @@ static void InvalidVersionedCurrentSchema()
 static void FutureLegacyVersion()
 {
     using var workspace = new TestWorkspace();
-    CreateFixture(workspace.LegacyPath, version: 5);
+    CreateFixture(workspace.LegacyPath, version: 6);
     var original = Hash(workspace.LegacyPath);
 
     ExpectStartupFailure(workspace.Root);
 
     Require(!File.Exists(workspace.CurrentPath), "A future legacy schema must not be published as a usable current database.");
     Equal(original, Hash(workspace.LegacyPath), "Future legacy database bytes");
-    Equal(5L, ReadInteger(workspace.LegacyPath, "PRAGMA user_version;"), "Future legacy version");
+    Equal(6L, ReadInteger(workspace.LegacyPath, "PRAGMA user_version;"), "Future legacy version");
 }
 
 static void CorruptLegacy()
@@ -448,7 +477,7 @@ static void VersionOneUpgrade()
     var store = new UsageStore(workspace.Root);
 
     AssertFixtureTotals(store);
-    Equal(4L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Version-one upgrade version");
+    Equal(5L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Version-one upgrade version");
     Equal(originalSchema, ReadText(workspace.CurrentPath, "SELECT sql FROM sqlite_schema WHERE name = 'daily_usage';"), "Usage table definition after upgrade");
     Equal(originalRootPage, ReadInteger(workspace.CurrentPath, "SELECT rootpage FROM sqlite_schema WHERE name = 'daily_usage';"), "Usage table remains in its original B-tree");
     Equal(3L, ReadInteger(workspace.CurrentPath, "SELECT count(*) FROM daily_usage;"), "Original daily rows");
@@ -1139,7 +1168,7 @@ static void VersionTwoUpgrade()
 
     var store = new UsageStore(workspace.Root);
 
-    Equal(4L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Version-two upgrade version");
+    Equal(5L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Version-two upgrade version");
     AssertFixtureTotals(store);
     foreach (var (table, original) in originalTables)
     {
@@ -1215,7 +1244,7 @@ static void LegacyVersionTwoUpgrade()
     var store = new UsageStore(workspace.Root);
 
     AssertFixtureTotals(store);
-    Equal(4L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Copied version-two database reaches version four");
+    Equal(5L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Copied version-two database reaches current version five");
     Equal(2L, ReadInteger(workspace.LegacyPath, "PRAGMA user_version;"), "Original version-two database is not migrated in place");
     Equal(original, Hash(workspace.LegacyPath), "Legacy version-two database bytes remain unchanged");
     Equal(41L, new ProfileStore(store).ResolveProfile("WiFi", "DITO_HOME")!.Id, "Legacy profile recognition preserved");
@@ -1737,7 +1766,7 @@ static void InvalidVersionThreeConstraints()
 
     ExpectStartupFailure(test.Root);
 
-    Equal(4L, ReadInteger(test.DatabasePath, "PRAGMA user_version;"), "Damaged history schema is not reversioned");
+    Equal(5L, ReadInteger(test.DatabasePath, "PRAGMA user_version;"), "Damaged history schema is not reversioned");
     Equal(1L, ReadInteger(test.DatabasePath, "SELECT count(*) FROM ConnectionSessions;"), "Startup rejection preserves session rows");
     Equal(1L, ReadInteger(test.DatabasePath, "SELECT count(*) FROM ConnectionEvents;"), "Startup rejection preserves events");
     Equal(1L, ReadInteger(test.DatabasePath, "SELECT count(*) FROM ConnectionProfiles;"), "Startup rejection preserves profiles");
@@ -1851,7 +1880,7 @@ static void DatabaseLeaseBeforeInitialization()
     Require(!File.Exists(workspace.CurrentPath), "Rejected startup must not create, migrate or open the database");
     var usage = new UsageStore(workspace.Root, owner);
     Equal(workspace.CurrentPath, usage.DatabasePath, "Held initialization ownership points to the same database");
-    Equal(4L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Owned startup initializes schema v4");
+    Equal(5L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Owned startup initializes schema v5");
     Require(owner.IsHeld, "Initialization does not release the caller's run ownership");
 }
 
@@ -1923,7 +1952,7 @@ static void StaleDatabaseLeaseFile()
     {
         Require(lease.IsHeld, "An unheld preexisting lock file is reusable");
         var store = new UsageStore(workspace.Root, lease);
-        Equal(4L, ReadInteger(store.DatabasePath, "PRAGMA user_version;"), "Stale sidecar does not block fresh database startup");
+        Equal(5L, ReadInteger(store.DatabasePath, "PRAGMA user_version;"), "Stale sidecar does not block fresh database startup");
     }
     Require(File.Exists(lockPath), "Shutdown does not delete and recreate the shared lock-file name");
     using var next = new DatabaseRunLease(workspace.CurrentPath);
@@ -2010,7 +2039,7 @@ static void ExistingVersionThreeIndices()
     using (var connection = Open(workspace.CurrentPath))
         Execute(connection, "DROP INDEX IX_ConnectionEvents_SessionId; DROP INDEX IX_ConnectionEvents_ProfileId;");
     _ = new UsageStore(workspace.Root);
-    Equal(4L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Historical v3 compatibility maintenance reaches current schema v4");
+    Equal(5L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Historical v3 compatibility maintenance reaches current schema v5");
     Equal(originalSession, history.GetActiveSession(), "Index maintenance does not recover or rewrite active session rows");
     Require(originalEvents.SequenceEqual(history.GetRecentEvents()), "Index maintenance does not rewrite event history");
     Equal(2L, ReadInteger(workspace.CurrentPath, "SELECT count(*) FROM sqlite_schema WHERE name IN ('IX_ConnectionEvents_SessionId','IX_ConnectionEvents_ProfileId') AND type='index';"), "Both missing event relationship indices are restored");
@@ -2035,7 +2064,7 @@ static void MalformedHistoryIndices()
         Equal(originalHash, Hash(test.DatabasePath), "Rejected index definitions roll back all attempted index creation");
         Equal(0L, ReadInteger(test.DatabasePath, "SELECT count(*) FROM sqlite_schema WHERE name='IX_ConnectionEvents_ProfileId';"), "Failed validation does not publish an unrelated index repair");
         Equal(active, test.History.GetActiveSession(), "Rejected index definitions preserve the active session");
-        Equal(4L, ReadInteger(test.DatabasePath, "PRAGMA user_version;"), "Rejected index definitions preserve schema version");
+        Equal(5L, ReadInteger(test.DatabasePath, "PRAGMA user_version;"), "Rejected index definitions preserve schema version");
     }
 }
 
@@ -2731,7 +2760,7 @@ static void VpnVersionThreeUpgrade()
 
     var usage = new UsageStore(workspace.Root);
 
-    Equal(4L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Version-three database reaches version four");
+    Equal(5L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Version-three database reaches current version five");
     AssertFixtureTotals(usage);
     foreach (var table in tables)
     {
@@ -2760,7 +2789,7 @@ static void VpnFreshSchema()
 {
     using var workspace = new TestWorkspace();
     var usage = new UsageStore(workspace.Root);
-    Equal(4L, ReadInteger(usage.DatabasePath, "PRAGMA user_version;"), "Fresh install version");
+    Equal(5L, ReadInteger(usage.DatabasePath, "PRAGMA user_version;"), "Fresh install version");
     Equal(0L, ReadInteger(usage.DatabasePath, "SELECT count(*) FROM VpnSessions;"), "Fresh VPN history is empty");
     using var connection = Open(usage.DatabasePath);
     using var command = connection.CreateCommand();
@@ -2812,7 +2841,7 @@ static void VpnLegacyVersionThreeUpgrade()
     var originalSessions = SnapshotRows(workspace.LegacyPath, "ConnectionSessions");
     var usage = new UsageStore(workspace.Root);
     AssertFixtureTotals(usage);
-    Equal(4L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Copied legacy database reaches version four");
+    Equal(5L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Copied legacy database reaches current version five");
     Equal(3L, ReadInteger(workspace.LegacyPath, "PRAGMA user_version;"), "Legacy rollback schema version is unchanged");
     Equal(original, Hash(workspace.LegacyPath), "Legacy rollback database bytes are untouched");
     Equal(originalSessions, SnapshotRows(workspace.CurrentPath, "ConnectionSessions"), "Copied physical history is preserved");
@@ -3475,7 +3504,7 @@ static void VpnEventsExistingVersionFour()
         Schema: ReadText(test.DatabasePath, $"SELECT sql FROM sqlite_schema WHERE name='{table}';"),
         Root: ReadInteger(test.DatabasePath, $"SELECT rootpage FROM sqlite_schema WHERE name='{table}';")));
     var upgraded = new UsageStore(test.Root);
-    Equal(4L, ReadInteger(test.DatabasePath, "PRAGMA user_version;"), "Installing VPN events does not change schema version four");
+    Equal(5L, ReadInteger(test.DatabasePath, "PRAGMA user_version;"), "Installing VPN events does not change current schema version five");
     foreach (var table in tables)
     {
         Equal(before[table].Rows, SnapshotRows(test.DatabasePath, table), $"Existing {table} data is not rewritten or backfilled");
@@ -3505,7 +3534,7 @@ static void VpnEventsExistingVersionFour()
     Equal(beforeSchema, SnapshotRows(broken.DatabasePath, "sqlite_schema"), "A malformed existing event trigger rolls back all attempted missing-trigger installations");
     Equal(brokenVpn, SnapshotRows(broken.DatabasePath, "VpnSessions"), "Failed event setup preserves existing VPN interval fields");
     Equal(brokenEvents, SnapshotRows(broken.DatabasePath, "ConnectionEvents"), "Failed event setup preserves existing timeline rows");
-    Equal(4L, ReadInteger(broken.DatabasePath, "PRAGMA user_version;"), "Failed event setup preserves version four");
+    Equal(5L, ReadInteger(broken.DatabasePath, "PRAGMA user_version;"), "Failed event setup preserves current version five");
 }
 
 static void VpnEventsTunnelReplacement()
@@ -4097,6 +4126,492 @@ static void BackgroundShutdownJoin()
         "Obsolete native work cannot attach a VPN after physical shutdown.");
 }
 
+static void LiveTrafficMegabits()
+{
+    foreach (var (bytes, mbps) in new[] { (0d, 0d), (100_000d, 0.8d), (425_000d, 3.4d), (3_100_000d, 24.8d) })
+        Equal($"{mbps:F2} Mbps", ByteFormatter.FormatRate(bytes), "Decimal megabit conversion");
+}
+
+static void LiveTrafficPrecision()
+{
+    foreach (var (bytes, mbps) in new[] { (36_700d, 0.29d), (36.7 * 1024, 0.30d), (612.5d, 0d), (750d, 0.01d) })
+        Equal($"{mbps:F2} Mbps", ByteFormatter.FormatRate(bytes), "Rate rounding uses raw sampled bytes");
+}
+
+static void LiveTrafficInvalidRates()
+{
+    foreach (var bytes in new[] { -1d, double.MinValue, double.NaN, double.PositiveInfinity, double.NegativeInfinity })
+        Equal($"{0d:F2} Mbps", ByteFormatter.FormatRate(bytes), "Invalid rate is safely displayed as zero");
+    var large = ByteFormatter.FormatRate(double.MaxValue);
+    Require(!large.Contains("NaN") && !large.Contains("Infinity"), "A finite input cannot overflow into a nonfinite display.");
+}
+
+static void DataQuantityFormatting()
+{
+    Equal("0 B", ByteFormatter.Format(-1), "Negative quantity remains zero");
+    Equal("0 B", ByteFormatter.Format(0), "Empty quantity remains bytes");
+    Equal("1023 B", ByteFormatter.Format(1023), "Byte quantity boundary");
+    Equal($"{1d:F1} KB", ByteFormatter.Format(1024), "Kilobyte formatting is unchanged");
+    Equal($"{1d:F2} MB", ByteFormatter.Format(1_048_576), "Megabyte formatting is unchanged");
+    Equal($"{1d:F2} GB", ByteFormatter.Format(1_073_741_824), "Gigabyte formatting is unchanged");
+}
+
+static void TrafficPeaksFreshSchema()
+{
+    using var workspace = new TestWorkspace();
+    var usage = new UsageStore(workspace.Root);
+    Equal(5L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Fresh peak schema version");
+    Equal((0d, 0d), usage.GetTrafficPeaks(new DateOnly(2026, 1, 15)), "No observation means zero peak");
+    Equal(0L, ReadInteger(workspace.CurrentPath, "SELECT count(*) FROM daily_traffic_peaks;"), "Startup invents no throughput measurements");
+    using var connection = Open(workspace.CurrentPath);
+    using var command = connection.CreateCommand();
+    command.CommandText = "EXPLAIN QUERY PLAN SELECT * FROM daily_traffic_peaks WHERE day='2026-01-15';";
+    using var reader = command.ExecuteReader();
+    Require(reader.Read() && reader.GetString(3).Contains("INDEX", StringComparison.OrdinalIgnoreCase), "Daily peak lookups use the date primary-key index.");
+    Equal((0L, 0L), usage.GetTotals(new DateOnly(2026, 1, 1), new DateOnly(2026, 1, 31)), "Peak table does not change usage quantities");
+}
+
+// Build the historical v4 schema from the independent v3 fixture and only the
+// established v3->v4 builders. Never downgrade a current database to make a fixture.
+static void CreateVersionFourPeakFixture(string path)
+{
+    CreateVersionThreeFixture(path);
+    using var connection = Open(path);
+    using var transaction = connection.BeginTransaction();
+    using var command = connection.CreateCommand();
+    command.Transaction = transaction;
+    var migrator = typeof(UsageStore).Assembly.GetType("NetTrace.Services.DatabaseMigrator")!;
+    foreach (var method in new[] { "CreateVpnSessionSchema", "EnsureVpnEventTriggers" })
+        migrator.GetMethod(method, BindingFlags.NonPublic | BindingFlags.Static)!.Invoke(null, new object[] { command });
+    command.CommandText = """
+        INSERT INTO VpnSessions (ConnectionSessionId, InterfaceIndex, InterfaceGuid, InterfaceName, Description,
+            RoutingMode, StartedAtUtc, LastConfirmedAtUtc)
+        VALUES (62, 42, '825018c6-06a8-4721-9b04-9aedfbf70d23', 'Historical VPN', 'Native historical tunnel',
+            'FullTunnel', '2026-01-15T03:05:00.0000000+00:00', '2026-01-15T03:10:00.0000000+00:00');
+        PRAGMA user_version=4;
+        """;
+    command.ExecuteNonQuery();
+    transaction.Commit();
+}
+
+static void TrafficPeaksVersionFourUpgrade()
+{
+    using var workspace = new TestWorkspace();
+    CreateVersionFourPeakFixture(workspace.CurrentPath);
+    var tables = new[] { "daily_usage", "ConnectionProfiles", "NetworkMappings", "ConnectionSessions", "ConnectionEvents", "VpnSessions" };
+    var before = tables.ToDictionary(table => table, table => (
+        Sql: ReadText(workspace.CurrentPath, $"SELECT sql FROM sqlite_schema WHERE name='{table}';"),
+        Root: ReadInteger(workspace.CurrentPath, $"SELECT rootpage FROM sqlite_schema WHERE name='{table}';"),
+        Rows: SnapshotRows(workspace.CurrentPath, table)));
+    var usage = new UsageStore(workspace.Root);
+    Equal(5L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Version four upgrades to five");
+    AssertFixtureTotals(usage);
+    foreach (var table in tables)
+    {
+        Equal(before[table].Sql, ReadText(workspace.CurrentPath, $"SELECT sql FROM sqlite_schema WHERE name='{table}';"), $"{table} SQL is preserved");
+        Equal(before[table].Root, ReadInteger(workspace.CurrentPath, $"SELECT rootpage FROM sqlite_schema WHERE name='{table}';"), $"{table} B-tree is preserved");
+        Equal(before[table].Rows, SnapshotRows(workspace.CurrentPath, table), $"{table} rows are preserved");
+    }
+    Equal(62L, new ConnectionHistoryStore(usage).GetActiveSession()!.Id, "Additive migration does not perform recovery");
+    Equal(62L, new VpnSessionStore(usage).GetActiveSession()!.ConnectionSessionId, "Active VPN retains its physical parent");
+    Equal((0d, 0d), usage.GetTrafficPeaks(new DateOnly(2026, 1, 15)), "Old byte totals are never reinterpreted as throughput");
+}
+
+static void TrafficPeaksFailedMigration()
+{
+    using var workspace = new TestWorkspace();
+    CreateVersionFourPeakFixture(workspace.CurrentPath);
+    using (var connection = Open(workspace.CurrentPath))
+        Execute(connection, "CREATE TABLE daily_traffic_peaks(sentinel TEXT); INSERT INTO daily_traffic_peaks VALUES('preserve conflicting data');");
+    var before = new[] { "daily_usage", "ConnectionProfiles", "NetworkMappings", "ConnectionSessions", "ConnectionEvents", "VpnSessions" }
+        .ToDictionary(table => table, table => SnapshotRows(workspace.CurrentPath, table));
+    ExpectStartupFailure(workspace.Root);
+    Equal(4L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Failed v5 migration retains historical version four");
+    Equal("preserve conflicting data", ReadText(workspace.CurrentPath, "SELECT sentinel FROM daily_traffic_peaks;"), "Conflicting table is not overwritten");
+    foreach (var (table, rows) in before)
+        Equal(rows, SnapshotRows(workspace.CurrentPath, table), $"Failed migration preserves {table}");
+}
+
+static void TrafficPeaksPersistence()
+{
+    using var workspace = new TestWorkspace();
+    var usage = new UsageStore(workspace.Root);
+    var day = new DateOnly(2026, 1, 15);
+    usage.SaveTrafficPeaks(day, 1234.5, 67.25);
+    usage.SaveTrafficPeaks(day, 1000, 90.5);
+    usage.SaveTrafficPeaks(day, 1234.5, 90.5);
+    usage.SaveTrafficPeaks(day.AddDays(1), 4.5, 0.25);
+    usage.AddUsage(day, 8192, 512);
+    var reopened = new UsageStore(workspace.Root);
+    Equal((1234.5, 90.5), reopened.GetTrafficPeaks(day), "Fractional maxima survive restart and independent upserts");
+    Equal((4.5, 0.25), reopened.GetTrafficPeaks(day.AddDays(1)), "Days have separate peak measurements");
+    Equal(2L, ReadInteger(workspace.CurrentPath, "SELECT count(*) FROM daily_traffic_peaks;"), "Repeat upserts do not duplicate dates");
+    Equal((8192L, 512L), reopened.GetTotals(day, day), "Peak rates cannot alter byte totals");
+}
+
+static void TrafficPeaksValidation()
+{
+    using var workspace = new TestWorkspace();
+    var usage = new UsageStore(workspace.Root);
+    var day = new DateOnly(2026, 1, 15);
+    foreach (var value in new[] { -1d, double.NaN, double.PositiveInfinity, double.NegativeInfinity })
+    {
+        Require(ExpectFailure(() => usage.SaveTrafficPeaks(day, value, 1), "Invalid download peak") is ArgumentOutOfRangeException, "Invalid download values are rejected before persistence.");
+        Require(ExpectFailure(() => usage.SaveTrafficPeaks(day, 1, value), "Invalid upload peak") is ArgumentOutOfRangeException, "Invalid upload values are rejected before persistence.");
+    }
+    using var connection = Open(workspace.CurrentPath);
+    foreach (var sql in new[] {
+        "INSERT INTO daily_traffic_peaks VALUES('2026-01-15', -1, 1);",
+        "INSERT INTO daily_traffic_peaks VALUES('2026-01-15', 1, -1);",
+        "INSERT INTO daily_traffic_peaks VALUES('2026-01-15', 1e999, 1);",
+        "INSERT INTO daily_traffic_peaks VALUES('2026-01-15', 1, 1e999);",
+        "INSERT INTO daily_traffic_peaks VALUES('2026-01-15', 'invalid', 1);",
+        "INSERT INTO daily_traffic_peaks VALUES('2026-02-30', 1, 1);",
+        "INSERT INTO daily_traffic_peaks VALUES('2026-1-1', 1, 1);",
+        "INSERT INTO daily_traffic_peaks VALUES(NULL, 1, 1);"
+    })
+        Require(ExpectFailure(() => Execute(connection, sql), $"Invalid raw peak row: {sql}") is SqliteException, "SQLite independently enforces peak constraints.");
+    Equal(0L, ReadInteger(workspace.CurrentPath, "SELECT count(*) FROM daily_traffic_peaks;"), "Rejected values cannot create a row");
+    usage.SaveTrafficPeaks(DateOnly.MinValue, double.MaxValue, 0);
+    usage.SaveTrafficPeaks(DateOnly.MaxValue, 0, 0.25);
+    Equal((double.MaxValue, 0d), usage.GetTrafficPeaks(DateOnly.MinValue), "Finite maxima and minimum DateOnly are supported");
+    Equal((0d, 0.25), usage.GetTrafficPeaks(DateOnly.MaxValue), "Maximum DateOnly and fractional uploads are supported");
+}
+
+static void TrafficPeaksInvalidCurrentSchema()
+{
+    using var schema = new TestWorkspace();
+    _ = new UsageStore(schema.Root);
+    using (var connection = Open(schema.CurrentPath))
+        Execute(connection, "DROP TABLE daily_traffic_peaks; CREATE TABLE daily_traffic_peaks(day TEXT NOT NULL PRIMARY KEY, downloaded_peak_bytes_per_second REAL NOT NULL, uploaded_peak_bytes_per_second REAL NOT NULL);");
+    var definition = ReadText(schema.CurrentPath, "SELECT sql FROM sqlite_schema WHERE name='daily_traffic_peaks';");
+    ExpectStartupFailure(schema.Root);
+    Equal(definition, ReadText(schema.CurrentPath, "SELECT sql FROM sqlite_schema WHERE name='daily_traffic_peaks';"), "Damaged constraints are not silently rebuilt");
+    Equal(5L, ReadInteger(schema.CurrentPath, "PRAGMA user_version;"), "Failed current-schema validation preserves version");
+    using var rows = new TestWorkspace();
+    _ = new UsageStore(rows.Root);
+    using (var connection = Open(rows.CurrentPath))
+        Execute(connection, "PRAGMA ignore_check_constraints=ON; INSERT INTO daily_traffic_peaks VALUES('2026-02-30', -1.0, 2.0);");
+    var invalid = SnapshotRows(rows.CurrentPath, "daily_traffic_peaks");
+    ExpectStartupFailure(rows.Root);
+    Equal(invalid, SnapshotRows(rows.CurrentPath, "daily_traffic_peaks"), "Externally invalid observations remain preserved for recovery");
+}
+
+static void PausePeakTestSampler(MonitoringService service)
+{
+    var timer = (Timer)typeof(MonitoringService).GetField("_timer", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(service)!;
+    timer.Change(Timeout.Infinite, Timeout.Infinite);
+}
+
+static void AdvancePeakTestDay(HeadlessMonitoringContext test)
+{
+    var local = test.Clock.GetLocalNow();
+    test.Clock.Advance(local.DateTime.Date.AddDays(1).AddSeconds(1) - local.DateTime);
+}
+
+static void TrafficPeaksCoreAccumulation()
+{
+    using var test = new HeadlessMonitoringContext();
+    PausePeakTestSampler(test.Service);
+    test.AdvanceCounters(425_000, 6250);
+    var sampled = test.Service.GetSnapshot();
+    Equal(sampled.DownloadBytesPerSecond, sampled.PeakDownloadBytesPerSecond, "Download peak uses the exact live sample");
+    Equal(sampled.UploadBytesPerSecond, sampled.PeakUploadBytesPerSecond, "Upload peak uses the exact live sample");
+    Equal(test.Day, sampled.PeakDay, "Peak date follows the core's local day");
+    test.Service.SampleNow();
+    test.Service.SampleNow();
+    Equal(425_000L, test.Service.GetSnapshot().SessionDownloaded, "Repeated timestamp cannot count bytes twice");
+    Equal(425_000d, test.Service.GetSnapshot().PeakDownloadBytesPerSecond, "Repeated sample cannot replace the observed peak");
+    test.AdvanceCounters(100, 10);
+    Equal(425_000d, test.Service.GetSnapshot().PeakDownloadBytesPerSecond, "Lower live traffic cannot lower today's peak");
+    Equal((0d, 0d), test.Usage.GetTrafficPeaks(test.Day), "Ordinary sampling does not write SQLite every second");
+}
+
+static void TrafficPeaksCoreBatchAndRestart()
+{
+    using var test = new HeadlessMonitoringContext();
+    PausePeakTestSampler(test.Service);
+    test.AdvanceCounters(1234, 56);
+    Equal((0d, 0d), test.Usage.GetTrafficPeaks(test.Day), "Peak stays pending before thirty seconds");
+    test.Clock.Advance(TimeSpan.FromSeconds(31));
+    test.AdvanceCounters(0, 0);
+    Equal((1234d, 56d), test.Usage.GetTrafficPeaks(test.Day), "Thirty-second batch persists both observed peaks");
+    test.AdvanceCounters(2345, 67);
+    test.Service.Stop();
+    var identity = new FakeNetworkIdentityService { Network = test.Identity.Network };
+    var verifier = new VpnRouteVerifier(new VpnDetectionService(new FakeVpnInterfaceSource()), new FakeVpnRouteSource());
+    using var restarted = MonitoringService.CreateForDataRoot(test.Root, identity, verifier, test.Network, test.Clock,
+        new IcmpMonitor(new NoInternetPingSource(), timeProvider: test.Clock));
+    Equal((2345d, 67d), restarted.Usage.GetTrafficPeaks(test.Day), "Normal exit persists peaks newer than the last periodic flush");
+    Equal(2345d, restarted.GetSnapshot().PeakDownloadBytesPerSecond, "Restart loads today's persisted download peak");
+    Equal(67d, restarted.GetSnapshot().PeakUploadBytesPerSecond, "Restart loads today's persisted upload peak");
+    Equal(0L, restarted.GetSnapshot().SessionDownloaded, "Today's peak is separate from the new app session's totals");
+}
+
+static void TrafficPeaksCoreRollover()
+{
+    using var test = new HeadlessMonitoringContext();
+    PausePeakTestSampler(test.Service);
+    test.AdvanceCounters(5000, 500);
+    var yesterday = test.Day;
+    test.Service.Suspend();
+    AdvancePeakTestDay(test);
+    var sleeping = test.Service.GetSnapshot();
+    Equal(test.Day, sleeping.PeakDay, "Sleeping dashboard reads the new local date");
+    Equal(0d, sleeping.PeakDownloadBytesPerSecond, "Sleep across midnight cannot expose yesterday's download peak");
+    Equal(0d, sleeping.PeakUploadBytesPerSecond, "Sleep across midnight cannot expose yesterday's upload peak");
+    Equal((5000d, 500d), test.Usage.GetTrafficPeaks(yesterday), "Sleep flush preserves yesterday's measurement");
+    test.Identity.Network = null;
+    test.Network.Adapters = Array.Empty<AdapterInfo>();
+    test.Service.Resume();
+    PausePeakTestSampler(test.Service);
+    WaitUntil(() => test.Service.GetSnapshot().Connection.Status == ConnectionStatus.Disconnected, "Resume observes a genuinely disconnected physical connection");
+    test.Service.SampleNow();
+    Equal(0d, test.Service.GetSnapshot().PeakDownloadBytesPerSecond, "Offline sampling cannot carry an old peak into today");
+    Equal((0d, 0d), test.Usage.GetTrafficPeaks(test.Day), "No traffic means no measured peak for the new date");
+}
+
+static void TrafficPeaksCoreMultiDayRetry()
+{
+    using var test = new HeadlessMonitoringContext();
+    PausePeakTestSampler(test.Service);
+    using (var connection = Open(test.DatabasePath))
+        Execute(connection, "CREATE TRIGGER FailPeakInsert BEFORE INSERT ON daily_traffic_peaks BEGIN SELECT RAISE(ABORT, 'peak failure'); END;");
+    var firstDay = test.Day;
+    test.AdvanceCounters(1000, 100);
+    AdvancePeakTestDay(test);
+    test.AdvanceCounters(0, 0);
+    var secondDay = test.Day;
+    test.AdvanceCounters(2000, 200);
+    Equal(2000d, test.Service.GetSnapshot().PeakDownloadBytesPerSecond, "A second day's peak does not reuse the first day");
+    test.Service.Flush();
+    Equal((0d, 0d), test.Usage.GetTrafficPeaks(firstDay), "Failed first-day peak remains uncommitted");
+    Equal((0d, 0d), test.Usage.GetTrafficPeaks(secondDay), "Failed second-day peak remains uncommitted");
+    using (var connection = Open(test.DatabasePath)) Execute(connection, "DROP TRIGGER FailPeakInsert;");
+    test.Service.Flush();
+    Equal((1000d, 100d), test.Usage.GetTrafficPeaks(firstDay), "Retry retains the first dirty day");
+    Equal((2000d, 200d), test.Usage.GetTrafficPeaks(secondDay), "Retry retains the second dirty day");
+    Equal((1000L, 100L), test.Usage.GetTotals(firstDay, firstDay), "First day's byte totals remain quantities");
+    Equal((2000L, 200L), test.Usage.GetTotals(secondDay, secondDay), "Second day's byte totals remain quantities");
+}
+
+static void TrafficPeaksCoreWriteRetry()
+{
+    using var test = new HeadlessMonitoringContext();
+    PausePeakTestSampler(test.Service);
+    test.AdvanceCounters(1000, 100);
+    using (var connection = Open(test.DatabasePath))
+        Execute(connection, "CREATE TRIGGER FailPeakInsert BEFORE INSERT ON daily_traffic_peaks BEGIN SELECT RAISE(ABORT, 'peak failure'); END;");
+    test.Service.Flush();
+    Require(test.Service.GetSnapshot().PersistenceMessage?.Contains("peak", StringComparison.OrdinalIgnoreCase) == true, "Peak write failure is reported without pretending success.");
+    Equal((1000L, 100L), test.Usage.GetTotals(test.Day, test.Day), "Peak failure does not roll back independently saved daily usage");
+    Equal(0L, test.Service.GetSnapshot().PendingDownloaded, "A committed usage batch clears even when peak saving fails");
+    test.AdvanceCounters(2000, 200);
+    using (var connection = Open(test.DatabasePath)) Execute(connection, "DROP TRIGGER FailPeakInsert;");
+    test.Service.Flush();
+    test.Service.Flush();
+    Equal((2000d, 200d), test.Usage.GetTrafficPeaks(test.Day), "Retry commits the latest retained maxima");
+    Equal((3000L, 300L), test.Usage.GetTotals(test.Day, test.Day), "Retry never adds the previous committed usage twice");
+    Equal(3000L, test.Service.History.GetActiveSession()!.DownloadBytes, "Physical history retains the same exact deltas");
+    Require(test.Service.GetSnapshot().PersistenceMessage is null, "A successful retry clears the failure message.");
+}
+
+static void TrafficPeaksCoreUsageFailure()
+{
+    using var test = new HeadlessMonitoringContext(vpnActive: true);
+    PausePeakTestSampler(test.Service);
+    WaitUntil(() => test.Vpn.GetActiveSession() is not null, "VPN exists before the injected usage failure");
+    test.AdvanceCounters(8192, 512);
+    using (var connection = Open(test.DatabasePath))
+        Execute(connection, "CREATE TRIGGER FailUsageInsert BEFORE INSERT ON daily_usage BEGIN SELECT RAISE(ABORT, 'usage failure'); END;");
+    ExpectFailure(test.Service.Flush, "Injected daily usage failure");
+    Equal((8192d, 512d), test.Usage.GetTrafficPeaks(test.Day), "Usage write failure cannot prevent independent peak saving");
+    Equal(8192L, test.Service.GetSnapshot().PendingDownloaded, "Failed usage remains available for a later retry");
+    Equal(8192L, test.Service.History.GetActiveSession()!.DownloadBytes, "Physical progress flush continues after failed usage persistence");
+    test.Service.Stop();
+    Require(test.Service.History.GetActiveSession() is null && test.Vpn.GetActiveSession() is null, "Daily usage failure cannot orphan physical or VPN intervals during exit.");
+    Equal("ApplicationExit", test.Service.History.GetRecentSessions().Single().EndReason, "Physical exit remains clean");
+    Equal("ApplicationExit", test.Vpn.GetRecentSessions().Single().EndReason, "VPN exit remains clean");
+    using var nextLease = new DatabaseRunLease(test.DatabasePath);
+}
+
+static void TrafficPeaksCoreBaselineSafety()
+{
+    using var test = new HeadlessMonitoringContext();
+    PausePeakTestSampler(test.Service);
+    test.AdvanceCounters(100, 10);
+    var initial = test.Service.GetSnapshot().Session!.Id;
+    test.Identity.Network = new NetworkIdentity("WiFi", "A new peak-test hotspot", "A new peak-test hotspot", test.Adapter.Id);
+    test.Identity.RaiseNetworkChanged();
+    WaitUntil(() => test.Service.GetSnapshot().Session?.Id != initial, "Physical transition establishes a fresh session");
+    test.AdvanceCounters(50_000_000, 1_000_000);
+    Equal(100d, test.Service.GetSnapshot().PeakDownloadBytesPerSecond, "The first new-identity counters establish a baseline instead of a giant peak");
+    test.AdvanceCounters(200, 20);
+    Equal(200d, test.Service.GetSnapshot().PeakDownloadBytesPerSecond, "A valid post-baseline delta updates the peak");
+    test.Clock.Advance(TimeSpan.FromSeconds(1));
+    test.Network.SetSnapshot(test.Adapter.Id, new NetworkSnapshot(1, 1, test.Clock.GetUtcNow()));
+    test.Service.SampleNow();
+    Equal(200d, test.Service.GetSnapshot().PeakDownloadBytesPerSecond, "Counter reset cannot manufacture a huge passive peak");
+    Equal(20d, test.Service.GetSnapshot().PeakUploadBytesPerSecond, "Upload reset cannot manufacture a huge passive peak");
+}
+
+static void StartupRegistrationAbsent()
+{
+    using var test = new StartupRegistrationContext();
+    Require(!test.Registration.IsEnabled(), "A missing NetTrace value is disabled");
+    test.Registration.Disable();
+    using var key = Registry.CurrentUser.OpenSubKey(test.RegistrySubKey);
+    Require(key is null, "Reading or disabling an absent registration must not create a key");
+}
+
+static void StartupRegistrationCommand()
+{
+    using var test = new StartupRegistrationContext();
+    Require(test.ExecutablePath.Contains(' '), "The executable fixture exercises spaces in the path");
+    test.Registration.Enable();
+    using var key = test.OpenKey();
+    Equal($"\"{test.ExecutablePath}\" --background", key.GetValue(WindowsStartupRegistration.ValueName), "Run command quotes only the executable and supplies the background argument");
+    Equal(RegistryValueKind.String, key.GetValueKind(WindowsStartupRegistration.ValueName), "The registration is an ordinary literal REG_SZ");
+    Require(test.Registration.IsEnabled(), "The actual newly written registration is enabled");
+    Equal(1, key.ValueCount, "Enable creates exactly one named startup entry");
+}
+
+static void StartupRegistrationIdempotent()
+{
+    using var test = new StartupRegistrationContext();
+    using (var key = test.CreateKey())
+        key.SetValue("AnotherApplication", "Other.exe --keep", RegistryValueKind.String);
+    test.Registration.Enable();
+    var command = test.ReadCommand();
+    test.Registration.Enable();
+    using var reopened = test.OpenKey();
+    Equal(2, reopened.ValueCount, "Enabling twice creates no duplicate value and preserves the other application");
+    Equal(command, reopened.GetValue(WindowsStartupRegistration.ValueName), "Repeated enabling retains the same command");
+    Equal("Other.exe --keep", reopened.GetValue("AnotherApplication"), "Repeated enabling leaves other startup data unchanged");
+}
+
+static void StartupRegistrationDisableScope()
+{
+    using var test = new StartupRegistrationContext();
+    using (var key = test.CreateKey())
+    {
+        key.SetValue("AnotherApplication", "Other.exe --keep", RegistryValueKind.String);
+        key.SetValue("NetTraceHelper", "Helper.exe --keep", RegistryValueKind.String);
+        key.SetValue(string.Empty, "Unrelated default value", RegistryValueKind.String);
+    }
+    test.Registration.Enable();
+    test.Registration.Disable();
+    test.Registration.Disable();
+    Require(!test.Registration.IsEnabled(), "Repeated disable is safe and leaves NetTrace disabled");
+    using var keyAfterDisable = test.OpenKey();
+    Require(keyAfterDisable.GetValue(WindowsStartupRegistration.ValueName) is null, "Only the NetTrace registration is removed");
+    Equal(3, keyAfterDisable.ValueCount, "The key and all three unrelated values remain");
+    Equal("Other.exe --keep", keyAfterDisable.GetValue("AnotherApplication"), "Another application's command remains unchanged");
+    Equal("Helper.exe --keep", keyAfterDisable.GetValue("NetTraceHelper"), "A similarly named application remains unchanged");
+    Equal("Unrelated default value", keyAfterDisable.GetValue(string.Empty), "The unnamed value remains unchanged");
+}
+
+static void StartupRegistrationToggle()
+{
+    using var test = new StartupRegistrationContext();
+    test.Registration.Enable();
+    var recreated = new WindowsStartupRegistration(test.ExecutablePath, test.RegistrySubKey);
+    Require(recreated.IsEnabled(), "A recreated service reads persisted enabled state");
+    recreated.Disable();
+    Require(!test.Registration.IsEnabled(), "The original service observes another instance disabling registration immediately");
+    recreated.Enable();
+    Require(test.Registration.IsEnabled(), "Reenabling is visible immediately without restarting the application");
+    Equal(test.Registration.Command, test.ReadCommand(), "Reenabling restores exactly one correct command");
+}
+
+static void StartupRegistrationExternalChanges()
+{
+    using var test = new StartupRegistrationContext();
+    var wrongCommands = new[]
+    {
+        $"\"{test.ExecutablePath}\"",
+        $"{test.ExecutablePath} --background",
+        $"\"{test.ExecutablePath}\" --BACKGROUND",
+        $"\"{test.ExecutablePath}\" --background --extra",
+        $"\"{test.ExecutablePath}\" --background ",
+        $"\"{test.ExecutablePath}\"  --background",
+        $"\"{Path.Combine(test.Root, "Another NetTrace.exe")}\" --background"
+    };
+    foreach (var command in wrongCommands)
+    {
+        test.SetValue(command);
+        Require(!test.Registration.IsEnabled(), "A changed executable, quoting or arguments is not this background registration");
+        Equal(command, test.ReadCommand(), "Reading a changed registration does not rewrite it");
+    }
+    var sameWindowsPath = $"\"{test.ExecutablePath.ToUpperInvariant()}\" --background";
+    test.SetValue(sameWindowsPath);
+    Require(test.Registration.IsEnabled(), "Windows executable path comparison is case insensitive");
+    Equal(sameWindowsPath, test.ReadCommand(), "Reading equivalent path casing does not rewrite the value");
+    using (var key = test.OpenKey())
+        key.DeleteValue(WindowsStartupRegistration.ValueName);
+    Require(!test.Registration.IsEnabled(), "An externally removed value is reflected immediately");
+}
+
+static void StartupRegistrationValueKinds()
+{
+    using var test = new StartupRegistrationContext();
+    test.SetValue(1, RegistryValueKind.DWord);
+    Require(!test.Registration.IsEnabled(), "A numeric value cannot be a startup command");
+    test.SetValue(new byte[] { 1, 2, 3 }, RegistryValueKind.Binary);
+    Require(!test.Registration.IsEnabled(), "A binary value cannot be a startup command");
+    test.SetValue(test.Registration.Command, RegistryValueKind.ExpandString);
+    Require(!test.Registration.IsEnabled(), "Expandable values are not silently accepted as literal executable paths");
+    using (var key = test.OpenKey())
+        Equal(RegistryValueKind.ExpandString, key.GetValueKind(WindowsStartupRegistration.ValueName), "An inspection cannot normalize or change a foreign value kind");
+    test.SetValue(test.Registration.Command, RegistryValueKind.String);
+    Require(test.Registration.IsEnabled(), "The proper literal command is accepted after external correction");
+}
+
+static void StartupRegistrationInvalidPaths()
+{
+    using var test = new StartupRegistrationContext();
+    var library = Path.Combine(test.Root, "NetTrace.dll");
+    File.WriteAllBytes(library, Array.Empty<byte>());
+    var directory = Path.Combine(test.Root, "Directory.exe");
+    Directory.CreateDirectory(directory);
+    var invalidPaths = new[]
+    {
+        string.Empty, " ", "NetTrace.exe", "App Install Folder\\NetTrace.exe", library,
+        directory, Path.Combine(test.Root, "Missing.exe"), $"\"{test.ExecutablePath}\"",
+        test.ExecutablePath + "\r", test.ExecutablePath + "\n", test.ExecutablePath + "\0"
+    };
+    foreach (var path in invalidPaths)
+        ExpectFailure(() => new WindowsStartupRegistration(path, test.RegistrySubKey), "Invalid startup executable path");
+    File.Delete(test.ExecutablePath);
+    ExpectFailure(test.Registration.Enable, "An executable removed after reading the setting");
+    using var key = Registry.CurrentUser.OpenSubKey(test.RegistrySubKey);
+    Require(key is null, "Rejected paths cannot publish a startup entry or create the registry key");
+}
+
+static void StartupRegistrationUnicodePath()
+{
+    using var test = new StartupRegistrationContext();
+    var install = Path.Combine(test.Root, "NetTrace install — café's folder");
+    Directory.CreateDirectory(install);
+    var executable = Path.Combine(install, "NetTrace.exe");
+    File.WriteAllBytes(executable, Array.Empty<byte>());
+    var registration = new WindowsStartupRegistration(executable, test.RegistrySubKey);
+    registration.Enable();
+    Equal($"\"{executable}\" --background", test.ReadCommand(), "Unicode and apostrophes are preserved inside a single double-quoted executable argument");
+    Require(registration.IsEnabled(), "The Unicode installation path reads back as enabled");
+}
+
+static void StartupRegistrationCanonicalPath()
+{
+    using var test = new StartupRegistrationContext();
+    var equivalent = Path.Combine(test.Root, "App Install Folder", "..", "App Install Folder", "NetTrace.exe");
+    var registration = new WindowsStartupRegistration(equivalent, test.RegistrySubKey);
+    Equal(test.ExecutablePath, registration.ExecutablePath, "Equivalent absolute paths normalize to the real executable");
+    registration.Enable();
+    Require(test.Registration.IsEnabled(), "The canonical startup command is recognized by a separately constructed service");
+    Equal(test.Registration.Command, test.ReadCommand(), "Canonicalization cannot introduce multiple commands or arguments");
+}
+
 static int RunLeaseChild(string[] arguments)
 {
     if (arguments.Length != 3) throw new ArgumentException("Lease child requires a test root and mode.");
@@ -4329,6 +4844,59 @@ sealed class LeaseChildProcess : IDisposable
     }
 }
 
+// Startup tests create only a unique HKCU regression key, never the real Windows Run key.
+// Empty executable fixtures validate command construction and are never launched.
+sealed class StartupRegistrationContext : IDisposable
+{
+    private const string RegistryParent = @"Software\NetTrace.RegressionTests\Startup";
+    private readonly TestWorkspace _workspace = new();
+    private readonly string _registryId = Guid.NewGuid().ToString("N");
+    public string Root => _workspace.Root;
+    public string RegistrySubKey { get; }
+    public string ExecutablePath { get; }
+    public WindowsStartupRegistration Registration { get; }
+
+    public StartupRegistrationContext()
+    {
+        RegistrySubKey = RegistryParent + "\\" + _registryId;
+        var install = Path.Combine(Root, "App Install Folder");
+        Directory.CreateDirectory(install);
+        ExecutablePath = Path.Combine(install, "NetTrace.exe");
+        File.WriteAllBytes(ExecutablePath, Array.Empty<byte>());
+        Registration = new WindowsStartupRegistration(ExecutablePath, RegistrySubKey);
+    }
+
+    public RegistryKey OpenKey() => Registry.CurrentUser.OpenSubKey(RegistrySubKey, writable: true)
+        ?? throw new InvalidOperationException("The owned startup regression key does not exist.");
+
+    public RegistryKey CreateKey() => Registry.CurrentUser.CreateSubKey(RegistrySubKey, writable: true)
+        ?? throw new InvalidOperationException("The owned startup regression key could not be created.");
+
+    public object? ReadCommand()
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(RegistrySubKey);
+        return key?.GetValue(WindowsStartupRegistration.ValueName, null, RegistryValueOptions.DoNotExpandEnvironmentNames);
+    }
+
+    public void SetValue(object value, RegistryValueKind kind = RegistryValueKind.String)
+    {
+        using var key = CreateKey();
+        key.SetValue(WindowsStartupRegistration.ValueName, value, kind);
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            if (!Guid.TryParseExact(_registryId, "N", out _)
+                || !string.Equals(RegistrySubKey, RegistryParent + "\\" + _registryId, StringComparison.Ordinal))
+                throw new InvalidOperationException("Refusing to remove a registry key outside this test's owned GUID path.");
+            Registry.CurrentUser.DeleteSubKeyTree(RegistrySubKey, throwOnMissingSubKey: false);
+        }
+        finally { _workspace.Dispose(); }
+    }
+}
+
 sealed class TestWorkspace : IDisposable
 {
     private readonly string _parent = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "NetTrace.RegressionTests"));
@@ -4427,12 +4995,22 @@ sealed class FakeNetworkIdentityService : INetworkIdentityService
 
 // This fixture starts the production application core with no Application, Window,
 // dispatcher or tray. Only native input inventories and the clock are controlled.
+sealed class NoInternetPingSource : IPingSource
+{
+    public Task<IcmpPingReply> SendAsync(IPAddress target, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(new IcmpPingReply(IPStatus.TimedOut));
+    }
+}
+
 sealed class HeadlessMonitoringContext : IDisposable
 {
     private readonly TestWorkspace _workspace = new();
     private long _received = 10_000;
     private long _sent = 1000;
     public string DatabasePath => _workspace.CurrentPath;
+    public string Root => _workspace.Root;
     public UsageStore Usage => Service.Usage;
     public DateOnly Day => DateOnly.FromDateTime(Clock.GetLocalNow().DateTime);
     public HeadlessTimeProvider Clock { get; } = new();
@@ -4466,7 +5044,8 @@ sealed class HeadlessMonitoringContext : IDisposable
         var verifier = new VpnRouteVerifier(new VpnDetectionService(VpnSource), new FakeVpnRouteSource());
         try
         {
-            Service = MonitoringService.CreateForDataRoot(_workspace.Root, Identity, verifier, Network, Clock);
+            Service = MonitoringService.CreateForDataRoot(_workspace.Root, Identity, verifier, Network, Clock,
+                new IcmpMonitor(new NoInternetPingSource(), timeProvider: Clock));
             Vpn = new VpnSessionStore(Service.Usage);
             Service.Start();
             var deadline = Stopwatch.StartNew();

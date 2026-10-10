@@ -9,26 +9,73 @@ using NetTrace.Utils;
 
 namespace NetTrace;
 
-// A dashboard view. Closing it never stops the application-owned monitor.
+// An application shell. Closing it never stops the application-owned monitor.
 public partial class MainWindow : Window
 {
     private readonly MonitoringService _monitoring;
     private readonly DispatcherTimer _timer;
+    private IWindowsStartupRegistration? _startupRegistration;
     private volatile bool _closed;
     private bool _loadingAdapters = true;
 
-    public MainWindow(MonitoringService monitoring)
+    public MainWindow(MonitoringService monitoring, IWindowsStartupRegistration? startupRegistration = null)
     {
         ArgumentNullException.ThrowIfNull(monitoring);
         _monitoring = monitoring;
+        _startupRegistration = startupRegistration;
         InitializeComponent();
+        RefreshStartupSetting();
         DatabasePathText.Text = monitoring.DatabasePath;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _timer.Tick += Timer_OnTick;
         Closed += OnClosed;
         IsVisibleChanged += OnVisibilityChanged;
+        DashboardContent.IsVisibleChanged += DashboardContent_OnVisibilityChanged;
+        SettingsContent.IsVisibleChanged += SettingsContent_OnVisibilityChanged;
         RefreshDashboard();
         _monitoring.Changed += Monitoring_OnChanged;
+    }
+
+    protected override void OnActivated(EventArgs args)
+    {
+        base.OnActivated(args);
+        if (!_closed) RefreshStartupSetting();
+    }
+
+    private IWindowsStartupRegistration StartupRegistration =>
+        _startupRegistration ??= new WindowsStartupRegistration();
+
+    private void RefreshStartupSetting()
+    {
+        try
+        {
+            StartWithWindowsCheckBox.IsChecked = StartupRegistration.IsEnabled();
+            StartWithWindowsCheckBox.IsEnabled = true;
+            StartupSettingMessageText.Text = "";
+        }
+        catch (Exception exception)
+        {
+            StartWithWindowsCheckBox.IsChecked = null;
+            StartWithWindowsCheckBox.IsEnabled = false;
+            StartupSettingMessageText.Text = $"Windows startup setting is unavailable: {exception.Message}";
+        }
+    }
+
+    private void StartWithWindows_OnClick(object sender, RoutedEventArgs args)
+    {
+        string? error = null;
+        try
+        {
+            if (StartWithWindowsCheckBox.IsChecked == true) StartupRegistration.Enable();
+            else StartupRegistration.Disable();
+        }
+        catch (Exception exception)
+        {
+            error = $"Could not update Windows startup: {exception.Message}";
+        }
+        // Read back the actual registration, including after a partial write failure.
+        RefreshStartupSetting();
+        if (error is not null) StartupSettingMessageText.Text = error;
     }
 
     private void OnVisibilityChanged(object sender, DependencyPropertyChangedEventArgs args)
@@ -42,6 +89,16 @@ public partial class MainWindow : Window
         else _timer.Stop();
     }
 
+    private void DashboardContent_OnVisibilityChanged(object sender, DependencyPropertyChangedEventArgs args)
+    {
+        if (!_closed && DashboardContent.IsVisible) RefreshDashboard();
+    }
+
+    private void SettingsContent_OnVisibilityChanged(object sender, DependencyPropertyChangedEventArgs args)
+    {
+        if (!_closed && SettingsContent.IsVisible) RefreshStartupSetting();
+    }
+
     private void OnClosed(object? sender, EventArgs args)
     {
         _closed = true;
@@ -49,6 +106,8 @@ public partial class MainWindow : Window
         _timer.Tick -= Timer_OnTick;
         _monitoring.Changed -= Monitoring_OnChanged;
         IsVisibleChanged -= OnVisibilityChanged;
+        DashboardContent.IsVisibleChanged -= DashboardContent_OnVisibilityChanged;
+        SettingsContent.IsVisibleChanged -= SettingsContent_OnVisibilityChanged;
         Closed -= OnClosed;
     }
 
@@ -78,8 +137,10 @@ public partial class MainWindow : Window
         UpdateAdapterDetails(snapshot.SelectedAdapter);
         DownloadRateText.Text = ByteFormatter.FormatRate(snapshot.DownloadBytesPerSecond);
         UploadRateText.Text = ByteFormatter.FormatRate(snapshot.UploadBytesPerSecond);
-        DownloadSessionText.Text = $"App session: {ByteFormatter.Format(snapshot.SessionDownloaded)}";
-        UploadSessionText.Text = $"App session: {ByteFormatter.Format(snapshot.SessionUploaded)}";
+        DownloadPeakText.Text = $"Peak today ↓ {ByteFormatter.FormatRate(snapshot.PeakDownloadBytesPerSecond)}";
+        UploadPeakText.Text = $"Peak today ↑ {ByteFormatter.FormatRate(snapshot.PeakUploadBytesPerSecond)}";
+        DownloadSessionText.Text = $"App session ↓ {ByteFormatter.Format(snapshot.SessionDownloaded)}";
+        UploadSessionText.Text = $"App session ↑ {ByteFormatter.Format(snapshot.SessionUploaded)}";
         StatusText.Text = snapshot.Status;
         StatusDot.Fill = new SolidColorBrush(snapshot.Status == "Monitoring"
             ? Color.FromRgb(34, 197, 94) : Color.FromRgb(239, 68, 68));
@@ -97,6 +158,7 @@ public partial class MainWindow : Window
         AssignProfileButton.Visibility = state.CanAssign ? Visibility.Visible : Visibility.Collapsed;
         SessionMessageText.Text = snapshot.PersistenceMessage ?? "";
         RefreshCurrentSession(snapshot);
+        if (!DashboardTab.IsSelected) return;
         try
         {
             var totals = _monitoring.GetUsageTotals();
@@ -178,16 +240,25 @@ public partial class MainWindow : Window
     private void UpdateAdapterDetails(AdapterInfo? adapter)
     {
         AdapterNameText.Text = adapter?.Name ?? "No active adapter";
-        AdapterTypeText.Text = adapter?.Type ?? "—";
+        AdapterTypeText.Text = adapter?.Type == "Wireless80211" ? "Wi-Fi" : adapter?.Type ?? "—";
         Ipv4Text.Text = adapter?.IPv4Address ?? "—";
-        LinkSpeedText.Text = adapter is null ? "—" : FormatLinkSpeed(adapter.SpeedBitsPerSecond);
+        LinkRateLabel.Text = adapter?.Type switch
+        {
+            "Wireless80211" => "Wi-Fi link rate",
+            "Ethernet" => "Ethernet link rate",
+            _ => "Adapter link rate"
+        };
+        LinkSpeedText.Text = adapter is null ? "—" : FormatLinkRate(adapter.SpeedBitsPerSecond);
+        LinkSpeedText.ToolTip = adapter?.Type == "Wireless80211"
+            ? "The local Wi-Fi link between this PC and its router or hotspot. This is not measured internet speed."
+            : "The local rate reported by the monitored adapter. This is not measured internet speed.";
     }
 
-    private static string FormatLinkSpeed(long bitsPerSecond)
+    private static string FormatLinkRate(long bitsPerSecond)
     {
         if (bitsPerSecond <= 0) return "Unknown";
         var mbps = bitsPerSecond / 1_000_000d;
-        return mbps >= 1000 ? $"{mbps / 1000d:0.##} Gbps" : $"{mbps:0.##} Mbps";
+        return $"{mbps:0.##} Mbps";
     }
 
     private static void UpdateUsageCard(TextBlock total, TextBlock breakdown, long downloaded, long uploaded)

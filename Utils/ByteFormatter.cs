@@ -30,9 +30,10 @@ public static class ByteFormatter
 
     public static string FormatRate(double bytesPerSecond)
     {
-        if (bytesPerSecond < 0)
+        if (!double.IsFinite(bytesPerSecond) || bytesPerSecond < 0)
             bytesPerSecond = 0;
 
-        return $"{Format((long)bytesPerSecond)}/s";
+        // Network rates use decimal megabits; data totals retain their byte units.
+        return $"{bytesPerSecond / 125_000:F2} Mbps";
     }
 }

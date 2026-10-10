@@ -16,6 +16,7 @@ public sealed class MonitoringService : IDisposable
     private readonly ConnectionSessionTracker _sessions;
     private readonly ConnectionProfileMonitor _profileMonitor;
     private readonly VpnSessionMonitor _vpnSessions;
+    private readonly IcmpMonitor _icmpMonitor;
     private readonly DatabaseRunLease _runLease;
     private readonly TimeProvider _timeProvider;
     private readonly Timer _timer;
@@ -26,6 +27,7 @@ public sealed class MonitoringService : IDisposable
     private bool _sessionPersistenceFailed;
     private bool _persistNextObservation;
     private string? _usagePersistenceMessage;
+    private string? _trafficPeaksPersistenceMessage;
     private string? _historyPersistenceMessage;
     private long _lastHandledObservationSequence;
     private long _sampleSequence;
@@ -44,16 +46,20 @@ public sealed class MonitoringService : IDisposable
     private string _status = "Monitoring";
     private double _downloadRate;
     private double _uploadRate;
+    private readonly Dictionary<DateOnly, (double DownloadBytesPerSecond, double UploadBytesPerSecond)> _trafficPeaks = new();
+    private readonly HashSet<DateOnly> _dirtyTrafficPeakDays = new();
 
     public event EventHandler? Changed;
     public UsageStore Usage => _store;
     public ProfileStore Profiles => _profiles;
     public ConnectionHistoryStore History => _history;
     public string DatabasePath => _store.DatabasePath;
+    public IcmpProbeResult? LatestIcmpMeasurement => _icmpMonitor.LatestResult;
 
     public static MonitoringService CreateForDataRoot(string localApplicationDataDirectory,
         INetworkIdentityService? identityService = null, VpnRouteVerifier? vpnVerifier = null,
-        INetworkMonitor? networkMonitor = null, TimeProvider? timeProvider = null)
+        INetworkMonitor? networkMonitor = null, TimeProvider? timeProvider = null,
+        IcmpMonitor? icmpMonitor = null)
     {
         DatabaseRunLease? lease = null;
         var transferred = false;
@@ -63,11 +69,18 @@ public sealed class MonitoringService : IDisposable
             var store = new UsageStore(localApplicationDataDirectory, lease);
             transferred = true;
             return new MonitoringService(store, identityService ?? new NetworkIdentityService(),
-                lease, vpnVerifier, networkMonitor, timeProvider);
+                lease, vpnVerifier, networkMonitor, timeProvider, icmpMonitor);
         }
         catch
         {
-            try { if (!transferred) identityService?.Dispose(); }
+            try
+            {
+                if (!transferred)
+                {
+                    try { icmpMonitor?.Dispose(); }
+                    finally { identityService?.Dispose(); }
+                }
+            }
             catch (Exception exception) { Trace.TraceWarning($"Could not clean up network identity detection after startup failure: {exception.Message}"); }
             finally { lease?.Dispose(); }
             throw;
@@ -76,7 +89,8 @@ public sealed class MonitoringService : IDisposable
 
     public MonitoringService(UsageStore store, INetworkIdentityService identityService,
         DatabaseRunLease? runLease = null, VpnRouteVerifier? vpnVerifier = null,
-        INetworkMonitor? networkMonitor = null, TimeProvider? timeProvider = null)
+        INetworkMonitor? networkMonitor = null, TimeProvider? timeProvider = null,
+        IcmpMonitor? icmpMonitor = null)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(identityService);
@@ -89,6 +103,8 @@ public sealed class MonitoringService : IDisposable
         {
             _runLease = runLease ?? new DatabaseRunLease(store.DatabasePath);
             _runLease.EnsureOwns(store.DatabasePath);
+            _icmpMonitor = icmpMonitor ?? new IcmpMonitor(timeProvider: _timeProvider);
+            _trafficPeaks[_pendingDay] = store.GetTrafficPeaks(_pendingDay);
             _history = new ConnectionHistoryStore(store);
             _sessions = new ConnectionSessionTracker(_history, _timeProvider);
             _profiles = new ProfileStore(store);
@@ -99,6 +115,8 @@ public sealed class MonitoringService : IDisposable
         }
         catch
         {
+            try { (_icmpMonitor ?? icmpMonitor)?.Dispose(); }
+            catch (Exception exception) { Trace.TraceWarning($"Could not stop ICMP monitoring after startup failure: {exception.Message}"); }
             try { _timer?.Dispose(); }
             catch (Exception exception) { Trace.TraceWarning($"Could not stop sampling after startup failure: {exception.Message}"); }
             try { _vpnSessions?.Dispose(); }
@@ -124,6 +142,7 @@ public sealed class MonitoringService : IDisposable
             _profileMonitor.ObservationReceived += ProfileMonitor_OnObservationReceived;
             _profileMonitor.Start();
             _vpnSessions.Start();
+            _icmpMonitor.Start();
             if (!_suspended) _timer.Change(1000, 1000);
         }
         RaiseChanged();
@@ -132,11 +151,22 @@ public sealed class MonitoringService : IDisposable
     public MonitoringSnapshot GetSnapshot()
     {
         lock (_gate)
+        {
+            // A new local date starts at zero even while offline or asleep. This is
+            // an in-memory read; the dashboard never queries SQLite for live peaks.
+            var today = DateOnly.FromDateTime(_timeProvider.GetLocalNow().DateTime);
+            var peaks = _trafficPeaks.GetValueOrDefault(today);
             return new(_profileMonitor.Current, _sessions.IsSleeping ? null : _sessions.Current,
                 _adapters, _selectedAdapter, _suspended, _started && !_stopping && !_disposed,
                 _status, _downloadRate, _uploadRate, _sessionDownloaded, _sessionUploaded,
                 _pendingDownloaded, _pendingUploaded, _pendingDay,
-                _historyPersistenceMessage ?? _usagePersistenceMessage);
+                _historyPersistenceMessage ?? _trafficPeaksPersistenceMessage ?? _usagePersistenceMessage)
+            {
+                PeakDay = today,
+                PeakDownloadBytesPerSecond = peaks.DownloadBytesPerSecond,
+                PeakUploadBytesPerSecond = peaks.UploadBytesPerSecond
+            };
+        }
     }
 
     // Visible dashboards request these queries. A concurrent flush cannot double-count
@@ -266,6 +296,7 @@ public sealed class MonitoringService : IDisposable
                 }
                 _downloadRate = delta is null ? 0 : delta.DownloadBytes / delta.ElapsedSeconds;
                 _uploadRate = delta is null ? 0 : delta.UploadBytes / delta.ElapsedSeconds;
+                if (delta is not null) RecordTrafficPeaks(today, _downloadRate, _uploadRate);
                 if (!pendingPhysicalChange && _sessions.Current is { } session
                     && latest.Network is { } network && network.NetworkType == session.NetworkType
                     && network.NetworkIdentifier == session.NetworkIdentifier
@@ -293,15 +324,57 @@ public sealed class MonitoringService : IDisposable
 
     private void FlushPending()
     {
-        if (_pendingDownloaded > 0 || _pendingUploaded > 0)
+        Exception? usageFailure = null;
+        try
         {
-            _store.AddUsage(_pendingDay, _pendingDownloaded, _pendingUploaded);
-            _pendingDownloaded = 0;
-            _pendingUploaded = 0;
+            if (_pendingDownloaded > 0 || _pendingUploaded > 0)
+            {
+                _store.AddUsage(_pendingDay, _pendingDownloaded, _pendingUploaded);
+                _pendingDownloaded = 0;
+                _pendingUploaded = 0;
+            }
             _usagePersistenceMessage = null;
         }
+        catch (Exception exception) { usageFailure = exception; }
+
+        // These independent saves must still run if a daily-usage write fails.
+        // MAX UPSERT makes a retried peak safe, while successful usage is cleared
+        // immediately so another failure cannot cause that usage to be added twice.
+        FlushTrafficPeaks();
         UpdateSessionHistory(_sessions.Flush);
         _lastFlush = _timeProvider.GetUtcNow();
+        if (usageFailure is not null)
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(usageFailure).Throw();
+    }
+
+    private void RecordTrafficPeaks(DateOnly day, double downloadBytesPerSecond, double uploadBytesPerSecond)
+    {
+        // The same sampled delta supplies live traffic, usage totals and this
+        // passive peak. A baseline/reset sample can never manufacture a peak.
+        var previous = _trafficPeaks.GetValueOrDefault(day);
+        var download = Math.Max(previous.DownloadBytesPerSecond, downloadBytesPerSecond);
+        var upload = Math.Max(previous.UploadBytesPerSecond, uploadBytesPerSecond);
+        if (download == previous.DownloadBytesPerSecond && upload == previous.UploadBytesPerSecond) return;
+        _trafficPeaks[day] = (download, upload);
+        _dirtyTrafficPeakDays.Add(day);
+    }
+
+    private void FlushTrafficPeaks()
+    {
+        Exception? failure = null;
+        foreach (var day in _dirtyTrafficPeakDays.Order().ToArray())
+        {
+            try
+            {
+                var peaks = _trafficPeaks[day];
+                _store.SaveTrafficPeaks(day, peaks.DownloadBytesPerSecond, peaks.UploadBytesPerSecond);
+                _dirtyTrafficPeakDays.Remove(day);
+            }
+            catch (Exception exception) { failure ??= exception; }
+        }
+        _trafficPeaksPersistenceMessage = failure is null ? null
+            : $"Daily traffic peaks could not be saved: {failure.Message}";
+        if (_trafficPeaksPersistenceMessage is not null) Trace.TraceError(_trafficPeaksPersistenceMessage);
     }
 
     public void Flush()
@@ -352,6 +425,7 @@ public sealed class MonitoringService : IDisposable
             _timer.Change(Timeout.Infinite, Timeout.Infinite);
             _previousSnapshot = null;
             _vpnSessions.Suspend();
+            _icmpMonitor.Suspend();
             FlushPendingForLifecycle();
             UpdateSessionHistory(_sessions.Sleep);
             _profileMonitor.Refresh(invalidatePending: true);
@@ -370,6 +444,7 @@ public sealed class MonitoringService : IDisposable
             _lastPhysicalNetwork = null;
             _suspended = false;
             _vpnSessions.Resume();
+            _icmpMonitor.Resume();
             if (_started) _timer.Change(1000, 1000);
         }
         RaiseChanged();
@@ -387,7 +462,11 @@ public sealed class MonitoringService : IDisposable
                 _profileMonitor.ObservationReceived -= ProfileMonitor_OnObservationReceived;
             }
             // No application lock is held while joining native recognition/VPN workers.
-            try { _vpnSessions.Dispose(); }
+            try
+            {
+                try { _icmpMonitor.Dispose(); }
+                finally { _vpnSessions.Dispose(); }
+            }
             finally
             {
                 try { _profileMonitor.Dispose(); }

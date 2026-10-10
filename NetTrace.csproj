@@ -8,11 +8,14 @@
     <AssemblyName>NetTrace</AssemblyName>
     <RootNamespace>NetTrace</RootNamespace>
     <Product>NetTrace</Product>
+    <ApplicationIcon>assets\NetTrace.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
     <FrameworkReference Include="Microsoft.WindowsDesktop.App.WindowsForms" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.11" />
     <Compile Remove="tests\**\*.cs" />
+    <Resource Include="assets\Network Globe Icon.png" />
+    <Resource Include="assets\NetTrace.ico" />
   </ItemGroup>
 </Project>

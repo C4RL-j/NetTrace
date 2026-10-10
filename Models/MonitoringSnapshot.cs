@@ -15,4 +15,9 @@ public sealed record MonitoringSnapshot(
     long PendingDownloaded,
     long PendingUploaded,
     DateOnly PendingDay,
-    string? PersistenceMessage);
+    string? PersistenceMessage)
+{
+    public DateOnly PeakDay { get; init; }
+    public double PeakDownloadBytesPerSecond { get; init; }
+    public double PeakUploadBytesPerSecond { get; init; }
+}

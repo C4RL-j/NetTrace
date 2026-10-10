@@ -38,6 +38,14 @@ public sealed class TrayApplicationContext : IDisposable
         }
     }
 
+    public void Start(bool background = false)
+    {
+        _application.Dispatcher.VerifyAccess();
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        Monitoring.Start();
+        if (!background) ShowDashboard();
+    }
+
     public void ShowDashboard()
     {
         _application.Dispatcher.VerifyAccess();

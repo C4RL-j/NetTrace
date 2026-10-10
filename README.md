@@ -2,25 +2,35 @@
 
 Lightweight Windows network usage and diagnostics monitor.
 
-NetTrace V1.1 establishes the NetTrace identity and safely migrates local history from the previous Data Usage Monitor build (Task 001). Task 002 adds connection profiles and network mappings; Task 003 adds physical connection sessions and event history. Tasks 004C–004E persist VPN intervals, events and lifecycle boundaries. Task 005A adds the system tray and background monitoring. Built with C#/.NET 8, WPF, and SQLite.
+NetTrace V1.1 establishes the NetTrace identity and safely migrates local history from the previous Data Usage Monitor build (Task 001). Task 002 adds connection profiles and network mappings; Task 003 adds physical connection sessions and event history. Tasks 004C–004E persist VPN intervals, events and lifecycle boundaries. Tasks 005A–005B add the system tray, background monitoring and optional startup with Windows. Built with C#/.NET 8, WPF, and SQLite.
 
 ## Current features
 
 - Active network adapter selector
-- Live download speed
-- Live upload speed
+- Live download/upload traffic in Mbps
+- Persistent daily peaks from passive traffic observations
 - Download/upload totals for the current app session
 - Today total
 - Last 7 days total
 - Last 30 days total
 - Download vs upload breakdown
-- Adapter type, IPv4 address, and link speed
+- Adapter type, IPv4 address, and local Wi-Fi/Ethernet link rate
 - Local SQLite history
 - Connection profiles with Telco / ISP and Device names
 - Multiple network identities mapped to one profile
 - Physical connection sessions and recent connection events
 - System tray with monitoring while the dashboard is closed
+- Optional current-user Windows startup in tray mode
+- Background ICMP latency and packet-loss measurements
 - No telemetry
+
+## Measurement meanings
+
+**Live Traffic** is the current transfer rate on the monitored adapter, displayed in decimal Mbps (one megabit is 1,000,000 bits). It watches existing traffic and generates no speed-test traffic. **Data Usage** stays in byte quantities such as MB and GB. The app-session totals cover this NetTrace process, including time with the dashboard closed; a connection session covers one continuous observed physical connection.
+
+**Peak today** is the highest sampled download/upload traffic NetTrace observed across monitored adapters during the local calendar day. Peaks are saved about every 30 seconds and on normal exit, survive restarts, and begin at zero on a new day. They are observations while NetTrace runs, not guaranteed maximum internet throughput. Earlier usage totals cannot reconstruct old traffic peaks, so peak recording begins with this build. A sudden termination can lose the most recent unsaved peak.
+
+**Wi-Fi link rate** describes the local PC-to-router/hotspot link; Ethernet and other adapters are labeled accordingly. It is not measured internet speed. The status indicator describes monitoring activity. Raw ICMP measurements run in the background; the Health page remains a placeholder. Active internet speed tests remain future work.
 
 ## Important limitation
 
@@ -64,13 +74,13 @@ On first launch, if the NetTrace database is absent and `%LOCALAPPDATA%\DataUsag
 
 The copy is validated and atomically placed at the new path without overwriting a database. Copy or validation failures stop startup with an error instead of starting with empty history. SQLite's read-only source connection does not change legacy history; its WAL coordination files may be accessed while the old app is running.
 
-The current schema uses `PRAGMA user_version = 4`. Compatible unversioned databases progress through version 1; version 1 databases gain `ConnectionProfiles` and `NetworkMappings`, version 2 databases gain `ConnectionSessions` and `ConnectionEvents`, and version 3 databases gain `VpnSessions`. All upgrades run transactionally without rebuilding or changing existing usage history, profiles, or mappings. Version changes commit only after successful migration and validation. `Services\DatabaseMigrator.cs` is the single place for schema upgrades. Incompatible or newer schemas stop startup rather than being altered.
+The current schema uses `PRAGMA user_version = 5`. Compatible unversioned databases progress through version 1; version 1 databases gain `ConnectionProfiles` and `NetworkMappings`, version 2 databases gain `ConnectionSessions` and `ConnectionEvents`, version 3 databases gain `VpnSessions`, and version 4 databases gain `daily_traffic_peaks`. All upgrades run transactionally without rebuilding or changing existing usage history, profiles, mappings, sessions, or events. Version changes commit only after successful migration and validation. `Services\DatabaseMigrator.cs` is the single place for schema upgrades. Incompatible or newer schemas stop startup rather than being altered.
 
 ## Connection profiles
 
 A profile represents Telco / ISP + Device, such as `DITO — D2 Router`. Network mappings are separate: several SSIDs can belong to the same profile. No telco is guessed and no profile is created automatically.
 
-Use **Profiles** in the Connection card to create or edit profiles and see their mappings. For an **Unassigned network**, choose **Assign profile**, select an existing profile, or choose **New profile** and enter the Telco / ISP and Device names. Creating and assigning together is atomic. Repeating an assignment to the same profile keeps the existing mapping; a conflicting assignment is rejected. Profile deletion is deferred.
+On **Connections**, use **Profiles** in the current-connection card to create or edit profiles and see their mappings. For an **Unassigned network**, choose **Assign profile**, select an existing profile, or choose **New profile** and enter the Telco / ISP and Device names. Creating and assigning together is atomic. Repeating an assignment to the same profile keeps the existing mapping; a conflicting assignment is rejected. Profile deletion is deferred.
 
 Wi-Fi recognition reads the actual associated SSID through Windows Native Wi-Fi APIs. Exact SSID case and whitespace are preserved; non-text SSIDs use lossless byte identities. Ethernet recognition uses an identified Windows network GUID, not an adapter GUID. Windows location permissions may be needed to read Wi-Fi SSIDs, and unidentified Ethernet networks cannot be assigned until Windows supplies a stable identity.
 
@@ -82,7 +92,7 @@ Physical connection recognition is independent of the bandwidth adapter selector
 
 A session is one continuous observed physical network identity and adapter. Different SSIDs create different sessions even when they map to the same profile. Repeated callbacks and friendly-name changes do not split a session. Valid unassigned networks get sessions with no profile; assigning the current network associates only its active session. Completed sessions keep their profile association and captured network identity. Profile names in history follow their stable profile ID.
 
-The Connection card shows the current session duration and traffic. **History** opens the latest 100 sessions and 200 events, with UTC timestamps displayed in local time. Events include connection/disconnection, network change, profile assignment/change, sleep, resume, unexpected-exit recovery, normal application exit, and network-identity unavailability.
+Dashboard and Connections show the current session duration and traffic. On **History**, choose **View history** to open the latest 100 sessions and 200 events, with UTC timestamps displayed in local time. Events include connection/disconnection, network change, profile assignment/change, sleep, resume, unexpected-exit recovery, normal application exit, and network-identity unavailability.
 
 Session traffic uses the existing one-second byte delta, now owned by the application monitoring service, and only accepts samples from the current physical adapter. Recognition changes automatically select that adapter and establish a new baseline; profile edits and repeated observations retain the baseline. Manual adapter selection remains available. If another or virtual adapter is selected, monitoring follows it while physical-session traffic pauses; the Connection card explains which selection is needed. No virtual-interface traffic is attributed to physical sessions.
 
@@ -138,7 +148,58 @@ Normal shutdown stops and joins the VPN observer, flushes pending usage and clos
 
 Closing the dashboard destroys that view and stops its refresh timer. `MonitoringService` continues sampling, batched persistence, physical sessions, profile recognition and VPN tracking without any dashboard or WPF dispatcher. The tray menu provides **Open NetTrace** and **Exit**; double-click also opens NetTrace. Open recreates a dashboard from the current service state, or restores the existing window. App totals, selected adapter, sampling baseline and current session IDs survive dashboard recreation.
 
-The application explicitly shuts down only on tray Exit or Windows session ending. Exit stops and joins native observers, flushes pending usage, closes VPN/physical intervals with their existing shutdown behavior, disposes the tray icon/power listener and releases database ownership. Background mode performs no dashboard refresh or history-total rendering queries. The tray uses the standard Windows application icon and menu; there is no Windows startup registration or Windows service.
+The application explicitly shuts down only on tray Exit or Windows session ending. Exit stops and joins native observers, flushes pending usage, closes VPN/physical intervals with their existing shutdown behavior, disposes the tray icon/power listener and releases database ownership. Background mode performs no dashboard refresh or history-total rendering queries. The tray uses the NetTrace globe icon and the standard Windows menu; no Windows service is installed.
+
+## Windows startup and background launch (Task 005B)
+
+`NetTrace.exe` opens the dashboard and tray normally. `NetTrace.exe --background` starts the same monitoring services and tray without creating a dashboard or dashboard refresh timer. Use **Open NetTrace** in the tray to create the dashboard later; **Exit** still flushes and closes physical/VPN sessions cleanly. From source, use `dotnet run -- --background`.
+
+Check **Start NetTrace with Windows** on **Settings** to enable startup for your current Windows user, or uncheck it to disable. Changes take effect immediately and require no administrator rights. The checkbox reads the actual registration when the window opens, regains focus or switches to Settings; a registry/path error appears inline and does not stop monitoring. Enabling is optional and never happens automatically on launch.
+
+The `NetTrace` string value under `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run` contains the absolute apphost path, quoted for spaces, followed by `--background`: `"C:\Apps\NetTrace\NetTrace.exe" --background`. Repeated enabling updates that one value; disabling removes only that value and preserves other applications' startup entries. NetTrace never registers `dotnet.exe` or a test host.
+
+Windows runs the entry when this user signs in. Keep the executable at a stable location; after moving it, enable startup again from the new location to update the path. Windows Task Manager or policy can separately block startup execution; NetTrace leaves those controls unchanged and displays its Run registration state.
+
+## Top navigation (UI Foundation 001)
+
+The existing dark window now has five pages, with a horizontal navigation bar and
+an underline on the active page:
+
+| Page | Contents |
+| --- | --- |
+| Dashboard | Live traffic, daily peaks, data usage and a compact current connection/session summary |
+| Health | Placeholder only; no health measurements or graphs |
+| Connections | Current connection, monitored adapter/details, Profiles and Assign profile |
+| History | Opens the existing recent sessions/events history window |
+| Settings | Start NetTrace with Windows and the local database location |
+
+WPF's native tab control owns page selection and retains each page's controls.
+Navigation does not create, restart or reset monitoring, counters or sessions.
+The window still has one refresh timer; usage-total queries run only while Dashboard
+is selected. Settings rereads the actual startup registration when opened.
+Closing the window and reopening it through the tray keeps the existing monitoring
+service; a recreated window starts on Dashboard.
+
+## ICMP latency and packet loss (Network Health 001)
+
+Network Health 001 adds raw ICMP measurements through application-owned `IcmpMonitor`.
+The default target is `1.1.1.1`; the first burst starts with monitoring, followed by
+one burst every 15 seconds measured between cycle starts. Each burst makes four
+sequential requests with a one-second timeout per request. This generates a small
+amount of ICMP traffic, including while the dashboard is closed. The target,
+interval, timeout and ping source are constructor settings, ready for later configuration.
+
+Each completed burst exposes its UTC completion timestamp, target, successful/failed
+reply counts, average successful-reply round-trip time and failed-attempt percentage.
+All failures produce 100% loss and a null latency. Filtering, timeouts and local ping
+errors can all prevent replies; these measurements never declare the internet offline
+or change physical/VPN sessions. The latest result is available in memory through
+`MonitoringService.LatestIcmpMeasurement`; there is no health UI or database storage.
+
+The existing application lifecycle starts, pauses for sleep, resumes and cancels the
+single ICMP worker. Incomplete or canceled bursts are discarded, bursts cannot overlap,
+and exit does not wait for long ping timeouts. Tests inject ping sources and never
+depend on public internet access.
 
 ## Verification
 

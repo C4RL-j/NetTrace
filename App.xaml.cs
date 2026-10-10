@@ -30,9 +30,8 @@ public partial class App : System.Windows.Application
         {
             monitoring = MonitoringService.CreateForDataRoot(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
-            monitoring.Start();
             _lifetime = new TrayApplicationContext(this, monitoring);
-            _lifetime.ShowDashboard();
+            _lifetime.Start(LaunchOptions.IsBackground(e.Args));
         }
         catch (Exception exception)
         {
