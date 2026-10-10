@@ -1,6 +1,6 @@
 # NetTrace WPF integration tests
 
-The 306 Windows-only STA integration checks use isolated temporary databases and injected
+The 335 Windows-only STA integration checks use isolated temporary databases and injected
 physical/VPN identities. They exercise the existing dashboard, persistence,
 profile, power, recovery and ownership behavior together with Task 005A tray and
 background lifecycle behavior. They retain the previous 77 WPF lifecycle checks,
@@ -85,8 +85,18 @@ layout; the existing two cards and vertical chart scrolling remain intact.
 dotnet run --project tests/NetTrace.WpfTests/NetTrace.WpfTests.csproj
 ```
 
-The harness requires an active Ethernet or Wi-Fi adapter for existing sampler
-integration checks. It never modifies Windows VPN settings, machine power
+Connections 001 adds 29 checks in `ConnectionDetailsChecks.cs` for the ten live
+adapter fields, missing IPv6/gateway/DNS, disconnected/unknown data, deterministic
+address selection and compact DNS, mapped/unassigned profiles, complete adapter
+switching, same-identity configuration updates and immediate page entry. Visibility,
+minimize/restore, tray recreation and shutdown checks retain the existing workers
+and timers. Thirteen PNG previews under `connection-details-previews` show the
+requested states, each entire adapter card, and the 760×600 minimum layout with
+long IPv6 and multiple DNS servers.
+
+Legacy sampler/lifecycle fixtures now use owned adapter inventory and counters,
+including child processes. The complete suite requires no real adapter or network
+connection. It never modifies Windows VPN settings, machine power
 state, or the real NetTrace database. Test power notifications are sent only
 to its own hidden lifecycle HWND. Test data is created beneath the test output
 directory.

@@ -17,6 +17,10 @@ if (args.Length > 0 && args[0] == "--lease-test-child")
 if (args.Length > 0 && args[0] == "--reachability-live-validation")
     return await InternetReachabilityTests.RunLiveValidationAsync();
 
+// Explicit read-only opt-in; deterministic regression cases do not inspect live adapters.
+if (args.Length > 0 && args[0] == "--connections-live-validation")
+    return ConnectionDetailsTests.RunLiveValidation();
+
 var tests = new (string Name, Action Run)[]
 {
     ("Clean install initializes the NetTrace database and version", CleanInstall),
@@ -221,7 +225,8 @@ var tests = new (string Name, Action Run)[]
     ("Equivalent absolute executable paths produce the same canonical registration", StartupRegistrationCanonicalPath)
 }.Concat(IcmpHealthTests.Cases).Concat(IcmpRollingTests.Cases)
     .Concat(IcmpStabilityChartTests.Cases).Concat(IcmpPacketLossChartTests.Cases)
-    .Concat(IcmpQualityTests.Cases).Concat(InternetReachabilityTests.Cases).ToArray();
+    .Concat(IcmpQualityTests.Cases).Concat(InternetReachabilityTests.Cases)
+    .Concat(ConnectionDetailsTests.Cases).ToArray();
 
 var failed = 0;
 foreach (var (name, run) in tests)

@@ -311,6 +311,68 @@ DNS and HTTPS sources and never depend on public internet access. A separate exp
 `--reachability-live-validation` regression-harness command performs one real check
 without opening a database; it is never part of the automated suite.
 
+## Connections 001 — Live Connection Details
+
+Connections keeps CURRENT CONNECTION, its session duration/usage, Profiles and
+assignment actions, and the existing MONITORED ADAPTER selector. The adapter card
+now shows these rows in order:
+
+| Field | Source |
+| --- | --- |
+| Adapter | Selected `AdapterInfo.Name` |
+| Status | Selected interface's `NetworkInterface.OperationalStatus` |
+| Network | Existing physical `NetworkIdentity.FriendlyName`, only when its adapter matches the connected selected interface |
+| Profile | Existing resolved `CurrentConnectionState.Profile.DisplayName`, with the same adapter check |
+| Type | Selected `AdapterInfo.Type`, with Wireless80211 presented as Wi-Fi |
+| IPv4 / IPv6 | Selected interface's `IPInterfaceProperties.UnicastAddresses` |
+| Default gateway | Selected interface's `IPInterfaceProperties.GatewayAddresses` |
+| DNS | Selected interface's configured `IPInterfaceProperties.DnsAddresses` |
+| Wi-Fi / Ethernet / Adapter link rate | Existing `NetworkInterface.Speed` source, in Mbps or Gbps |
+
+Status means adapter state, rather than internet reachability. Up is Connected;
+known non-Up states are Disconnected; Unknown, unexpected states and unavailable
+interface details are Unknown. Disconnected/unknown details clear address, gateway,
+DNS, link-rate and mapping values. Missing details use **Unavailable** consistently;
+an unmapped or unmatched profile uses **Unassigned**. A manually selected interface
+never inherits another adapter's network/profile.
+
+Address selection is deterministic: filter unspecified, loopback, multicast and
+broadcast unicast values, deduplicate, and sort by address bytes. IPv4 uses the
+first remaining IPv4 address; no source-address routing inference is added. IPv6
+uses the first usable non-link-local address, including unique-local addresses.
+Link-local-only IPv6 is **Unavailable**, consistent with showing a usable global
+or unique-local address. Displayed IPv6 addresses omit scope IDs; the full displayed
+value is available in a tooltip when the row is trimmed.
+
+Gateway selection prefers IPv4 when a usable IPv4 address is displayed, otherwise
+IPv6, with an available opposite-family fallback. One gateway is shown; link-local
+IPv6 gateways remain valid. DNS preserves configured local resolvers, filters
+unspecified/multicast/broadcast values, deduplicates, and orders IPv4 before IPv6
+then by address bytes. It shows up to two addresses and `(+N more)` for the remainder.
+Neither field performs lookups or probes.
+
+`MonitoringService` caches a small `NetworkAdapterDetails` observation at adapter
+enumeration/selection and every accepted existing recognition observation, including
+unchanged identities. Existing network notifications and the existing 30-second
+recognition refresh update IP/gateway/DNS configuration without another worker or
+timer. Snapshot reads and UI ticks perform no additional network discovery.
+Accepted identity/profile state and adapter details share the monitoring gate;
+read failures and sleep/resume invalidate details instead of retaining stale values.
+Adapter switching refreshes details immediately and preserves existing session and
+selection rules. The active-only selector still chooses an available adapter on
+network changes; when none is selected, Status is Unknown and details are Unavailable.
+
+Connections renders details only while its page/window is visible and restored,
+using the existing UI refresh lifecycle. Entering Connections immediately reads
+the latest snapshot for both cards. Long values trim with tooltips, and the existing
+vertical scroll supports the 760×600 minimum window without horizontal page scrolling.
+The Profiles window and Health 001–006 remain unchanged.
+
+The Connections checks use owned snapshots and network/probe fakes. A separate
+explicit `--connections-live-validation` regression-harness command reads one
+current default monitored adapter and existing identity without changing adapter
+configuration, sending probes, or opening the real application database.
+
 ## Verification
 
 Run the isolated migration checks without touching your application data:

@@ -29,6 +29,7 @@ public partial class MainWindow : Window
         _monitoring = monitoring;
         _startupRegistration = startupRegistration;
         InitializeComponent();
+        _loadingAdapters = false;
         RefreshStartupSetting();
         DatabasePathText.Text = monitoring.DatabasePath;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
@@ -37,6 +38,7 @@ public partial class MainWindow : Window
         IsVisibleChanged += OnVisibilityChanged;
         DashboardContent.IsVisibleChanged += DashboardContent_OnVisibilityChanged;
         HealthContent.IsVisibleChanged += HealthContent_OnVisibilityChanged;
+        ConnectionsContent.IsVisibleChanged += ConnectionsContent_OnVisibilityChanged;
         SettingsContent.IsVisibleChanged += SettingsContent_OnVisibilityChanged;
         RefreshDashboard();
         _monitoring.Changed += Monitoring_OnChanged;
@@ -127,6 +129,11 @@ public partial class MainWindow : Window
         if (!_closed && HealthContent.IsVisible) RefreshHealth(refreshChart: true);
     }
 
+    private void ConnectionsContent_OnVisibilityChanged(object sender, DependencyPropertyChangedEventArgs args)
+    {
+        if (!_closed && ConnectionsContent.IsVisible) RefreshDashboard();
+    }
+
     private void RefreshHealth(bool refreshChart = false)
     {
         if (_closed || !IsVisible || WindowState == WindowState.Minimized || !HealthContent.IsVisible) return;
@@ -195,6 +202,7 @@ public partial class MainWindow : Window
         IsVisibleChanged -= OnVisibilityChanged;
         DashboardContent.IsVisibleChanged -= DashboardContent_OnVisibilityChanged;
         HealthContent.IsVisibleChanged -= HealthContent_OnVisibilityChanged;
+        ConnectionsContent.IsVisibleChanged -= ConnectionsContent_OnVisibilityChanged;
         SettingsContent.IsVisibleChanged -= SettingsContent_OnVisibilityChanged;
         Closed -= OnClosed;
     }
@@ -215,15 +223,7 @@ public partial class MainWindow : Window
         if (_closed) return;
         if (HealthTab.IsSelected) RefreshHealth();
         var snapshot = _monitoring.GetSnapshot();
-        _loadingAdapters = true;
-        try
-        {
-            if (!ReferenceEquals(AdapterComboBox.ItemsSource, snapshot.Adapters))
-                AdapterComboBox.ItemsSource = snapshot.Adapters;
-            AdapterComboBox.SelectedItem = snapshot.SelectedAdapter;
-        }
-        finally { _loadingAdapters = false; }
-        UpdateAdapterDetails(snapshot.SelectedAdapter);
+        RefreshConnections(snapshot);
         DownloadRateText.Text = ByteFormatter.FormatRate(snapshot.DownloadBytesPerSecond);
         UploadRateText.Text = ByteFormatter.FormatRate(snapshot.UploadBytesPerSecond);
         DownloadPeakText.Text = $"Peak today ↓ {ByteFormatter.FormatRate(snapshot.PeakDownloadBytesPerSecond)}";
@@ -326,28 +326,37 @@ public partial class MainWindow : Window
         catch (Exception exception) { SessionMessageText.Text = $"Connection history could not be opened: {exception.Message}"; }
     }
 
-    private void UpdateAdapterDetails(AdapterInfo? adapter)
+    private void RefreshConnections(MonitoringSnapshot snapshot)
     {
-        AdapterNameText.Text = adapter?.Name ?? "No active adapter";
-        AdapterTypeText.Text = adapter?.Type == "Wireless80211" ? "Wi-Fi" : adapter?.Type ?? "—";
-        Ipv4Text.Text = adapter?.IPv4Address ?? "—";
-        LinkRateLabel.Text = adapter?.Type switch
+        if (_closed || !IsVisible || WindowState == WindowState.Minimized || !ConnectionsContent.IsVisible) return;
+        _loadingAdapters = true;
+        try
         {
-            "Wireless80211" => "Wi-Fi link rate",
-            "Ethernet" => "Ethernet link rate",
-            _ => "Adapter link rate"
-        };
-        LinkSpeedText.Text = adapter is null ? "—" : FormatLinkRate(adapter.SpeedBitsPerSecond);
-        LinkSpeedText.ToolTip = adapter?.Type == "Wireless80211"
-            ? "The local Wi-Fi link between this PC and its router or hotspot. This is not measured internet speed."
-            : "The local rate reported by the monitored adapter. This is not measured internet speed.";
+            if (!ReferenceEquals(AdapterComboBox.ItemsSource, snapshot.Adapters))
+                AdapterComboBox.ItemsSource = snapshot.Adapters;
+            AdapterComboBox.SelectedItem = snapshot.SelectedAdapter;
+        }
+        finally { _loadingAdapters = false; }
+        var details = AdapterDetailsPresentation.Create(snapshot.SelectedAdapter, snapshot.SelectedAdapterDetails, snapshot.Connection);
+        SetDetail(AdapterNameText, details.Adapter);
+        SetDetail(AdapterStatusText, details.Status);
+        SetDetail(AdapterNetworkText, details.Network);
+        SetDetail(AdapterProfileText, details.Profile);
+        SetDetail(AdapterTypeText, details.Type);
+        SetDetail(Ipv4Text, details.IPv4);
+        SetDetail(Ipv6Text, details.IPv6);
+        Ipv6Text.ToolTip = $"{details.IPv6}\nA usable global or unique-local IPv6 address. Link-local-only IPv6 is shown as Unavailable.";
+        SetDetail(DefaultGatewayText, details.DefaultGateway);
+        SetDetail(DnsText, details.Dns);
+        LinkRateLabel.Text = details.LinkRateLabel;
+        LinkSpeedText.Text = details.LinkRate;
+        LinkSpeedText.ToolTip = details.LinkRateToolTip;
     }
 
-    private static string FormatLinkRate(long bitsPerSecond)
+    private static void SetDetail(TextBlock control, string value)
     {
-        if (bitsPerSecond <= 0) return "Unknown";
-        var mbps = bitsPerSecond / 1_000_000d;
-        return $"{mbps:0.##} Mbps";
+        control.Text = value;
+        control.ToolTip = value;
     }
 
     private static void UpdateUsageCard(TextBlock total, TextBlock breakdown, long downloaded, long uploaded)

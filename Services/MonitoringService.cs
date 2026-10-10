@@ -15,6 +15,7 @@ public sealed class MonitoringService : IDisposable
     private readonly ConnectionHistoryStore _history;
     private readonly ConnectionSessionTracker _sessions;
     private readonly ConnectionProfileMonitor _profileMonitor;
+    private CurrentConnectionState _connection;
     private readonly VpnSessionMonitor _vpnSessions;
     private readonly IcmpMonitor _icmpMonitor;
     private readonly InternetReachabilityMonitor _reachabilityMonitor;
@@ -37,6 +38,7 @@ public sealed class MonitoringService : IDisposable
     private ConnectionStatus? _lastConnectionStatus;
     private IReadOnlyList<AdapterInfo> _adapters = Array.Empty<AdapterInfo>();
     private AdapterInfo? _selectedAdapter;
+    private NetworkAdapterDetails? _selectedAdapterDetails;
     private NetworkSnapshot? _previousSnapshot;
     private long _sessionDownloaded;
     private long _sessionUploaded;
@@ -117,6 +119,7 @@ public sealed class MonitoringService : IDisposable
             _sessions = new ConnectionSessionTracker(_history, _timeProvider);
             _profiles = new ProfileStore(store);
             _profileMonitor = new ConnectionProfileMonitor(identityService, new ProfileResolver(_profiles), _timeProvider);
+            _connection = _profileMonitor.Current;
             _vpnSessions = new VpnSessionMonitor(_sessions, new VpnSessionStore(store), vpnVerifier, _timeProvider);
             _timer = new Timer(_ => SampleNow(), null, Timeout.Infinite, Timeout.Infinite);
             RefreshAdapters();
@@ -167,12 +170,14 @@ public sealed class MonitoringService : IDisposable
             // an in-memory read; the dashboard never queries SQLite for live peaks.
             var today = DateOnly.FromDateTime(_timeProvider.GetLocalNow().DateTime);
             var peaks = _trafficPeaks.GetValueOrDefault(today);
-            return new(_profileMonitor.Current, _sessions.IsSleeping ? null : _sessions.Current,
+            // The accepted identity and selected details belong to one observation.
+            return new(_connection, _sessions.IsSleeping ? null : _sessions.Current,
                 _adapters, _selectedAdapter, _suspended, _started && !_stopping && !_disposed,
                 _status, _downloadRate, _uploadRate, _sessionDownloaded, _sessionUploaded,
                 _pendingDownloaded, _pendingUploaded, _pendingDay,
                 _historyPersistenceMessage ?? _trafficPeaksPersistenceMessage ?? _usagePersistenceMessage)
             {
+                SelectedAdapterDetails = _selectedAdapterDetails,
                 PeakDay = today,
                 PeakDownloadBytesPerSecond = peaks.DownloadBytesPerSecond,
                 PeakUploadBytesPerSecond = peaks.UploadBytesPerSecond
@@ -210,6 +215,7 @@ public sealed class MonitoringService : IDisposable
             FlushPending();
             _selectedAdapter = selected;
             _previousSnapshot = null;
+            RefreshSelectedAdapterDetails();
         }
         RaiseChanged();
     }
@@ -223,6 +229,7 @@ public sealed class MonitoringService : IDisposable
             if (_stopping || _disposed || _suspended || observation.Sequence <= _lastHandledObservationSequence) return;
             _lastHandledObservationSequence = observation.Sequence;
             var state = observation.State;
+            _connection = state;
             var previousSessionId = _sessions.Current?.Id;
             var physicalChanged = !SamePhysicalNetwork(state.Network, _lastPhysicalNetwork);
             if (physicalChanged) _previousSnapshot = null;
@@ -243,8 +250,13 @@ public sealed class MonitoringService : IDisposable
                 _lastDetectionMessage = state.Message;
                 _lastConnectionStatus = state.Status;
                 try { RefreshAdapters(physicalChanged ? state.Network?.AdapterId : null); }
-                catch (Exception exception) { ReportUsageFailure(exception); }
+                catch (Exception exception)
+                {
+                    RefreshSelectedAdapterDetails();
+                    ReportUsageFailure(exception);
+                }
             }
+            else RefreshSelectedAdapterDetails();
             if (physicalChanged || previousSessionId != _sessions.Current?.Id) _previousSnapshot = null;
         }
         RaiseChanged();
@@ -263,7 +275,22 @@ public sealed class MonitoringService : IDisposable
         }
         _adapters = Array.AsReadOnly(adapters.ToArray());
         _selectedAdapter = selected;
+        RefreshSelectedAdapterDetails();
         if (selected is null) SetOffline("No active network adapter");
+    }
+
+    private void RefreshSelectedAdapterDetails()
+    {
+        // Reuse recognition observations, including unchanged identities: IP and DNS
+        // configuration can change without changing the physical network/profile.
+        // GetSnapshot and visible UI ticks only read this cached value.
+        _selectedAdapterDetails = null;
+        if (_selectedAdapter is null) return;
+        try { _selectedAdapterDetails = _monitor.GetAdapterDetails(_selectedAdapter.Id); }
+        catch (Exception exception)
+        {
+            Trace.TraceWarning($"Could not read monitored adapter details: {exception.Message}");
+        }
     }
 
     public void SampleNow()
@@ -330,6 +357,7 @@ public sealed class MonitoringService : IDisposable
         if (retryResume) UpdateSessionHistory(_sessions.Resume);
         _persistNextObservation = true;
         var cutoff = _profileMonitor.Refresh(invalidatePending: retryObservation || retryResume);
+        if (retryObservation || retryResume) _connection = _profileMonitor.Current;
         if (retryResume) _lastHandledObservationSequence = Math.Max(_lastHandledObservationSequence, cutoff);
     }
 
@@ -432,6 +460,7 @@ public sealed class MonitoringService : IDisposable
         {
             if (_stopping || _disposed || _suspended) return;
             _suspended = true;
+            _selectedAdapterDetails = null;
             SetOffline("Paused for sleep");
             _timer.Change(Timeout.Infinite, Timeout.Infinite);
             _previousSnapshot = null;
@@ -441,6 +470,7 @@ public sealed class MonitoringService : IDisposable
             FlushPendingForLifecycle();
             UpdateSessionHistory(_sessions.Sleep);
             _profileMonitor.Refresh(invalidatePending: true);
+            _connection = _profileMonitor.Current;
         }
         RaiseChanged();
     }
@@ -451,7 +481,9 @@ public sealed class MonitoringService : IDisposable
         {
             if (_stopping || _disposed || !_suspended) return;
             _lastHandledObservationSequence = _profileMonitor.Refresh(invalidatePending: true);
+            _connection = _profileMonitor.Current;
             UpdateSessionHistory(_sessions.Resume);
+            _selectedAdapterDetails = null;
             _previousSnapshot = null;
             _lastPhysicalNetwork = null;
             _suspended = false;

@@ -311,7 +311,7 @@
 
             <TabItem x:Name="ConnectionsTab" Header="Connections">
                 <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                    <StackPanel>
+                    <StackPanel x:Name="ConnectionsContent">
                         <Border Style="{StaticResource CardStyle}">
                             <StackPanel>
                                 <DockPanel>
@@ -338,11 +338,14 @@
                                 <TextBlock Text="MONITORED ADAPTER" Style="{StaticResource MutedText}" Margin="0,0,0,8"/>
                                 <ComboBox x:Name="AdapterComboBox" Foreground="#0F172A" SelectionChanged="AdapterComboBox_OnSelectionChanged"
                                           DisplayMemberPath="Name"/>
-                                <StackPanel Orientation="Horizontal" Margin="0,14,0,10">
-                                    <TextBlock Text="Adapter: " Style="{StaticResource MutedText}"/>
-                                    <TextBlock x:Name="AdapterNameText" Text="No active adapter" FontSize="13" TextWrapping="Wrap"/>
-                                </StackPanel>
-                                <Grid>
+                                <Grid x:Name="AdapterDetailsGrid" Margin="0,14,0,0">
+                                    <Grid.Resources>
+                                        <Style x:Key="AdapterDetailValue" TargetType="TextBlock">
+                                            <Setter Property="Text" Value="Unavailable"/>
+                                            <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+                                            <Setter Property="VerticalAlignment" Value="Center"/>
+                                        </Style>
+                                    </Grid.Resources>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="150"/>
                                         <ColumnDefinition Width="*"/>
@@ -351,14 +354,36 @@
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
 
-                                    <TextBlock Text="Type" Style="{StaticResource MutedText}"/>
-                                    <TextBlock x:Name="AdapterTypeText" Grid.Column="1" Text="—"/>
-                                    <TextBlock Grid.Row="1" Text="IPv4" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
-                                    <TextBlock x:Name="Ipv4Text" Grid.Row="1" Grid.Column="1" Text="—" Margin="0,8,0,0" TextWrapping="Wrap"/>
-                                    <TextBlock x:Name="LinkRateLabel" Grid.Row="2" Text="Adapter link rate" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
-                                    <TextBlock x:Name="LinkSpeedText" Grid.Row="2" Grid.Column="1" Text="—" Margin="0,8,0,0"
+                                    <TextBlock Text="Adapter" Style="{StaticResource MutedText}"/>
+                                    <TextBlock x:Name="AdapterNameText" Grid.Column="1" Style="{StaticResource AdapterDetailValue}"/>
+                                    <TextBlock Grid.Row="1" Text="Status" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+                                    <TextBlock x:Name="AdapterStatusText" Grid.Row="1" Grid.Column="1" Text="Unknown" Style="{StaticResource AdapterDetailValue}" Margin="0,8,0,0"/>
+                                    <TextBlock Grid.Row="2" Text="Network" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+                                    <TextBlock x:Name="AdapterNetworkText" Grid.Row="2" Grid.Column="1" Style="{StaticResource AdapterDetailValue}" Margin="0,8,0,0"/>
+                                    <TextBlock Grid.Row="3" Text="Profile" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+                                    <TextBlock x:Name="AdapterProfileText" Grid.Row="3" Grid.Column="1" Text="Unassigned" Style="{StaticResource AdapterDetailValue}" Margin="0,8,0,0"/>
+                                    <TextBlock Grid.Row="4" Text="Type" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+                                    <TextBlock x:Name="AdapterTypeText" Grid.Row="4" Grid.Column="1" Style="{StaticResource AdapterDetailValue}" Margin="0,8,0,0"/>
+                                    <TextBlock Grid.Row="5" Text="IPv4" Style="{StaticResource MutedText}" Margin="0,18,0,0"/>
+                                    <TextBlock x:Name="Ipv4Text" Grid.Row="5" Grid.Column="1" Style="{StaticResource AdapterDetailValue}" Margin="0,18,0,0"/>
+                                    <TextBlock Grid.Row="6" Text="IPv6" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+                                    <TextBlock x:Name="Ipv6Text" Grid.Row="6" Grid.Column="1" Style="{StaticResource AdapterDetailValue}" Margin="0,8,0,0"
+                                               ToolTip="A usable global or unique-local IPv6 address. Link-local-only IPv6 is shown as Unavailable."/>
+                                    <TextBlock Grid.Row="7" Text="Default gateway" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+                                    <TextBlock x:Name="DefaultGatewayText" Grid.Row="7" Grid.Column="1" Style="{StaticResource AdapterDetailValue}" Margin="0,8,0,0"/>
+                                    <TextBlock Grid.Row="8" Text="DNS" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+                                    <TextBlock x:Name="DnsText" Grid.Row="8" Grid.Column="1" Style="{StaticResource AdapterDetailValue}" Margin="0,8,0,0"/>
+                                    <TextBlock x:Name="LinkRateLabel" Grid.Row="9" Text="Adapter link rate" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+                                    <TextBlock x:Name="LinkSpeedText" Grid.Row="9" Grid.Column="1" Style="{StaticResource AdapterDetailValue}" Margin="0,8,0,0"
                                                ToolTip="The local rate reported by the monitored adapter. This is not measured internet speed."/>
                                 </Grid>
                             </StackPanel>

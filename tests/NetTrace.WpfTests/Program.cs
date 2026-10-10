@@ -17,6 +17,7 @@ internal static class Program
 {
     private static int _passed;
     private const BindingFlags PrivateInstance = BindingFlags.NonPublic | BindingFlags.Instance;
+    private const string OwnedAdapterId = "owned-wpf-physical-adapter";
     private static readonly Dictionary<MainWindow, TrayApplicationContext> OwnedContexts = new();
 
     [STAThread]
@@ -31,8 +32,7 @@ internal static class Program
         try
         {
             _ = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
-            var adapter = new NetworkMonitor().GetActiveAdapters().FirstOrDefault(a => a.Type is "Wireless80211" or "Ethernet")
-                ?? throw new InvalidOperationException("The physical-adapter smoke requires an active Wi-Fi or Ethernet adapter.");
+            var adapter = new OwnedCounters(OwnedAdapterId).GetActiveAdapters().Single();
             var store = new UsageStore(ownedRoot);
             var history = new ConnectionHistoryStore(store);
             var profiles = new ProfileStore(store);
@@ -50,7 +50,7 @@ internal static class Program
                 "Recognized connection hides assignment workflow");
             var duplicateBlocked = false;
             var duplicateIdentity = new FakeIdentity(Network("SMOKE_A", adapter.Id));
-            try { _ = new MonitoringService(store, duplicateIdentity, reachabilityMonitor: TestReachability.Create()); }
+            try { _ = new MonitoringService(store, duplicateIdentity, networkMonitor: new OwnedCounters(adapter.Id), reachabilityMonitor: TestReachability.Create()); }
             catch (InvalidOperationException exception) { duplicateBlocked = exception.Message.Contains("already monitoring", StringComparison.Ordinal); }
             Check(duplicateBlocked && history.GetActiveSession() is { EndedAtUtc: null },
                 "A second same-thread window is blocked without recovering the live session");
@@ -62,7 +62,7 @@ internal static class Program
             var threadedIdentity = new FakeIdentity(Network("SMOKE_A", adapter.Id));
             var duplicateThread = new Thread(() =>
             {
-                try { _ = new MonitoringService(store, threadedIdentity, reachabilityMonitor: TestReachability.Create()); }
+                try { _ = new MonitoringService(store, threadedIdentity, networkMonitor: new OwnedCounters(adapter.Id), reachabilityMonitor: TestReachability.Create()); }
                 catch (Exception exception) { threadedFailure = exception; }
             });
             duplicateThread.SetApartmentState(ApartmentState.STA);
@@ -73,7 +73,7 @@ internal static class Program
                 "Second STA-thread window cannot recover or modify the live session");
             var factoryRejected = false;
             var rejectedFactoryIdentity = new FakeIdentity(Network("SMOKE_A", adapter.Id));
-            try { _ = MonitoringService.CreateForDataRoot(ownedRoot, rejectedFactoryIdentity, reachabilityMonitor: TestReachability.Create()); }
+            try { _ = MonitoringService.CreateForDataRoot(ownedRoot, rejectedFactoryIdentity, networkMonitor: new OwnedCounters(adapter.Id), reachabilityMonitor: TestReachability.Create()); }
             catch (InvalidOperationException exception) { factoryRejected = exception.Message.Contains("already monitoring", StringComparison.Ordinal); }
             Check(factoryRejected && rejectedFactoryIdentity.Disposed &&
                 history.GetActiveSession() == beforeRejectedSession && history.GetRecentEvents().Count == beforeRejectedEvents,
@@ -278,6 +278,7 @@ internal static class Program
             IcmpPacketLossChartChecks.Run(ownedRoot, adapter.Id, Check);
             IcmpQualityChecks.Run(ownedRoot, adapter.Id, Check);
             InternetReachabilityChecks.Run(ownedRoot, adapter.Id, Check);
+            ConnectionDetailsChecks.Run(ownedRoot, Check);
             Console.WriteLine($"{_passed}/{_passed} WPF integration checks passed. Isolated data: {ownedRoot}");
             return 0;
         }
@@ -326,14 +327,14 @@ internal static class Program
         System.IO.File.WriteAllText(invalidPath, "Owned invalid SQLite database for startup failure coverage.");
         var invalidIdentity = new FakeIdentity(Network("SMOKE_FAILURE", adapterId));
         Exception? initializationFailure = null;
-        try { _ = MonitoringService.CreateForDataRoot(invalidRoot, invalidIdentity, reachabilityMonitor: TestReachability.Create()); }
+        try { _ = MonitoringService.CreateForDataRoot(invalidRoot, invalidIdentity, networkMonitor: new OwnedCounters(adapterId), reachabilityMonitor: TestReachability.Create()); }
         catch (Exception exception) { initializationFailure = exception; }
         using (var next = new DatabaseRunLease(invalidPath))
             Check(initializationFailure is InvalidOperationException && invalidIdentity.Disposed && next.IsHeld,
                 "Database initialization failure releases startup ownership and injected resources");
         var throwingIdentity = new FakeIdentity(Network("SMOKE_FAILURE", adapterId)) { ThrowOnDispose = true };
         Exception? throwingFailure = null;
-        try { _ = MonitoringService.CreateForDataRoot(invalidRoot, throwingIdentity, reachabilityMonitor: TestReachability.Create()); }
+        try { _ = MonitoringService.CreateForDataRoot(invalidRoot, throwingIdentity, networkMonitor: new OwnedCounters(adapterId), reachabilityMonitor: TestReachability.Create()); }
         catch (Exception exception) { throwingFailure = exception; }
         using (var next = new DatabaseRunLease(invalidPath))
             Check(throwingIdentity.Disposed && next.IsHeld &&
@@ -614,6 +615,7 @@ internal static class Program
         var windowCount = 0;
         using var monitoring = new MonitoringService(store, identity,
             vpnVerifier: new VpnRouteVerifier(new VpnDetectionService(evidence), routes),
+            networkMonitor: new OwnedCounters(adapterId),
             icmpMonitor: new IcmpMonitor(new FakePingSource()), reachabilityMonitor: TestReachability.Create());
         monitoring.Start();
         using var context = new TrayApplicationContext(Application.Current, monitoring,
@@ -800,6 +802,7 @@ internal static class Program
             var vpn = new VpnSessionStore(store);
             using var monitoring = new MonitoringService(store, new FakeIdentity(Network("CHILD_BACKGROUND", adapterId)),
                 vpnVerifier: new VpnRouteVerifier(new VpnDetectionService(new OwnedVpnEvidence { Enabled = true }), new OwnedVpnRoutes()),
+                networkMonitor: new OwnedCounters(adapterId),
                 icmpMonitor: new IcmpMonitor(new FakePingSource()), reachabilityMonitor: TestReachability.Create());
             monitoring.Start();
             using var context = new TrayApplicationContext(application, monitoring,
@@ -853,6 +856,7 @@ internal static class Program
             var vpn = new VpnSessionStore(store);
             using var monitoring = new MonitoringService(store, new FakeIdentity(Network("LAUNCH", adapterId)),
                 vpnVerifier: new VpnRouteVerifier(new VpnDetectionService(new OwnedVpnEvidence { Enabled = true }), new OwnedVpnRoutes()),
+                networkMonitor: new OwnedCounters(adapterId),
                 icmpMonitor: new IcmpMonitor(new FakePingSource()), reachabilityMonitor: TestReachability.Create());
             var factoryCalls = 0;
             var shutdownCalls = 0;
@@ -903,6 +907,7 @@ internal static class Program
         var store = new UsageStore(System.IO.Path.Combine(ownedRoot, "startup-setting"));
         using var monitoring = new MonitoringService(store, new FakeIdentity(Network("SETTING", adapterId)),
             vpnVerifier: new VpnRouteVerifier(new VpnDetectionService(new OwnedVpnEvidence()), new OwnedVpnRoutes()),
+            networkMonitor: new OwnedCounters(adapterId),
             icmpMonitor: new IcmpMonitor(new FakePingSource()), reachabilityMonitor: TestReachability.Create());
         using var context = new TrayApplicationContext(Application.Current, monitoring,
             dashboardFactory: service => new MainWindow(service, registration)
@@ -1011,6 +1016,7 @@ internal static class Program
             var history = new ConnectionHistoryStore(store);
             using var monitoring = new MonitoringService(store, new FakeIdentity(Network("CHILD_LAUNCH", adapterId)),
                 vpnVerifier: new VpnRouteVerifier(new VpnDetectionService(new OwnedVpnEvidence()), new OwnedVpnRoutes()),
+                networkMonitor: new OwnedCounters(adapterId),
                 icmpMonitor: new IcmpMonitor(new FakePingSource()), reachabilityMonitor: TestReachability.Create());
             var factoryCalls = 0;
             using var context = new TrayApplicationContext(application, monitoring,
@@ -1058,6 +1064,7 @@ internal static class Program
         using var icmp = new IcmpMonitor(source, interval: TimeSpan.FromMilliseconds(60));
         using var monitoring = new MonitoringService(store, new FakeIdentity(Network("ICMP_BACKGROUND", adapterId)),
             vpnVerifier: new VpnRouteVerifier(new VpnDetectionService(new OwnedVpnEvidence()), new OwnedVpnRoutes()),
+            networkMonitor: new OwnedCounters(adapterId),
             icmpMonitor: icmp, reachabilityMonitor: TestReachability.Create());
         var windowsCreated = 0;
         var shutdownCalls = 0;
@@ -1192,6 +1199,7 @@ internal static class Program
         // Physical-only fixtures must not inherit VPN events from the test machine.
         verifier ??= new VpnRouteVerifier(new VpnDetectionService(new OwnedVpnEvidence()), new OwnedVpnRoutes());
         var monitoring = new MonitoringService(store, identity, vpnVerifier: verifier,
+            networkMonitor: new OwnedCounters(identity.GetCurrentNetwork().Network?.AdapterId ?? OwnedAdapterId),
             icmpMonitor: new IcmpMonitor(new FakePingSource()), reachabilityMonitor: TestReachability.Create());
         var context = new TrayApplicationContext(Application.Current, monitoring,
             dashboardFactory: service => new MainWindow(service, new FakeStartupRegistration())
@@ -1208,7 +1216,8 @@ internal static class Program
 
     private static void PrimeDelta(MainWindow window, string adapterId, long received, long sent)
     {
-        var actual = new NetworkMonitor().Capture(adapterId) ?? throw new InvalidOperationException("Owned physical adapter disappeared.");
+        var actual = Field<OwnedCounters>(window, "_monitor").Capture(adapterId)
+            ?? throw new InvalidOperationException("The owned adapter is unavailable.");
         typeof(MonitoringService).GetField("_previousSnapshot", PrivateInstance)!.SetValue(Service(window),
             new NetworkSnapshot(Math.Max(0, actual.BytesReceived - received), Math.Max(0, actual.BytesSent - sent),
                 actual.Timestamp.AddSeconds(-1)));
@@ -1340,5 +1349,18 @@ internal static class Program
             Disposed = true;
             if (ThrowOnDispose) throw new InvalidOperationException("Owned identity dispose failure.");
         }
+    }
+
+    // Every legacy lifecycle fixture has stable adapter inventory and counters; only
+    // timestamps advance so existing background sampling and power checks retain meaning.
+    private sealed class OwnedCounters(string adapterId) : INetworkMonitor
+    {
+        public IReadOnlyList<AdapterInfo> GetActiveAdapters() =>
+            [new(adapterId, "Owned Wi-Fi", "Deterministic physical adapter", "Wireless80211", 86_000_000, "192.0.2.10", true)];
+        public NetworkSnapshot? Capture(string requestedAdapter) => requestedAdapter == adapterId
+            ? new(1_000_000, 500_000, DateTimeOffset.UtcNow) : null;
+        public NetworkAdapterDetails? GetAdapterDetails(string requestedAdapter) => requestedAdapter == adapterId
+            ? new(adapterId, OperationalStatus.Up, [IPAddress.Parse("192.0.2.10")],
+                [IPAddress.Parse("192.0.2.1")], [IPAddress.Parse("1.1.1.1")], 86_000_000) : null;
     }
 }

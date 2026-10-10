@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using NetTrace.Models;
@@ -6,6 +7,45 @@ namespace NetTrace.Services;
 
 public sealed class NetworkMonitor : INetworkMonitor
 {
+    public NetworkAdapterDetails? GetAdapterDetails(string adapterId)
+    {
+        if (string.IsNullOrEmpty(adapterId)) return null;
+
+        NetworkInterface? nic;
+        try
+        {
+            nic = NetworkInterface.GetAllNetworkInterfaces()
+                .FirstOrDefault(interfaceInfo => string.Equals(interfaceInfo.Id, adapterId, StringComparison.OrdinalIgnoreCase));
+        }
+        catch
+        {
+            return null;
+        }
+
+        if (nic is null) return null;
+
+        // A failed IP-properties read must not erase independently available status or speed.
+        var status = ReadOrDefault(() => nic.OperationalStatus, OperationalStatus.Unknown);
+        var speed = ReadOrDefault(() => nic.Speed, 0L);
+        var properties = ReadOrDefault<IPInterfaceProperties?>(() => nic.GetIPProperties(), null);
+        var unicast = properties is null ? Array.Empty<IPAddress>() :
+            ReadOrDefault(() => properties.UnicastAddresses.Select(item => item.Address).ToArray(),
+                Array.Empty<IPAddress>());
+        var gateways = properties is null ? Array.Empty<IPAddress>() :
+            ReadOrDefault(() => properties.GatewayAddresses.Select(item => item.Address).ToArray(),
+                Array.Empty<IPAddress>());
+        var dns = properties is null ? Array.Empty<IPAddress>() :
+            ReadOrDefault(() => properties.DnsAddresses.ToArray(), Array.Empty<IPAddress>());
+
+        return new NetworkAdapterDetails(adapterId, status, unicast, gateways, dns, speed);
+    }
+
+    private static T ReadOrDefault<T>(Func<T> read, T fallback)
+    {
+        try { return read(); }
+        catch { return fallback; }
+    }
+
     public IReadOnlyList<AdapterInfo> GetActiveAdapters()
     {
         var adapters = new List<AdapterInfo>();

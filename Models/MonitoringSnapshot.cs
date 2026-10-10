@@ -17,6 +17,7 @@ public sealed record MonitoringSnapshot(
     DateOnly PendingDay,
     string? PersistenceMessage)
 {
+    public NetworkAdapterDetails? SelectedAdapterDetails { get; init; }
     public DateOnly PeakDay { get; init; }
     public double PeakDownloadBytesPerSecond { get; init; }
     public double PeakUploadBytesPerSecond { get; init; }

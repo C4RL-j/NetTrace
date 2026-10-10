@@ -100,4 +100,23 @@ This explicit command performs one real reachability cycle and prints the config
 endpoints, UTC result and DNS/HTTPS flags. It opens no database and never runs as part
 of the automated cases.
 
+Connections 001 adds 34 groups in `ConnectionDetailsTests.cs`, bringing the console
+suite to 383 groups. Deterministic snapshots cover connected/disconnected/unknown
+status, missing data, usable IPv4/global/unique IPv6 selection, scope-free display,
+gateway family preference, compact configured DNS (including local resolvers),
+profile mapping isolation, adapter switching and local Mbps/Gbps formatting.
+Owned monitoring fixtures verify cached reads without discovery, unchanged-identity
+configuration refresh, retained sessions/counters and recovery after detail failures.
+
+An explicit passive live check can be run separately with:
+
+```powershell
+dotnet run --project tests/NetTrace.RegressionTests/NetTrace.RegressionTests.csproj -- --connections-live-validation
+```
+
+This command reads one default monitored adapter and the existing network identity.
+It performs no lookups/probes, configuration changes or database access. Profile
+mapping is intentionally not loaded from real application data. It never runs as
+part of the automated cases.
+
 Both harnesses use owned temporary databases and injected network/VPN/ICMP evidence. They do not open real application data or change Windows network settings.
