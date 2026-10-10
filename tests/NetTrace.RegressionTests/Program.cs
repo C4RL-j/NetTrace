@@ -164,7 +164,28 @@ var tests = new (string Name, Action Run)[]
     ("Physical session boundaries record exactly one VPN disconnect on the original parent", VpnEventsParentClosure),
     ("Failed VPN event inserts roll back VPN and physical lifecycle changes atomically", VpnEventsAtomicFailure),
     ("Existing version-four databases gain VPN event triggers without backfilling history", VpnEventsExistingVersionFour),
-    ("Native tunnel replacement records a disconnect and connect in deterministic order", VpnEventsTunnelReplacement)
+    ("Native tunnel replacement records a disconnect and connect in deterministic order", VpnEventsTunnelReplacement),
+    ("Sleep closes VPN before its physical parent at one explicit boundary", VpnLifecycleSleep),
+    ("Resume with a fresh active VPN creates a new child on a new physical session", VpnLifecycleResumeActive),
+    ("Resume with VPN off cannot resurrect the pre-sleep interval", VpnLifecycleResumeOff),
+    ("Crash recovery ends stale VPN at its own persisted confirmation", VpnLifecycleCrashBoundary),
+    ("Restart observes an active VPN freshly after physical recovery", VpnLifecycleStartupActive),
+    ("Normal exit flushes physical usage and closes VPN cleanly", VpnLifecycleNormalExit),
+    ("Physical closure never leaves or permits an orphan active VPN interval", VpnLifecycleParentSafety),
+    ("Repeated recovery cannot duplicate VPN disconnect or physical recovery events", VpnLifecycleRecoveryDedup),
+    ("Failed lifecycle events roll back VPN and physical boundaries for safe retry", VpnLifecycleAtomicFailure),
+    ("Resume drops a blocked pre-sleep VPN query and promptly obtains fresh evidence", VpnLifecycleStaleSleepQuery),
+    ("A hard-killed owned process recovers VPN at its separate persisted boundary", VpnLifecycleKilledOwner),
+    ("The headless core samples and persists without a WPF window or dispatcher", BackgroundAutomaticMonitoring),
+    ("Background monitoring retains the existing thirty-second persistence cadence", BackgroundBatchedPersistence),
+    ("Core start and stop are idempotent and stop joins every owned monitor", BackgroundStartStop),
+    ("Selecting the current adapter preserves its bandwidth baseline", BackgroundSameAdapterBaseline),
+    ("Physical identity changes on one adapter discard the old counter baseline", BackgroundPhysicalTransitionBaseline),
+    ("Headless counter resets cannot create a false bandwidth spike", BackgroundCounterReset),
+    ("Profile assignment and editing resolve immediately without a dashboard", BackgroundProfileRecognition),
+    ("Headless sleep and resume retain fresh physical and VPN interval boundaries", BackgroundSleepResume),
+    ("Core shutdown flushes usage, closes VPN and physical history and releases its lease", BackgroundCleanExit),
+    ("Core shutdown joins blocked VPN work before releasing database ownership", BackgroundShutdownJoin)
 };
 
 var failed = 0;
@@ -3390,7 +3411,8 @@ static void VpnEventsParentClosure()
         var parent = test.History.GetRecentSessions().Single(item => item.Id == id);
         Equal<long?>(id, disconnected.SessionId, $"{transition} disconnect references the original physical parent");
         Equal<DateTimeOffset?>(parent.EndedAtUtc, disconnected.OccurredAtUtc, "VPN disconnect event uses the parent's closure boundary");
-        Require(disconnected.Message.Contains("PhysicalSessionEnded", StringComparison.Ordinal), "Details distinguish parent closure from a confirmed VPN off observation.");
+        var expectedReason = transition == "ApplicationExit" ? "ApplicationExit" : "PhysicalSessionEnded";
+        Require(disconnected.Message.Contains(expectedReason, StringComparison.Ordinal), "Details distinguish the physical lifecycle cause from a confirmed VPN off observation.");
         Equal(2, GetVpnEvents(test.History).Length, "Repeated physical observations cannot duplicate VPN disconnect events");
         var physical = test.History.GetRecentEvents().Where(item => !IsVpnEvent(item)).OrderBy(item => item.Id).ToArray();
         Require(physical.Select(item => item.EventType).SequenceEqual(new[] { "Connected", transition }), "Existing physical transition event kinds remain unchanged.");
@@ -3509,6 +3531,572 @@ static void VpnEventsTunnelReplacement()
     Equal(1, test.History.GetRecentSessions().Count, "Tunnel replacement creates no physical session");
 }
 
+static void AssertVpnParentSafety(SessionTestContext test)
+{
+    Equal(0L, ReadInteger(test.DatabasePath, """
+        SELECT count(*) FROM VpnSessions v LEFT JOIN ConnectionSessions p ON p.Id=v.ConnectionSessionId
+        WHERE v.EndedAtUtc IS NULL AND (p.Id IS NULL OR p.EndedAtUtc IS NOT NULL);
+        """), "No active VPN interval has a closed or missing physical parent");
+    Require(ReadInteger(test.DatabasePath, "SELECT count(*) FROM VpnSessions WHERE EndedAtUtc IS NULL;") <= 1,
+        "There is at most one active VPN interval.");
+}
+
+static void VpnLifecycleSleep()
+{
+    using var test = new SessionTestContext();
+    var id = StartVpnPhysicalParent(test);
+    var store = new VpnSessionStore(test.Usage);
+    var first = store.Observe(id, VpnStoredObservation(VpnRoutingMode.FullTunnel), test.Clock.GetUtcNow())!;
+    test.Clock.Advance(TimeSpan.FromSeconds(15));
+    var sleepAt = test.Clock.GetUtcNow();
+    test.Tracker.Sleep();
+    test.Tracker.Sleep();
+
+    Require(store.GetActiveSession() is null && test.History.GetActiveSession() is null,
+        "Sleep closes both intervals without leaving an active VPN child.");
+    var ended = store.GetRecentSessions().Single();
+    Equal(first.Id, ended.Id, "Sleep closes the existing VPN interval");
+    Equal<DateTimeOffset?>(sleepAt, ended.EndedAtUtc, "VPN ends at the observed sleep boundary");
+    Equal("Sleep", ended.EndReason, "VPN sleep end reason");
+    var events = test.History.GetRecentEvents();
+    var disconnected = events.Single(item => item.EventType == "VpnDisconnected");
+    Equal(sleepAt, disconnected.OccurredAtUtc, "VPN disconnect event uses the sleep boundary");
+    Require(disconnected.Message.Contains("Sleep", StringComparison.Ordinal), "VPN event explains suspension.");
+    Require(disconnected.Id < events.Single(item => item.EventType == "Sleep").Id,
+        "VPN closure precedes the existing physical sleep event in the same lifecycle transaction.");
+    Equal(2, GetVpnEvents(test.History).Length, "Repeated sleep callbacks do not duplicate VPN events");
+    AssertVpnParentSafety(test);
+}
+
+static void VpnLifecycleResumeActive()
+{
+    using var test = new SessionTestContext();
+    var firstId = StartVpnPhysicalParent(test);
+    var store = new VpnSessionStore(test.Usage);
+    using var queried = new ManualResetEventSlim();
+    var source = new FakeVpnInterfaceSource { Inventory = VpnInventory(VpnInterface()) };
+    var verifier = new VpnRouteVerifier(new VpnDetectionService(source), new FakeVpnRouteSource());
+    using var monitor = new VpnSessionMonitor(test.Tracker, store, verifier);
+    monitor.Start();
+    WaitUntil(() => store.GetActiveSession() is not null, "Initial active VPN is observed");
+    var firstVpn = store.GetActiveSession()!;
+    monitor.Suspend();
+    monitor.Suspend();
+    test.Tracker.Sleep();
+    test.Clock.Advance(TimeSpan.FromHours(1));
+    test.Tracker.Resume();
+    test.Tracker.Resume();
+    source.DetectionStarted = queried;
+    monitor.Resume();
+    monitor.Resume();
+    Require(!queried.Wait(TimeSpan.FromMilliseconds(500)), "Resume does not reuse an old parent before fresh physical detection.");
+    Require(store.GetActiveSession() is null, "Resume alone does not presume the old VPN survived.");
+
+    test.Tracker.ObserveConnection(Connected(Wifi()));
+    test.Tracker.Flush();
+    monitor.Refresh();
+    WaitUntil(() => store.GetActiveSession() is not null, "Resume freshly detects the currently active VPN");
+    var next = store.GetActiveSession()!;
+    Require(next.Id != firstVpn.Id, "Same tunnel after sleep starts a new VPN interval.");
+    Require(next.ConnectionSessionId != firstId, "Resumed VPN belongs to the newly detected physical session.");
+    Equal(test.Tracker.Current!.Id, next.ConnectionSessionId, "Resumed VPN uses the current physical parent");
+    Equal(2, test.History.GetRecentSessions().Count, "Only the physical sleep/resume lifecycle creates a new parent");
+    Equal(2, store.GetRecentSessions().Count, "There is one VPN interval on each side of sleep");
+    Equal(2, GetVpnEvents(test.History).Count(item => item.EventType == "VpnConnected"), "Fresh resume records one new connected event");
+    Equal(1, GetVpnEvents(test.History).Count(item => item.EventType == "VpnDisconnected"), "Sleep records only one disconnected event");
+    AssertVpnParentSafety(test);
+}
+
+static void VpnLifecycleResumeOff()
+{
+    using var test = new SessionTestContext();
+    StartVpnPhysicalParent(test);
+    var store = new VpnSessionStore(test.Usage);
+    var source = new FakeVpnInterfaceSource { Inventory = VpnInventory(VpnInterface()) };
+    var verifier = new VpnRouteVerifier(new VpnDetectionService(source), new FakeVpnRouteSource());
+    using var monitor = new VpnSessionMonitor(test.Tracker, store, verifier);
+    monitor.Start();
+    WaitUntil(() => store.GetActiveSession() is not null, "Initial VPN interval is observed");
+    monitor.Suspend();
+    test.Tracker.Sleep();
+    source.Inventory = VpnInventory();
+    using var queried = new ManualResetEventSlim();
+    source.DetectionStarted = queried;
+    test.Clock.Advance(TimeSpan.FromMinutes(20));
+    test.Tracker.Resume();
+    test.Tracker.ObserveConnection(Connected(Wifi()));
+    test.Tracker.Flush();
+    monitor.Resume();
+    Require(queried.Wait(TimeSpan.FromSeconds(5)), "Resume obtains a fresh native VPN-off observation.");
+    monitor.Dispose();
+    Require(store.GetActiveSession() is null, "VPN off after resume creates no active child.");
+    Equal(1, store.GetRecentSessions().Count, "No successor VPN interval is invented when VPN is off");
+    Equal(2, GetVpnEvents(test.History).Length, "Fresh VPN-off observation does not duplicate the sleep disconnect");
+    Require(test.History.GetActiveSession() is not null, "Physical connectivity remains active when resumed VPN is off.");
+    AssertVpnParentSafety(test);
+}
+
+static void VpnLifecycleCrashBoundary()
+{
+    using var test = new SessionTestContext();
+    var id = StartVpnPhysicalParent(test);
+    var store = new VpnSessionStore(test.Usage);
+    store.Observe(id, VpnStoredObservation(VpnRoutingMode.FullTunnel), test.Clock.GetUtcNow());
+    var vpnConfirmed = ConfirmVpnPhysicalParent(test, id, 10);
+    var stale = store.Observe(id, VpnStoredObservation(VpnRoutingMode.FullTunnel), vpnConfirmed)!;
+    var parentConfirmed = ConfirmVpnPhysicalParent(test, id, 20);
+    var beforeRecovery = SnapshotRows(test.DatabasePath, "daily_usage");
+    test.Clock.Advance(TimeSpan.FromHours(8));
+    var recoveredAt = test.Clock.GetUtcNow();
+    var restarted = new ConnectionSessionTracker(new ConnectionHistoryStore(new UsageStore(test.Root)), test.Clock);
+
+    Require(restarted.Current is null && store.GetActiveSession() is null, "Startup recovery does not carry forward either old active interval.");
+    var child = store.GetRecentSessions().Single();
+    Equal(stale.Id, child.Id, "Recovery closes the old VPN row");
+    Equal(vpnConfirmed, child.LastConfirmedAtUtc, "Recovery does not move persisted VPN confirmation");
+    Equal<DateTimeOffset?>(vpnConfirmed, child.EndedAtUtc, "VPN crash history ends exactly at its own persisted confirmation");
+    Equal("UnexpectedExit", child.EndReason, "VPN crash end reason is explicit");
+    var parent = test.History.GetRecentSessions().Single();
+    Equal<DateTimeOffset?>(parentConfirmed, parent.EndedAtUtc, "Existing physical recovery retains its independent later confirmation");
+    Equal(parentConfirmed, parent.LastConfirmedAtUtc, "VPN recovery does not change physical recovery timestamps");
+    var disconnected = GetVpnEvents(test.History).Single(item => item.EventType == "VpnDisconnected");
+    Equal(vpnConfirmed, disconnected.OccurredAtUtc, "Recovered VPN disconnect is timestamped at its own evidence boundary");
+    Require(disconnected.Message.Contains("UnexpectedExit", StringComparison.Ordinal), "Disconnect details explain uncertain termination.");
+    Equal(recoveredAt, test.History.GetRecentEvents().Single(item => item.EventType == "SessionRecoveredAfterUnexpectedExit").OccurredAtUtc,
+        "The physical recovery event retains its startup timestamp");
+    Equal(beforeRecovery, SnapshotRows(test.DatabasePath, "daily_usage"), "VPN recovery leaves daily usage unchanged");
+    AssertVpnParentSafety(test);
+}
+
+static void VpnLifecycleStartupActive()
+{
+    using var test = new SessionTestContext();
+    var oldParent = StartVpnPhysicalParent(test);
+    var store = new VpnSessionStore(test.Usage);
+    var oldVpn = store.Observe(oldParent, VpnStoredObservation(VpnRoutingMode.SplitTunnel), test.Clock.GetUtcNow())!;
+    test.Clock.Advance(TimeSpan.FromHours(2));
+    var restarted = new ConnectionSessionTracker(new ConnectionHistoryStore(new UsageStore(test.Root)), test.Clock);
+    var source = new FakeVpnInterfaceSource { Inventory = VpnInventory(VpnInterface()) };
+    var verifier = new VpnRouteVerifier(new VpnDetectionService(source), new FakeVpnRouteSource());
+    using var queried = new ManualResetEventSlim();
+    source.DetectionStarted = queried;
+    using var monitor = new VpnSessionMonitor(restarted, store, verifier);
+    monitor.Start();
+    Require(!queried.Wait(TimeSpan.FromMilliseconds(500)), "Startup VPN observations wait for fresh physical identity.");
+    restarted.ObserveConnection(Connected(Wifi()));
+    restarted.Flush();
+    monitor.Refresh();
+    WaitUntil(() => store.GetActiveSession() is not null, "Startup detects an active VPN after physical recovery");
+    var current = store.GetActiveSession()!;
+    Require(current.Id != oldVpn.Id && current.ConnectionSessionId != oldParent,
+        "Fresh startup creates new physical and VPN intervals even on the same network/tunnel.");
+    Equal(restarted.Current!.Id, current.ConnectionSessionId, "New VPN interval belongs to the recovered run's current parent");
+    Equal(VpnRoutingMode.FullTunnel, current.RoutingMode, "New startup routes are verified rather than inherited from the old interval");
+    Equal(2, store.GetRecentSessions().Count, "Restart produces one closed and one fresh VPN interval");
+    Equal(1, test.History.GetRecentEvents().Count(item => item.EventType == "SessionRecoveredAfterUnexpectedExit"), "Recovery event is recorded once");
+    AssertVpnParentSafety(test);
+}
+
+static void VpnLifecycleNormalExit()
+{
+    using var test = new SessionTestContext();
+    var id = StartVpnPhysicalParent(test);
+    var store = new VpnSessionStore(test.Usage);
+    store.Observe(id, VpnStoredObservation(), test.Clock.GetUtcNow());
+    test.Clock.Advance(TimeSpan.FromSeconds(7));
+    Require(test.Tracker.RecordSample(id, Wifi().AdapterId, 1, test.Clock.GetUtcNow(), 8192, 512), "Unflushed physical sample is accepted before shutdown.");
+    var exitAt = test.Clock.GetUtcNow();
+    test.Tracker.Flush();
+    test.Tracker.Close();
+    test.Tracker.Close();
+    var child = store.GetRecentSessions().Single();
+    Equal("ApplicationExit", child.EndReason, "Graceful VPN exit has the application shutdown cause");
+    Equal<DateTimeOffset?>(exitAt, child.EndedAtUtc, "Graceful VPN exit uses the physical shutdown boundary");
+    var parent = test.History.GetRecentSessions().Single();
+    Equal(8192L, parent.DownloadBytes, "Shutdown persists pending physical downloads without VPN accounting");
+    Equal(512L, parent.UploadBytes, "Shutdown persists pending physical uploads");
+    Require(store.GetActiveSession() is null && test.History.GetActiveSession() is null, "Normal exit leaves no active intervals.");
+    var vpnEvents = GetVpnEvents(test.History);
+    Equal(1, vpnEvents.Count(item => item.EventType == "VpnDisconnected"), "Repeated close does not duplicate VPN disconnection");
+    Require(vpnEvents.Single(item => item.EventType == "VpnDisconnected").Message.Contains("ApplicationExit", StringComparison.Ordinal),
+        "VPN event identifies a clean exit.");
+    var history = SnapshotRows(test.DatabasePath, "ConnectionEvents");
+    _ = new ConnectionSessionTracker(new ConnectionHistoryStore(new UsageStore(test.Root)), test.Clock);
+    Equal(history, SnapshotRows(test.DatabasePath, "ConnectionEvents"), "Clean shutdown requires no startup recovery or duplicate disconnect");
+    AssertVpnParentSafety(test);
+}
+
+static void VpnLifecycleParentSafety()
+{
+    using var test = new SessionTestContext();
+    var id = StartVpnPhysicalParent(test);
+    var store = new VpnSessionStore(test.Usage);
+    store.Observe(id, VpnStoredObservation(), test.Clock.GetUtcNow());
+    var endedAt = ConfirmVpnPhysicalParent(test, id, 10);
+    using (var connection = Open(test.DatabasePath))
+        Execute(connection, $"UPDATE ConnectionSessions SET EndedAtUtc='{endedAt:O}',EndReason='Disconnected' WHERE Id={id};");
+    Require(store.GetActiveSession() is null, "The database closure trigger remains a safety net for physical writes outside the lifecycle service.");
+    Equal("PhysicalSessionEnded", store.GetRecentSessions().Single().EndReason, "Generic closure safety retains its existing end reason");
+    using (var connection = Open(test.DatabasePath))
+    {
+        var failure = ExpectFailure(() => Execute(connection, "UPDATE VpnSessions SET EndedAtUtc=NULL,EndReason=NULL;"), "Reopening a child with a closed parent");
+        Require(failure is SqliteException { SqliteErrorCode: 19 }, "Database constraints reject orphan child reactivation.");
+    }
+    AssertVpnParentSafety(test);
+    Equal(1, GetVpnEvents(test.History).Count(item => item.EventType == "VpnDisconnected"), "Rejected child reactivation adds no events");
+}
+
+static void VpnLifecycleRecoveryDedup()
+{
+    using var test = new SessionTestContext();
+    var id = StartVpnPhysicalParent(test);
+    var store = new VpnSessionStore(test.Usage);
+    store.Observe(id, VpnStoredObservation(), test.Clock.GetUtcNow());
+    var vpnConfirmed = ConfirmVpnPhysicalParent(test, id, 5);
+    store.Observe(id, VpnStoredObservation(), vpnConfirmed);
+    ConfirmVpnPhysicalParent(test, id, 5);
+    test.Clock.Advance(TimeSpan.FromHours(1));
+    Equal(1, test.History.RecoverUnfinishedSessions(test.Clock.GetUtcNow()).Count, "First recovery handles exactly one stale physical interval");
+    var intervals = SnapshotRows(test.DatabasePath, "VpnSessions");
+    var events = SnapshotRows(test.DatabasePath, "ConnectionEvents");
+    for (var index = 0; index < 3; index++)
+    {
+        test.Clock.Advance(TimeSpan.FromMinutes(1));
+        Equal(0, test.History.RecoverUnfinishedSessions(test.Clock.GetUtcNow()).Count, "Repeated recovery has no stale interval left");
+        _ = new ConnectionSessionTracker(new ConnectionHistoryStore(new UsageStore(test.Root)), test.Clock);
+    }
+    Equal(intervals, SnapshotRows(test.DatabasePath, "VpnSessions"), "Repeated recovery leaves completed VPN history immutable");
+    Equal(events, SnapshotRows(test.DatabasePath, "ConnectionEvents"), "Repeated startup/recovery does not duplicate any timeline events");
+    Equal(1, GetVpnEvents(test.History).Count(item => item.EventType == "VpnDisconnected"), "One recovered VPN disconnect exists");
+    Equal(1, test.History.GetRecentEvents().Count(item => item.EventType == "SessionRecoveredAfterUnexpectedExit"), "One physical recovery event exists");
+    AssertVpnParentSafety(test);
+}
+
+static void VpnLifecycleAtomicFailure()
+{
+    foreach (var lifecycle in new[] { "Sleep", "ApplicationExit", "UnexpectedExit" })
+    {
+        using var test = new SessionTestContext();
+        var id = StartVpnPhysicalParent(test);
+        var store = new VpnSessionStore(test.Usage);
+        store.Observe(id, VpnStoredObservation(VpnRoutingMode.FullTunnel), test.Clock.GetUtcNow());
+        var vpnLast = ConfirmVpnPhysicalParent(test, id, 5);
+        store.Observe(id, VpnStoredObservation(VpnRoutingMode.FullTunnel), vpnLast);
+        var parentLast = ConfirmVpnPhysicalParent(test, id, 5);
+        test.Clock.Advance(TimeSpan.FromSeconds(5));
+        var boundary = test.Clock.GetUtcNow();
+        var before = new[] { "ConnectionSessions", "VpnSessions", "ConnectionEvents" }
+            .ToDictionary(table => table, table => SnapshotRows(test.DatabasePath, table));
+        using (var connection = Open(test.DatabasePath))
+            Execute(connection, "CREATE TRIGGER FailLifecycleEvent BEFORE INSERT ON ConnectionEvents WHEN NEW.EventType='VpnDisconnected' BEGIN SELECT RAISE(ABORT,'simulated lifecycle event failure'); END;");
+        Action transition = lifecycle == "Sleep" ? test.Tracker.Sleep
+            : lifecycle == "ApplicationExit" ? test.Tracker.Close
+            : () => test.History.RecoverUnfinishedSessions(test.Clock.GetUtcNow());
+        var failure = ExpectFailure(transition, $"Failed {lifecycle} VPN lifecycle event");
+        Require(failure is SqliteException { SqliteErrorCode: 19 }, "Child event failure aborts the complete lifecycle transaction.");
+        foreach (var table in before.Keys)
+            Equal(before[table], SnapshotRows(test.DatabasePath, table), $"Failed {lifecycle} rolls back all {table} fields");
+        AssertVpnParentSafety(test);
+        using (var connection = Open(test.DatabasePath)) Execute(connection, "DROP TRIGGER FailLifecycleEvent;");
+        if (lifecycle == "Sleep")
+        {
+            Require(test.Tracker.IsSleeping && test.Tracker.ConfirmedSession is null, "Failed sleep still suspends physical and VPN admission.");
+            test.Clock.Advance(TimeSpan.FromHours(1));
+            test.Tracker.Resume();
+        }
+        else transition();
+        var ended = store.GetRecentSessions().Single();
+        var expectedEnd = lifecycle == "UnexpectedExit" ? vpnLast : boundary;
+        Equal<DateTimeOffset?>(expectedEnd, ended.EndedAtUtc, "Retry retains the correct lifecycle evidence boundary");
+        Equal(lifecycle, ended.EndReason, "Retry records the original lifecycle cause");
+        var parent = test.History.GetRecentSessions().Single();
+        Equal<DateTimeOffset?>(lifecycle == "UnexpectedExit" ? parentLast : boundary, parent.EndedAtUtc,
+            "Retry retains the existing physical recovery/suspension/shutdown boundary");
+        Equal(1, GetVpnEvents(test.History).Count(item => item.EventType == "VpnDisconnected"), "Successful retry records one child disconnect");
+        AssertVpnParentSafety(test);
+    }
+}
+
+static void VpnLifecycleStaleSleepQuery()
+{
+    using var test = new SessionTestContext();
+    var oldParent = StartVpnPhysicalParent(test);
+    var store = new VpnSessionStore(test.Usage);
+    store.Observe(oldParent, VpnStoredObservation(VpnRoutingMode.SplitTunnel), test.Clock.GetUtcNow());
+    using var queryStarted = new ManualResetEventSlim();
+    using var releaseQuery = new ManualResetEventSlim();
+    var source = new FakeVpnInterfaceSource
+    {
+        Inventory = VpnInventory(VpnInterface()),
+        DetectionStarted = queryStarted,
+        ReleaseDetection = releaseQuery
+    };
+    var verifier = new VpnRouteVerifier(new VpnDetectionService(source), new FakeVpnRouteSource());
+    using var monitor = new VpnSessionMonitor(test.Tracker, store, verifier);
+    try
+    {
+        monitor.Start();
+        Require(queryStarted.Wait(TimeSpan.FromSeconds(5)), "Pre-sleep native VPN query is deliberately blocked.");
+        var suspension = Task.Run(monitor.Suspend);
+        Require(suspension.Wait(TimeSpan.FromSeconds(2)), "Suspend invalidates an in-flight query without waiting for native completion.");
+        test.Clock.Advance(TimeSpan.FromSeconds(5));
+        test.Tracker.Sleep();
+        test.Clock.Advance(TimeSpan.FromHours(1));
+        test.Tracker.Resume();
+        test.Tracker.ObserveConnection(Connected(Wifi()));
+        test.Tracker.Flush();
+        var resumedParent = test.Tracker.Current!.Id;
+        Require(resumedParent != oldParent, "Sleep/resume creates a new physical parent even on the same SSID.");
+        source.Inventory = VpnInventory(VpnInterface() with { InterfaceName = "Fresh resumed tunnel", InterfaceIndex = 43 });
+        monitor.Resume();
+        monitor.Refresh();
+        // Allow the resumed callback to collide with the old query. It must retry promptly,
+        // rather than lose the fresh generation until the ordinary 30-second persistence tick.
+        Require(!releaseQuery.Wait(TimeSpan.FromMilliseconds(500)), "Old native query remains blocked across resume.");
+        releaseQuery.Set();
+        WaitUntil(() => store.GetActiveSession() is not null, "Fresh resumed VPN query retries promptly after the obsolete worker completes");
+        var current = store.GetActiveSession()!;
+        Equal(resumedParent, current.ConnectionSessionId, "Only fresh evidence attaches to the resumed physical parent");
+        Equal<uint?>(43, current.InterfaceIndex, "A captured pre-sleep tunnel result is discarded");
+        Equal("Fresh resumed tunnel", current.InterfaceName, "The new interval uses post-resume native identity");
+        Equal(2, store.GetRecentSessions().Count, "Only the original and genuinely resumed VPN intervals exist");
+        Equal(2, GetVpnEvents(test.History).Count(item => item.EventType == "VpnConnected"), "Stale query cannot manufacture a third VPN connection event");
+        AssertVpnParentSafety(test);
+    }
+    finally { releaseQuery.Set(); }
+}
+
+static void VpnLifecycleKilledOwner()
+{
+    using var workspace = new TestWorkspace();
+    using var owner = new LeaseChildProcess(workspace.Root, "hold-vpn");
+    Equal("READY", owner.ReadLine(), "Owned child persists independent physical and VPN confirmation times");
+    var history = new ConnectionHistoryStore(workspace.CurrentPath);
+    var store = new VpnSessionStore(workspace.CurrentPath);
+    var parent = history.GetActiveSession()!;
+    var child = store.GetActiveSession()!;
+    Require(parent.LastConfirmedAtUtc > child.LastConfirmedAtUtc, "Killed fixture has a later physical confirmation than VPN confirmation.");
+    owner.KillOwnedProcess();
+    Equal(child, store.GetActiveSession(), "Hard kill bypasses normal VPN shutdown and leaves persisted proof intact");
+    using (var next = new LeaseChildProcess(workspace.Root, "start"))
+    {
+        Equal("ACQUIRED", next.ReadLine(), "Next process acquires ownership and recovers stale histories");
+        next.ExpectExit(0);
+    }
+    var recovered = store.GetRecentSessions().Single();
+    Equal<DateTimeOffset?>(child.LastConfirmedAtUtc, recovered.EndedAtUtc, "Real process kill recovery ends VPN exactly at persisted VPN confirmation");
+    Equal("UnexpectedExit", recovered.EndReason, "Hard-killed VPN has the crash end reason");
+    var recoveredParent = history.GetRecentSessions().Single(item => item.Id == parent.Id);
+    Equal<DateTimeOffset?>(parent.LastConfirmedAtUtc, recoveredParent.EndedAtUtc, "Physical hard-kill recovery retains its original separate confirmation");
+    Equal(1, GetVpnEvents(history).Count(item => item.EventType == "VpnDisconnected"), "Hard-kill recovery records one VPN disconnect");
+    Equal(1, history.GetRecentEvents().Count(item => item.EventType == "SessionRecoveredAfterUnexpectedExit"), "Hard-kill recovery records one physical recovery event");
+    Require(store.GetActiveSession() is null && history.GetActiveSession() is null, "The subsequent graceful run leaves no active history.");
+}
+
+static void BackgroundAutomaticMonitoring()
+{
+    using var test = new HeadlessMonitoringContext();
+    var initial = test.Service.GetSnapshot();
+    var parentId = initial.Session!.Id;
+    Require(initial.IsRunning && initial.SelectedAdapter?.Id == test.Adapter.Id,
+        "The application core starts without constructing any WPF window or dispatcher.");
+    test.AdvanceCounters(2048, 128, sampleNow: false);
+    WaitUntil(() => test.Service.GetSnapshot().SessionDownloaded == 2048,
+        "The independent one-second sampler runs with no dashboard");
+    Equal(128L, test.Service.GetSnapshot().SessionUploaded, "Headless upload sampling");
+    Equal(parentId, test.Service.GetSnapshot().Session!.Id, "Sampling retains the existing physical interval");
+    test.Service.Flush();
+    Equal((2048L, 128L), test.Usage.GetTotals(test.Day, test.Day), "Headless usage persistence");
+    Equal(2048L, test.Service.History.GetActiveSession()!.DownloadBytes, "Shared delta reaches physical session history");
+    Equal(1, test.Service.History.GetRecentSessions().Count, "Headless sampling does not create extra physical sessions");
+}
+
+static void BackgroundBatchedPersistence()
+{
+    using var test = new HeadlessMonitoringContext();
+    test.AdvanceCounters(1000, 100);
+    Equal((0L, 0L), test.Usage.GetTotals(test.Day, test.Day), "An ordinary sample stays batched");
+    Equal(1000L, test.Service.GetSnapshot().PendingDownloaded, "Unpersisted download batch");
+    test.Clock.Advance(TimeSpan.FromSeconds(31));
+    test.Service.SampleNow();
+    Equal((1000L, 100L), test.Usage.GetTotals(test.Day, test.Day), "The existing batch interval persists without UI refresh");
+    Equal(0L, test.Service.GetSnapshot().PendingDownloaded, "Committed pending bytes clear");
+    test.Service.Flush();
+    test.Service.Flush();
+    Equal((1000L, 100L), test.Usage.GetTotals(test.Day, test.Day), "Repeated flush cannot double-count the batch");
+}
+
+static void BackgroundStartStop()
+{
+    using var test = new HeadlessMonitoringContext();
+    var id = test.Service.GetSnapshot().Session!.Id;
+    test.Service.Start();
+    test.Service.Start();
+    test.Identity.RaiseNetworkChanged();
+    WaitUntil(() => test.Identity.Detections >= 2, "Repeated start continues normal identity observation");
+    Equal(id, test.Service.GetSnapshot().Session!.Id, "Repeated start does not reopen physical history");
+    Equal(1, test.Service.History.GetRecentSessions().Count, "Repeated start has one physical interval");
+    test.Service.Stop();
+    test.Service.Stop();
+    test.Service.Dispose();
+    Require(!test.Service.GetSnapshot().IsRunning && test.Identity.Disposed,
+        "Stopping the application core stops recognition and releases its identity source.");
+    var captured = test.Network.Captures;
+    var events = SnapshotRows(test.DatabasePath, "ConnectionEvents");
+    test.AdvanceCounters(100_000, 20_000, sampleNow: false);
+    Thread.Sleep(1200);
+    Equal(captured, test.Network.Captures, "The sampler cannot continue after core shutdown");
+    Equal(events, SnapshotRows(test.DatabasePath, "ConnectionEvents"), "Stopped monitoring cannot append history");
+    Require(test.Service.History.GetActiveSession() is null, "Core stop closes the physical interval.");
+}
+
+static void BackgroundSameAdapterBaseline()
+{
+    using var test = new HeadlessMonitoringContext();
+    test.AdvanceCounters(100, 10);
+    test.Service.SelectAdapter(test.Adapter.Id);
+    test.Service.SelectAdapter(test.Adapter.Id);
+    test.AdvanceCounters(300, 30);
+    Equal(400L, test.Service.GetSnapshot().SessionDownloaded, "Selecting the unchanged adapter preserves counter continuity");
+    Equal(40L, test.Service.GetSnapshot().SessionUploaded, "Unchanged adapter upload continuity");
+    Equal(400L, test.Service.GetSnapshot().Session!.DownloadBytes, "The shared session receives the complete unchanged-adapter delta");
+}
+
+static void BackgroundPhysicalTransitionBaseline()
+{
+    using var test = new HeadlessMonitoringContext();
+    test.AdvanceCounters(100, 10);
+    var original = test.Service.GetSnapshot().Session!.Id;
+    test.Identity.Network = new NetworkIdentity("WiFi", "Renamed physical hotspot", "Renamed physical hotspot", test.Adapter.Id);
+    test.Identity.RaiseNetworkChanged();
+    WaitUntil(() => test.Service.GetSnapshot().Session is { } current && current.Id != original,
+        "A changed physical identity opens a successor interval without a dashboard");
+    var nextId = test.Service.GetSnapshot().Session!.Id;
+    test.AdvanceCounters(50_000, 1000);
+    Equal(100L, test.Service.GetSnapshot().SessionDownloaded, "First sample on the new identity establishes a baseline");
+    Equal(0L, test.Service.GetSnapshot().Session!.DownloadBytes, "Old connection traffic cannot bleed into the new interval");
+    test.AdvanceCounters(200, 20);
+    Equal(300L, test.Service.GetSnapshot().SessionDownloaded, "App totals accumulate only confirmed deltas");
+    Equal(200L, test.Service.GetSnapshot().Session!.DownloadBytes, "The new interval receives its own valid delta");
+    Equal(nextId, test.Service.GetSnapshot().Session!.Id, "Baseline sampling leaves the physical interval stable");
+    var previous = test.Service.History.GetRecentSessions().Single(row => row.Id == original);
+    Equal(100L, previous.DownloadBytes, "The original physical session retains its own traffic");
+    Equal("NetworkChanged", previous.EndReason, "The original physical interval has a meaningful boundary");
+}
+
+static void BackgroundCounterReset()
+{
+    using var test = new HeadlessMonitoringContext();
+    test.AdvanceCounters(100, 10);
+    test.Clock.Advance(TimeSpan.FromSeconds(1));
+    test.Network.SetSnapshot(test.Adapter.Id, new NetworkSnapshot(5, 2, test.Clock.GetUtcNow()));
+    test.Service.SampleNow();
+    Equal(100L, test.Service.GetSnapshot().SessionDownloaded, "Counter rollback cannot manufacture received bytes");
+    Equal(10L, test.Service.GetSnapshot().SessionUploaded, "Counter rollback cannot manufacture sent bytes");
+    test.Clock.Advance(TimeSpan.FromSeconds(1));
+    test.Network.SetSnapshot(test.Adapter.Id, new NetworkSnapshot(25, 6, test.Clock.GetUtcNow()));
+    test.Service.SampleNow();
+    Equal(120L, test.Service.GetSnapshot().SessionDownloaded, "Post-reset received bytes use the reset baseline");
+    Equal(14L, test.Service.GetSnapshot().SessionUploaded, "Post-reset sent bytes use the reset baseline");
+    Equal(120L, test.Service.GetSnapshot().Session!.DownloadBytes, "The physical session reuses the safe dashboard delta");
+}
+
+static void BackgroundProfileRecognition()
+{
+    using var test = new HeadlessMonitoringContext();
+    var id = test.Service.GetSnapshot().Session!.Id;
+    Require(test.Service.GetSnapshot().Connection.CanAssign, "A real unknown network remains assignable in the headless core.");
+    var profile = test.Service.Profiles.CreateProfile("DITO", "D2 Router");
+    var network = test.Identity.Network!;
+    test.Service.Profiles.AssignMapping(profile.Id, network.NetworkType, network.NetworkIdentifier, network.FriendlyName);
+    test.Service.RefreshRecognition();
+    WaitUntil(() => test.Service.GetSnapshot().Connection.Profile?.Id == profile.Id, "Headless recognition picks up an explicit assignment");
+    Equal(id, test.Service.GetSnapshot().Session!.Id, "Profile assignment does not restart the physical interval");
+    Equal<long?>(profile.Id, test.Service.GetSnapshot().Session!.ProfileId, "The active physical session gets the selected profile");
+    test.Service.Profiles.UpdateProfile(profile.Id, "DITO", "Home Router");
+    test.Service.RefreshRecognition();
+    WaitUntil(() => test.Service.GetSnapshot().Connection.Profile?.DeviceName == "Home Router", "Headless recognition picks up a profile edit");
+    Equal(id, test.Service.GetSnapshot().Session!.Id, "A profile rename leaves physical identity stable");
+    Equal(1, test.Service.Profiles.GetProfiles().Count, "No automatic profiles are created");
+}
+
+static void BackgroundSleepResume()
+{
+    using var test = new HeadlessMonitoringContext(vpnActive: true);
+    WaitUntil(() => test.Vpn.GetActiveSession() is not null, "An active VPN is observed without a dashboard");
+    var firstParent = test.Service.GetSnapshot().Session!.Id;
+    var firstVpn = test.Vpn.GetActiveSession()!;
+    test.Clock.Advance(TimeSpan.FromSeconds(10));
+    test.Service.Suspend();
+    test.Service.Suspend();
+    Require(test.Service.GetSnapshot().IsSuspended && test.Service.History.GetActiveSession() is null && test.Vpn.GetActiveSession() is null,
+        "The existing power lifecycle closes VPN and physical intervals in background mode.");
+    Equal("Sleep", test.Vpn.GetRecentSessions().Single().EndReason, "Background suspension retains the VPN sleep cause");
+    var captures = test.Network.Captures;
+    Thread.Sleep(1200);
+    Equal(captures, test.Network.Captures, "Suspension stops the core sampler rather than only hiding UI");
+    test.Clock.Advance(TimeSpan.FromMinutes(20));
+    test.Service.Resume();
+    test.Service.Resume();
+    WaitUntil(() => test.Vpn.GetActiveSession() is not null, "Resume obtains fresh physical and VPN identities without a dashboard");
+    var resumed = test.Vpn.GetActiveSession()!;
+    Require(resumed.Id != firstVpn.Id && resumed.ConnectionSessionId != firstParent,
+        "Resumed history uses new physical and VPN intervals.");
+    Equal(test.Service.GetSnapshot().Session!.Id, resumed.ConnectionSessionId, "The resumed VPN belongs to its new physical parent");
+    Equal(2, test.Service.History.GetRecentSessions().Count, "Repeated resume does not duplicate physical intervals");
+    Equal(2, test.Vpn.GetRecentSessions().Count, "Repeated resume does not duplicate VPN intervals");
+    Equal(1, GetVpnEvents(test.Service.History).Count(item => item.EventType == "VpnDisconnected"), "Sleep disconnect is recorded exactly once");
+}
+
+static void BackgroundCleanExit()
+{
+    using var test = new HeadlessMonitoringContext(vpnActive: true);
+    WaitUntil(() => test.Vpn.GetActiveSession() is not null, "VPN activation is persisted before background exit");
+    var parentId = test.Service.GetSnapshot().Session!.Id;
+    test.AdvanceCounters(8192, 512);
+    Equal((0L, 0L), test.Usage.GetTotals(test.Day, test.Day), "Exit fixture has a pending daily batch");
+    test.Service.Stop();
+    test.Service.Stop();
+    Equal((8192L, 512L), test.Usage.GetTotals(test.Day, test.Day), "Core exit flushes daily usage without dashboard refresh");
+    var parent = test.Service.History.GetRecentSessions().Single();
+    Equal(parentId, parent.Id, "Exit does not create a successor physical interval");
+    Equal("ApplicationExit", parent.EndReason, "Core exit preserves normal physical shutdown behavior");
+    Equal(8192L, parent.DownloadBytes, "Core exit flushes physical session traffic");
+    Equal(512L, parent.UploadBytes, "Core exit flushes physical session upload traffic");
+    var child = test.Vpn.GetRecentSessions().Single();
+    Equal("ApplicationExit", child.EndReason, "Core exit closes VPN cleanly with the existing lifecycle cause");
+    Equal(parent.EndedAtUtc, child.EndedAtUtc, "VPN and physical clean exit use the same boundary");
+    Require(test.Service.History.GetActiveSession() is null && test.Vpn.GetActiveSession() is null,
+        "Clean core shutdown leaves no active physical or VPN history.");
+    Equal(1, GetVpnEvents(test.Service.History).Count(item => item.EventType == "VpnDisconnected"), "Repeated shutdown creates one VPN disconnect");
+    using var nextLease = new DatabaseRunLease(test.DatabasePath);
+    nextLease.EnsureOwns(test.DatabasePath);
+}
+
+static void BackgroundShutdownJoin()
+{
+    using var test = new HeadlessMonitoringContext();
+    using var queryStarted = new ManualResetEventSlim();
+    using var releaseQuery = new ManualResetEventSlim();
+    test.VpnSource.DetectionStarted = queryStarted;
+    test.VpnSource.ReleaseDetection = releaseQuery;
+    test.Service.RefreshRecognition();
+    Require(queryStarted.Wait(TimeSpan.FromSeconds(5)), "Native VPN query is deliberately blocked during background shutdown.");
+    var shutdown = Task.Run(test.Service.Stop);
+    try
+    {
+        Require(!shutdown.Wait(TimeSpan.FromMilliseconds(300)), "Shutdown waits for admitted native workers before releasing ownership.");
+        var rejected = ExpectFailure(() => { using var unexpectedLease = new DatabaseRunLease(test.DatabasePath); },
+            "Lease remains held during worker join");
+        Require(rejected.Message.Contains("already monitoring", StringComparison.OrdinalIgnoreCase), "Concurrent recovery remains blocked during shutdown.");
+    }
+    finally { releaseQuery.Set(); }
+    Require(shutdown.Wait(TimeSpan.FromSeconds(5)), "Background shutdown completes after its owned native query returns.");
+    using var nextLease = new DatabaseRunLease(test.DatabasePath);
+    Require(test.Service.History.GetActiveSession() is null && test.Vpn.GetActiveSession() is null,
+        "Obsolete native work cannot attach a VPN after physical shutdown.");
+}
+
 static int RunLeaseChild(string[] arguments)
 {
     if (arguments.Length != 3) throw new ArgumentException("Lease child requires a test root and mode.");
@@ -3517,7 +4105,7 @@ static int RunLeaseChild(string[] arguments)
     if (!string.Equals(Directory.GetParent(root)?.FullName, testParent, StringComparison.OrdinalIgnoreCase) ||
         !Guid.TryParseExact(Path.GetFileName(root), "N", out _) || !Directory.Exists(root))
         throw new InvalidOperationException("Lease subprocess refuses any root outside an existing owned temporary test directory.");
-    if (arguments[2] is not ("hold" or "start")) throw new ArgumentException("Unknown lease child mode.");
+    if (arguments[2] is not ("hold" or "hold-vpn" or "start")) throw new ArgumentException("Unknown lease child mode.");
     DatabaseRunLease lease;
     try { lease = new DatabaseRunLease(Path.Combine(root, "NetTrace", "usage.db")); }
     catch (InvalidOperationException exception) when (exception.Message.Contains("already monitoring", StringComparison.OrdinalIgnoreCase))
@@ -3535,14 +4123,21 @@ static int RunLeaseChild(string[] arguments)
         clock.Advance(TimeSpan.FromSeconds(30));
         Require(tracker.RecordSample(tracker.Current!.Id, network.AdapterId, 1, clock.GetUtcNow(), 1_024, 128), "Child sample is accepted");
         tracker.Flush();
-        if (arguments[2] == "hold")
+        if (arguments[2] == "hold-vpn")
+        {
+            new VpnSessionStore(usage).Observe(tracker.Current!.Id, VpnStoredObservation(VpnRoutingMode.FullTunnel), clock.GetUtcNow());
+            clock.Advance(TimeSpan.FromSeconds(20));
+            tracker.ObserveConnection(Connected(network));
+            tracker.Flush();
+        }
+        if (arguments[2] is "hold" or "hold-vpn")
         {
             Console.WriteLine("READY");
             if (Console.ReadLine() != "release") throw new InvalidOperationException("Lease owner received no release command.");
         }
         tracker.Close();
     }
-    Console.WriteLine(arguments[2] == "hold" ? "RELEASED" : "ACQUIRED");
+    Console.WriteLine(arguments[2] is "hold" or "hold-vpn" ? "RELEASED" : "ACQUIRED");
     return 0;
 }
 
@@ -3828,6 +4423,108 @@ sealed class FakeNetworkIdentityService : INetworkIdentityService
 
     public void RaiseNetworkChanged() => NetworkChanged?.Invoke(this, EventArgs.Empty);
     public void Dispose() => Disposed = true;
+}
+
+// This fixture starts the production application core with no Application, Window,
+// dispatcher or tray. Only native input inventories and the clock are controlled.
+sealed class HeadlessMonitoringContext : IDisposable
+{
+    private readonly TestWorkspace _workspace = new();
+    private long _received = 10_000;
+    private long _sent = 1000;
+    public string DatabasePath => _workspace.CurrentPath;
+    public UsageStore Usage => Service.Usage;
+    public DateOnly Day => DateOnly.FromDateTime(Clock.GetLocalNow().DateTime);
+    public HeadlessTimeProvider Clock { get; } = new();
+    public FakeNetworkIdentityService Identity { get; } = new();
+    public FakeBandwidthMonitor Network { get; } = new();
+    public FakeVpnInterfaceSource VpnSource { get; } = new();
+    public AdapterInfo Adapter { get; } = new("headless-physical", "Physical Wi-Fi", "Owned fixture adapter", "Wireless80211", 100_000_000, "192.0.2.2", true);
+    public VpnSessionStore Vpn { get; }
+    public MonitoringService Service { get; }
+
+    public HeadlessMonitoringContext(bool vpnActive = false)
+    {
+        Identity.Network = new NetworkIdentity("WiFi", "Headless hotspot", "Headless hotspot", Adapter.Id);
+        Network.Adapters = new[] { Adapter };
+        Network.SetSnapshot(Adapter.Id, new NetworkSnapshot(_received, _sent, Clock.GetUtcNow()));
+        // Match the independent native VPN/routing fixture identity used throughout the harness.
+        var interfaceInfo = new VpnInterfaceEvidence
+        {
+            InterfaceIndex = 42,
+            InterfaceGuid = new Guid("825018c6-06a8-4721-9b04-9aedfbf70d23"),
+            InterfaceName = "Headless VPN",
+            Description = "Native tunnel device",
+            InterfaceType = 131,
+            TunnelType = 1,
+            OperationalStatus = OperationalStatus.Up,
+            MediaConnectState = 1
+        };
+        VpnSource.Inventory = vpnActive
+            ? new VpnInterfaceInventory(new[] { interfaceInfo }, Array.Empty<VpnRasConnectionEvidence>())
+            : new VpnInterfaceInventory(Array.Empty<VpnInterfaceEvidence>(), Array.Empty<VpnRasConnectionEvidence>());
+        var verifier = new VpnRouteVerifier(new VpnDetectionService(VpnSource), new FakeVpnRouteSource());
+        try
+        {
+            Service = MonitoringService.CreateForDataRoot(_workspace.Root, Identity, verifier, Network, Clock);
+            Vpn = new VpnSessionStore(Service.Usage);
+            Service.Start();
+            var deadline = Stopwatch.StartNew();
+            while (Service.GetSnapshot().Session is null)
+            {
+                if (deadline.Elapsed >= TimeSpan.FromSeconds(5)) throw new TimeoutException("Headless core did not establish its physical connection.");
+                Thread.Sleep(20);
+            }
+            Service.SampleNow();
+        }
+        catch
+        {
+            Service?.Dispose();
+            _workspace.Dispose();
+            throw;
+        }
+    }
+
+    public void AdvanceCounters(long received, long sent, bool sampleNow = true)
+    {
+        Clock.Advance(TimeSpan.FromSeconds(1));
+        _received += received;
+        _sent += sent;
+        Network.SetSnapshot(Adapter.Id, new NetworkSnapshot(_received, _sent, Clock.GetUtcNow()));
+        if (sampleNow) Service.SampleNow();
+    }
+
+    public void Dispose()
+    {
+        try { Service.Dispose(); }
+        finally { _workspace.Dispose(); }
+    }
+}
+
+sealed class HeadlessTimeProvider : TimeProvider
+{
+    private long _utcTicks = new DateTimeOffset(2026, 1, 15, 12, 0, 0, TimeSpan.Zero).Ticks;
+    public override DateTimeOffset GetUtcNow() => new(Interlocked.Read(ref _utcTicks), TimeSpan.Zero);
+    public void Advance(TimeSpan elapsed) => Interlocked.Add(ref _utcTicks, elapsed.Ticks);
+}
+
+sealed class FakeBandwidthMonitor : INetworkMonitor
+{
+    private readonly object _gate = new();
+    private readonly Dictionary<string, NetworkSnapshot> _snapshots = new(StringComparer.OrdinalIgnoreCase);
+    private int _captures;
+    public IReadOnlyList<AdapterInfo> Adapters { get; set; } = Array.Empty<AdapterInfo>();
+    public int Captures => Volatile.Read(ref _captures);
+    public IReadOnlyList<AdapterInfo> GetActiveAdapters() => Adapters;
+    public NetworkSnapshot? Capture(string adapterId)
+    {
+        Interlocked.Increment(ref _captures);
+        lock (_gate) return _snapshots.GetValueOrDefault(adapterId);
+    }
+    public void SetSnapshot(string adapterId, NetworkSnapshot snapshot)
+    {
+        lock (_gate) _snapshots[adapterId] = snapshot;
+    }
 }
 
 delegate NetworkIdentity WifiIdentityFactory(ReadOnlySpan<byte> ssidBytes, string adapterId);

@@ -11,6 +11,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App.WindowsForms" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.11" />
     <Compile Remove="tests\**\*.cs" />
   </ItemGroup>

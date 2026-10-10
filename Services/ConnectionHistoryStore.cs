@@ -253,17 +253,55 @@ public sealed class ConnectionHistoryStore
         var end = Later(session.LastConfirmedAtUtc, endedAtUtc);
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
+        command.Parameters.AddWithValue("$id", session.Id);
+        command.Parameters.AddWithValue("$ended", Timestamp(end));
+        command.Parameters.AddWithValue("$download", downloadTotal);
+        command.Parameters.AddWithValue("$upload", uploadTotal);
+
+        if (endReason is "Sleep" or "ApplicationExit")
+        {
+            // The child must close before its parent. Persist the same final physical
+            // confirmation first so the child's end remains within its parent's bounds.
+            command.CommandText = """
+                UPDATE ConnectionSessions SET LastConfirmedAtUtc=$ended,
+                    DownloadBytes=$download, UploadBytes=$upload WHERE Id=$id AND EndedAtUtc IS NULL;
+                """;
+            if (command.ExecuteNonQuery() != 1)
+                throw StaleSession();
+            CloseActiveVpnSession(connection, transaction, session.Id, end, endReason);
+        }
+        else if (endReason == "UnexpectedExit")
+        {
+            // A VPN observation may be older than its parent's final observation.
+            // Never extend the child through time that the previous run did not confirm.
+            CloseActiveVpnSession(connection, transaction, session.Id, null, endReason);
+        }
+
         command.CommandText = """
             UPDATE ConnectionSessions SET LastConfirmedAtUtc=$ended, EndedAtUtc=$ended, EndReason=$reason,
                 DownloadBytes=$download, UploadBytes=$upload WHERE Id=$id AND EndedAtUtc IS NULL;
             """;
-        command.Parameters.AddWithValue("$id", session.Id);
-        command.Parameters.AddWithValue("$ended", Timestamp(end));
         command.Parameters.AddWithValue("$reason", endReason);
-        command.Parameters.AddWithValue("$download", downloadTotal);
-        command.Parameters.AddWithValue("$upload", uploadTotal);
         if (command.ExecuteNonQuery() != 1)
             throw StaleSession();
+    }
+
+    private static void CloseActiveVpnSession(
+        SqliteConnection connection, SqliteTransaction transaction, long physicalSessionId,
+        DateTimeOffset? endedAtUtc, string endReason)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            UPDATE VpnSessions SET EndedAtUtc=COALESCE($ended, LastConfirmedAtUtc), EndReason=$reason
+            WHERE ConnectionSessionId=$id AND EndedAtUtc IS NULL;
+            """;
+        command.Parameters.AddWithValue("$id", physicalSessionId);
+        command.Parameters.AddWithValue("$ended", endedAtUtc is { } ended ? Timestamp(ended) : DBNull.Value);
+        command.Parameters.AddWithValue("$reason", endReason);
+        // The one-active constraint bounds this to at most one child; completed
+        // intervals and retries never emit a second disconnect event.
+        command.ExecuteNonQuery();
     }
 
     private static void InsertEvent(

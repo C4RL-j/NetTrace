@@ -2,7 +2,7 @@
 
 Lightweight Windows network usage and diagnostics monitor.
 
-NetTrace V1.1 establishes the NetTrace identity and safely migrates local history from the previous Data Usage Monitor build (Task 001). Task 002 adds connection profiles and network mappings; Task 003 adds physical connection sessions and event history. Task 004C persists VPN intervals under physical sessions; Task 004D records their transitions in the event timeline. Built with C#/.NET 8, WPF, and SQLite.
+NetTrace V1.1 establishes the NetTrace identity and safely migrates local history from the previous Data Usage Monitor build (Task 001). Task 002 adds connection profiles and network mappings; Task 003 adds physical connection sessions and event history. Tasks 004C–004E persist VPN intervals, events and lifecycle boundaries. Task 005A adds the system tray and background monitoring. Built with C#/.NET 8, WPF, and SQLite.
 
 ## Current features
 
@@ -19,7 +19,7 @@ NetTrace V1.1 establishes the NetTrace identity and safely migrates local histor
 - Connection profiles with Telco / ISP and Device names
 - Multiple network identities mapped to one profile
 - Physical connection sessions and recent connection events
-- No background service
+- System tray with monitoring while the dashboard is closed
 - No telemetry
 
 ## Important limitation
@@ -58,7 +58,7 @@ bin\Release\net8.0-windows\win-x64\publish\
 %LOCALAPPDATA%\NetTrace\usage.db
 ```
 
-Usage is written approximately every 30 seconds and once more when the app closes normally.
+Usage is written approximately every 30 seconds and once more when NetTrace exits normally. Closing the dashboard leaves monitoring running; use **Exit** in the tray menu to stop it.
 
 On first launch, if the NetTrace database is absent and `%LOCALAPPDATA%\DataUsageMonitor\usage.db` exists, NetTrace copies a consistent SQLite snapshot, including committed WAL data, to the new location. The legacy database is retained for rollback. An existing NetTrace database always takes precedence; later legacy writes are not synchronized.
 
@@ -84,15 +84,15 @@ A session is one continuous observed physical network identity and adapter. Diff
 
 The Connection card shows the current session duration and traffic. **History** opens the latest 100 sessions and 200 events, with UTC timestamps displayed in local time. Events include connection/disconnection, network change, profile assignment/change, sleep, resume, unexpected-exit recovery, normal application exit, and network-identity unavailability.
 
-Session traffic uses the dashboard's existing one-second byte delta and only accepts samples from the current physical adapter. Recognition changes automatically select that adapter and establish a new baseline; profile edits and repeated observations retain the baseline. Manual adapter selection remains available. If another or virtual adapter is selected, the dashboard still monitors it while physical-session traffic pauses; the Connection card explains which selection is needed. No virtual-interface traffic is attributed to physical sessions.
+Session traffic uses the existing one-second byte delta, now owned by the application monitoring service, and only accepts samples from the current physical adapter. Recognition changes automatically select that adapter and establish a new baseline; profile edits and repeated observations retain the baseline. Manual adapter selection remains available. If another or virtual adapter is selected, monitoring follows it while physical-session traffic pauses; the Connection card explains which selection is needed. No virtual-interface traffic is attributed to physical sessions.
 
 Progress and confirmed observations are saved about every 30 seconds and on transitions/normal exit. Identity is also refreshed at that batch interval to confirm idle connections. Uncertain transition intervals are discarded rather than counted on a new connection. A sudden termination can lose the current unflushed batch; restart closes the unfinished session exactly at its persisted `LastConfirmedAtUtc`, records recovery, and starts a fresh session after detection. Only one NetTrace run may own a history database at a time.
 
-Startup acquires an exclusive Windows file handle on `usage.db.nettrace.lock` before opening, migrating, or recovering SQLite and keeps it until shutdown. Concurrent instances are rejected, including in another Windows login session. Normal close releases the handle; a hard kill or crash also releases operating-system ownership. The small sidecar remains on disk and is reused, so its mere existence never means the database is locked. No stale PID or manual lock-file cleanup is needed. Startup failures also release ownership.
+Startup acquires an exclusive Windows file handle on `usage.db.nettrace.lock` before opening, migrating, or recovering SQLite and keeps it until shutdown. Concurrent instances are rejected, including in another Windows login session. Tray Exit releases the handle; a hard kill or crash also releases operating-system ownership. The small sidecar remains on disk and is reused, so its mere existence never means the database is locked. No stale PID or manual lock-file cleanup is needed. Startup failures also release ownership.
 
 SQLite indexes cover the single active session, recent sessions/events, profile sessions, and start-time range filtering. Event foreign keys have their own indexes. Earlier v3 databases receive the event relationship indexes transactionally without changing historical rows or the schema version.
 
-NetTrace registers its window for Windows suspend/resume notifications, including connected standby. These messages end the active session on sleep and require a fresh identity observation before a new session starts after resume, including for the same SSID. Sleep time is excluded. When Windows cannot provide identity, NetTrace conservatively ends the old session at its last confirmation and keeps dashboard sampling independent; a recovered identity begins a new session. Completed history is never broadly reassigned.
+NetTrace registers an application-owned hidden native window for Windows suspend/resume notifications, including connected standby. It stays alive without a dashboard. These messages end the active session on sleep and require a fresh identity observation before a new session starts after resume, including for the same SSID. Sleep time is excluded. When Windows cannot provide identity, NetTrace conservatively ends the old session at its last confirmation and keeps bandwidth sampling independent; a recovered identity begins a new session. Completed history is never broadly reassigned.
 
 ## VPN detection foundation (Task 004A)
 
@@ -118,7 +118,7 @@ Task 004B.1 separates each family's availability (`Usable`, `Unavailable`, `Unkn
 
 The observer captures the physical parent before querying, rejects stale work after a parent change and persists the existing physical tracker's confirmed progress before saving a VPN row. VPN timestamps are bounded by that parent confirmation, without changing byte totals or manufacturing physical liveness. Parent closure ends its active VPN interval in the same SQLite transaction. Shutdown stops and joins the observer before closing the parent and releasing database ownership. Completed intervals and captured identity are immutable.
 
-VPN storage adds no VPN UI, standalone sleep/crash recovery, health checks or traffic accounting. Existing physical lifecycle closure also enforces the child relationship; it does not establish continuous VPN connectivity across sleep or an application restart. Intervals describe observed state: rapid changes between callbacks/polls may be missed, timestamps follow available physical confirmation, and only the latest routing mode is retained within an interval.
+VPN storage adds no VPN UI, health checks or traffic accounting. Intervals describe observed state: rapid changes between callbacks/polls may be missed, timestamps follow available physical confirmation, and only the latest routing mode is retained within an interval.
 
 ## VPN events (Task 004D)
 
@@ -126,10 +126,25 @@ The existing `ConnectionEvents` timeline records `VpnConnected` when an interval
 
 SQLite triggers write events in the same transaction as VPN transitions, including physical-parent closure. Repeated confirmations, alias-only edits and unchanged routing produce no events; a failed event write rolls back its interval transition. Existing schema-v4 databases gain these triggers transactionally on startup without rewriting history or backfilling events. Physical event behavior, dashboard layout and bandwidth accounting remain unchanged.
 
-## Migration verification
+## VPN lifecycle (Task 004E)
+
+The existing Windows power handler pauses VPN observation and invalidates in-flight results before processing sleep. The physical history transaction closes the VPN interval with `Sleep` before closing its parent at the existing sleep boundary. Resume refreshes physical recognition and VPN detection; a fresh active tunnel creates a new interval, while VPN OFF creates none. Pre-sleep results cannot be reused, including when a native query completes after resume. No separate power listener or lifecycle polling is introduced.
+
+At startup, existing physical-session recovery closes any unfinished VPN child exactly at its own persisted `LastConfirmedAtUtc`, with `UnexpectedExit`, before recovering its parent. The child's last confirmation can be earlier than the parent's; neither is extended through unknown downtime. Recovery and its disconnect event commit together, so retries cannot duplicate events. Fresh startup observations can then create new physical/VPN intervals under the existing database run lease.
+
+Normal shutdown stops and joins the VPN observer, flushes pending usage and closes its active interval with `ApplicationExit` in the same transaction as physical shutdown. Sleep/exit closure first persists the existing final physical confirmation within that transaction so the child's end stays inside its parent. Completed VPN history is untouched. Confirmation remains periodic at the existing 30-second VPN observation interval; a crash can lose progress since the last committed observation. Database-write failures roll back lifecycle changes for retry; persistent storage failures are reported through the existing error/log paths.
+
+## System tray and background monitoring (Task 005A)
+
+Closing the dashboard destroys that view and stops its refresh timer. `MonitoringService` continues sampling, batched persistence, physical sessions, profile recognition and VPN tracking without any dashboard or WPF dispatcher. The tray menu provides **Open NetTrace** and **Exit**; double-click also opens NetTrace. Open recreates a dashboard from the current service state, or restores the existing window. App totals, selected adapter, sampling baseline and current session IDs survive dashboard recreation.
+
+The application explicitly shuts down only on tray Exit or Windows session ending. Exit stops and joins native observers, flushes pending usage, closes VPN/physical intervals with their existing shutdown behavior, disposes the tray icon/power listener and releases database ownership. Background mode performs no dashboard refresh or history-total rendering queries. The tray uses the standard Windows application icon and menu; there is no Windows startup registration or Windows service.
+
+## Verification
 
 Run the isolated migration checks without touching your application data:
 
 ```powershell
 dotnet run --project tests\NetTrace.RegressionTests\NetTrace.RegressionTests.csproj
+dotnet run --project tests\NetTrace.WpfTests\NetTrace.WpfTests.csproj
 ```

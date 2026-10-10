@@ -4,7 +4,7 @@ using NetTrace.Models;
 
 namespace NetTrace.Services;
 
-public sealed class NetworkMonitor
+public sealed class NetworkMonitor : INetworkMonitor
 {
     public IReadOnlyList<AdapterInfo> GetActiveAdapters()
     {

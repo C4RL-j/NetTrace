@@ -7,6 +7,7 @@ public sealed class ConnectionProfileMonitor : IDisposable
 {
     private readonly INetworkIdentityService _identityService;
     private readonly ProfileResolver _resolver;
+    private readonly TimeProvider _timeProvider;
     private readonly Timer _refreshTimer;
     private readonly object _gate = new();
     private readonly object _workerGate = new();
@@ -26,12 +27,13 @@ public sealed class ConnectionProfileMonitor : IDisposable
         get { lock (_gate) return _current; }
     }
 
-    public ConnectionProfileMonitor(INetworkIdentityService identityService, ProfileResolver resolver)
+    public ConnectionProfileMonitor(INetworkIdentityService identityService, ProfileResolver resolver, TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(identityService);
         ArgumentNullException.ThrowIfNull(resolver);
         _identityService = identityService;
         _resolver = resolver;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _refreshTimer = new Timer(RefreshState, null, Timeout.Infinite, Timeout.Infinite);
     }
 
@@ -96,7 +98,7 @@ public sealed class ConnectionProfileMonitor : IDisposable
                 if (_disposed || generation != _generation) return;
                 changed = next != _current;
                 _current = next;
-                observation = new(next, DateTimeOffset.UtcNow, ++_observationSequence);
+                observation = new(next, _timeProvider.GetUtcNow().ToUniversalTime(), ++_observationSequence);
             }
             // Carry the captured observation so queued UI work cannot collapse A -> B -> A.
             ObservationReceived?.Invoke(this, observation);
