@@ -15,6 +15,9 @@
         <SolidColorBrush x:Key="SubtleBrush" Color="#94A3B8"/>
         <SolidColorBrush x:Key="BorderBrush" Color="#1E2A44"/>
         <SolidColorBrush x:Key="AccentBrush" Color="#38BDF8"/>
+        <SolidColorBrush x:Key="PositiveBrush" Color="#22C55E"/>
+        <SolidColorBrush x:Key="CautionBrush" Color="#FBBF24"/>
+        <SolidColorBrush x:Key="WarningBrush" Color="#EF4444"/>
 
         <Style TargetType="Border" x:Key="CardStyle">
             <Setter Property="Background" Value="{StaticResource CardBrush}"/>
@@ -232,7 +235,7 @@
                     <StackPanel x:Name="HealthContent">
                         <Border Style="{StaticResource CardStyle}">
                             <StackPanel>
-                                <TextBlock Text="ICMP LATENCY" Style="{StaticResource MutedText}"/>
+                                <TextBlock Text="NETWORK HEALTH" Style="{StaticResource MutedText}"/>
                                 <TextBlock x:Name="HealthWaitingText" Text="Waiting for first measurement..."
                                            Style="{StaticResource MutedText}" TextWrapping="Wrap" Margin="0,8,0,0"/>
 
@@ -249,33 +252,39 @@
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
 
-                                    <TextBlock Text="ICMP quality" Style="{StaticResource MutedText}"/>
-                                    <TextBlock x:Name="IcmpQualityText" Grid.Column="1" Text="Measuring" TextWrapping="Wrap"
+                                    <TextBlock Text="Internet reachability" Style="{StaticResource MutedText}"/>
+                                    <TextBlock x:Name="InternetReachabilityText" Grid.Column="1" Text="Checking" TextWrapping="Wrap"
+                                               FontWeight="SemiBold" Foreground="{StaticResource SubtleBrush}"
+                                               ToolTip="External DNS and HTTPS checks. Available confirms a response from at least one configured HTTPS endpoint, not every internet service."/>
+
+                                    <TextBlock Grid.Row="1" Text="ICMP quality" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+                                    <TextBlock x:Name="IcmpQualityText" Grid.Row="1" Grid.Column="1" Text="Measuring" TextWrapping="Wrap" Margin="0,8,0,0"
                                                FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}"
                                                ToolTip="Based on up to 12 recent completed ICMP cycles; at least 3 are required. The worst available metric determines quality."/>
 
-                                    <TextBlock Grid.Row="1" Text="Target" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
-                                    <TextBlock x:Name="IcmpTargetText" Grid.Row="1" Grid.Column="1" Text="—" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                                    <TextBlock Grid.Row="2" Text="Target" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+                                    <TextBlock x:Name="IcmpTargetText" Grid.Row="2" Grid.Column="1" Text="—" TextWrapping="Wrap" Margin="0,8,0,0"/>
 
-                                    <TextBlock Grid.Row="2" Text="Average latency" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
-                                    <TextBlock x:Name="IcmpLatencyText" Grid.Row="2" Grid.Column="1" Text="—" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                                    <TextBlock Grid.Row="3" Text="Average latency" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+                                    <TextBlock x:Name="IcmpLatencyText" Grid.Row="3" Grid.Column="1" Text="—" TextWrapping="Wrap" Margin="0,8,0,0"/>
 
-                                    <TextBlock Grid.Row="3" Text="Jitter" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
-                                    <TextBlock x:Name="IcmpJitterText" Grid.Row="3" Grid.Column="1" Text="—" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                                    <TextBlock Grid.Row="4" Text="Jitter" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+                                    <TextBlock x:Name="IcmpJitterText" Grid.Row="4" Grid.Column="1" Text="—" TextWrapping="Wrap" Margin="0,8,0,0"/>
 
-                                    <TextBlock Grid.Row="4" Text="Packet loss" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
-                                    <TextBlock x:Name="IcmpPacketLossText" Grid.Row="4" Grid.Column="1" Text="—" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                                    <TextBlock Grid.Row="5" Text="Packet loss" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+                                    <TextBlock x:Name="IcmpPacketLossText" Grid.Row="5" Grid.Column="1" Text="—" TextWrapping="Wrap" Margin="0,8,0,0"/>
 
-                                    <TextBlock Grid.Row="5" Text="Successful replies" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
-                                    <TextBlock x:Name="IcmpRepliesText" Grid.Row="5" Grid.Column="1" Text="—" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                                    <TextBlock Grid.Row="6" Text="Successful replies" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+                                    <TextBlock x:Name="IcmpRepliesText" Grid.Row="6" Grid.Column="1" Text="—" TextWrapping="Wrap" Margin="0,8,0,0"/>
 
-                                    <TextBlock Grid.Row="6" Text="Last sample" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
-                                    <TextBlock x:Name="IcmpLastSampleText" Grid.Row="6" Grid.Column="1" Text="—" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                                    <TextBlock Grid.Row="7" Text="Last sample" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+                                    <TextBlock x:Name="IcmpLastSampleText" Grid.Row="7" Grid.Column="1" Text="—" TextWrapping="Wrap" Margin="0,8,0,0"/>
                                 </Grid>
 
-                                <TextBlock Text="ICMP replies can be blocked. Quality reflects recent ICMP measurements and does not determine internet availability."
+                                <TextBlock Text="ICMP replies can be blocked; ICMP quality does not determine internet availability. Reachability is checked separately using DNS and HTTPS."
                                            Style="{StaticResource MutedText}" TextWrapping="Wrap" Margin="0,16,0,0"/>
                             </StackPanel>
                         </Border>

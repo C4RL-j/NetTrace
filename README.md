@@ -22,6 +22,7 @@ NetTrace V1.1 establishes the NetTrace identity and safely migrates local histor
 - System tray with monitoring while the dashboard is closed
 - Optional current-user Windows startup in tray mode
 - Background ICMP latency and packet-loss measurements
+- Background DNS/HTTPS internet reachability checks
 - No telemetry
 
 ## Measurement meanings
@@ -168,7 +169,7 @@ an underline on the active page:
 | Page | Contents |
 | --- | --- |
 | Dashboard | Live traffic, daily peaks, data usage and a compact current connection/session summary |
-| Health | Latest raw ICMP measurements, recent ICMP quality, latency/jitter chart and packet-loss history |
+| Health | Internet reachability, latest ICMP measurements, recent ICMP quality, latency/jitter chart and packet-loss history |
 | Connections | Current connection, monitored adapter/details, Profiles and Assign profile |
 | History | Opens the existing recent sessions/events history window |
 | Settings | Start NetTrace with Windows and the local database location |
@@ -248,7 +249,7 @@ It creates no worker, timer or separate history source. These bars describe ICMP
 loss only; blocked ICMP replies cannot establish internet availability. History
 remains in memory and is cleared when NetTrace exits.
 
-Network Health 005 adds **ICMP quality** to the upper ICMP LATENCY card. It evaluates
+Network Health 005 adds **ICMP quality** to the upper NETWORK HEALTH card. It evaluates
 only the newest 12 completed cycles from the existing history, in completion order,
 without another buffer or worker. Fewer than three completed cycles show **Measuring**.
 Once three exist, no valid successful latency measurements means **Unavailable**,
@@ -270,12 +271,45 @@ Hidden, minimized and inactive views skip evaluation. The single-target ICMP res
 does not determine internet availability or rate an ISP. With four probes per cycle,
 the smallest nonzero 12-cycle mean loss is about 2.08%, so loss alone moves directly
 from Excellent to Fair; Good can still reflect latency or jitter. No quality history
-is persisted, and there are no notifications or additional probes.
+is persisted, and there are no notifications or additional ICMP probes.
 
-The existing application lifecycle starts, pauses for sleep, resumes and cancels the
-single ICMP worker. Incomplete or canceled bursts are discarded, bursts cannot overlap,
-and exit does not wait for long ping timeouts. Tests inject ping sources and never
-depend on public internet access.
+Network Health 006 adds **Internet reachability** above ICMP quality, using a separate
+application-owned worker. It starts asynchronously with monitoring, runs promptly at
+startup and every 60 seconds thereafter, and continues in tray mode. Each cycle runs
+two system DNS lookups and two HTTPS probes in parallel under one four-second deadline:
+
+| Provider | DNS hostname | HTTPS endpoint |
+| --- | --- | --- |
+| Cloudflare | `cp.cloudflare.com` | `https://cp.cloudflare.com/generate_204` |
+| Google | `www.gstatic.com` | `https://www.gstatic.com/generate_204` |
+
+Google documents its HTTPS endpoint as a [connectivity probe](https://support.google.com/chrome/a/answer/6334001?hl=en).
+The transport uses system DNS, routing and proxy configuration, normal TLS validation
+and one reusable HTTP client. Requests stop at response headers, do not drain response
+bodies, follow no redirects, and carry no cookies, credentials or NetTrace statistics.
+No ICMP packets are sent by this check.
+
+Before the first completed cycle the field shows **Checking**. Any legitimate HTTPS
+response, including 301, 403 or 404, means **Available**; no success-class status is
+required. If HTTPS fails but either DNS hostname resolves, the result is **Limited**.
+If both DNS and HTTPS fail it is **Unavailable**. A completed success remains valid
+even if another parallel probe reaches the deadline. ICMP quality and history remain
+independent, so **Available** reachability with **Unavailable** ICMP is valid.
+
+Only the latest result and UTC completion time are retained in memory. DNS caching,
+filtered endpoints, proxies and captive portals can influence these observations;
+they do not prove every website works. There is no reachability history, database
+storage, notification or automatic network repair.
+
+The existing application lifecycle starts, pauses for sleep, resumes and cancels both
+workers. Incomplete sleep/shutdown cycles are discarded; the last fully completed
+reachability result is retained until a fresh check completes promptly after resume.
+Cycles cannot overlap, and exit requests cancellation without waiting for network
+timeouts. Health reads current results through its existing visible-page refresh;
+no UI networking or additional presentation timer is added. Tests inject ping,
+DNS and HTTPS sources and never depend on public internet access. A separate explicit
+`--reachability-live-validation` regression-harness command performs one real check
+without opening a database; it is never part of the automated suite.
 
 ## Verification
 

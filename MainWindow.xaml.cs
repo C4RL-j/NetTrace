@@ -21,6 +21,7 @@ public partial class MainWindow : Window
     private bool _chartInitialized;
     private IcmpProbeResult? _lastChartMeasurement;
     private IcmpQualitySummary? _qualitySummary;
+    private InternetReachabilityResult? _lastReachabilityMeasurement;
 
     public MainWindow(MonitoringService monitoring, IWindowsStartupRegistration? startupRegistration = null)
     {
@@ -129,6 +130,20 @@ public partial class MainWindow : Window
     private void RefreshHealth(bool refreshChart = false)
     {
         if (_closed || !IsVisible || WindowState == WindowState.Minimized || !HealthContent.IsVisible) return;
+        var reachability = _monitoring.LatestInternetReachability;
+        if (!ReferenceEquals(reachability, _lastReachabilityMeasurement))
+        {
+            var status = reachability?.Status ?? InternetReachabilityStatus.Checking;
+            InternetReachabilityText.Text = status.ToString();
+            InternetReachabilityText.Foreground = (Brush)FindResource(status switch
+            {
+                InternetReachabilityStatus.Available => "PositiveBrush",
+                InternetReachabilityStatus.Limited => "CautionBrush",
+                InternetReachabilityStatus.Unavailable => "WarningBrush",
+                _ => "SubtleBrush"
+            });
+            _lastReachabilityMeasurement = reachability;
+        }
         // Read the application-owned worker's last completed cycle. Opening this
         // page never starts or restarts probes; the existing view timer refreshes it.
         var result = _monitoring.LatestIcmpMeasurement;

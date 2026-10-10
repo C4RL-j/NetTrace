@@ -17,6 +17,7 @@ public sealed class MonitoringService : IDisposable
     private readonly ConnectionProfileMonitor _profileMonitor;
     private readonly VpnSessionMonitor _vpnSessions;
     private readonly IcmpMonitor _icmpMonitor;
+    private readonly InternetReachabilityMonitor _reachabilityMonitor;
     private readonly DatabaseRunLease _runLease;
     private readonly TimeProvider _timeProvider;
     private readonly Timer _timer;
@@ -56,11 +57,12 @@ public sealed class MonitoringService : IDisposable
     public string DatabasePath => _store.DatabasePath;
     public IcmpProbeResult? LatestIcmpMeasurement => _icmpMonitor.LatestResult;
     public IReadOnlyList<IcmpProbeResult> RollingIcmpSamples => _icmpMonitor.RollingSamples;
+    public InternetReachabilityResult? LatestInternetReachability => _reachabilityMonitor.LatestResult;
 
     public static MonitoringService CreateForDataRoot(string localApplicationDataDirectory,
         INetworkIdentityService? identityService = null, VpnRouteVerifier? vpnVerifier = null,
         INetworkMonitor? networkMonitor = null, TimeProvider? timeProvider = null,
-        IcmpMonitor? icmpMonitor = null)
+        IcmpMonitor? icmpMonitor = null, InternetReachabilityMonitor? reachabilityMonitor = null)
     {
         DatabaseRunLease? lease = null;
         var transferred = false;
@@ -70,7 +72,7 @@ public sealed class MonitoringService : IDisposable
             var store = new UsageStore(localApplicationDataDirectory, lease);
             transferred = true;
             return new MonitoringService(store, identityService ?? new NetworkIdentityService(),
-                lease, vpnVerifier, networkMonitor, timeProvider, icmpMonitor);
+                lease, vpnVerifier, networkMonitor, timeProvider, icmpMonitor, reachabilityMonitor);
         }
         catch
         {
@@ -78,7 +80,11 @@ public sealed class MonitoringService : IDisposable
             {
                 if (!transferred)
                 {
-                    try { icmpMonitor?.Dispose(); }
+                    try
+                    {
+                        try { icmpMonitor?.Dispose(); }
+                        finally { reachabilityMonitor?.Dispose(); }
+                    }
                     finally { identityService?.Dispose(); }
                 }
             }
@@ -91,7 +97,7 @@ public sealed class MonitoringService : IDisposable
     public MonitoringService(UsageStore store, INetworkIdentityService identityService,
         DatabaseRunLease? runLease = null, VpnRouteVerifier? vpnVerifier = null,
         INetworkMonitor? networkMonitor = null, TimeProvider? timeProvider = null,
-        IcmpMonitor? icmpMonitor = null)
+        IcmpMonitor? icmpMonitor = null, InternetReachabilityMonitor? reachabilityMonitor = null)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(identityService);
@@ -105,6 +111,7 @@ public sealed class MonitoringService : IDisposable
             _runLease = runLease ?? new DatabaseRunLease(store.DatabasePath);
             _runLease.EnsureOwns(store.DatabasePath);
             _icmpMonitor = icmpMonitor ?? new IcmpMonitor(timeProvider: _timeProvider);
+            _reachabilityMonitor = reachabilityMonitor ?? new InternetReachabilityMonitor(timeProvider: _timeProvider);
             _trafficPeaks[_pendingDay] = store.GetTrafficPeaks(_pendingDay);
             _history = new ConnectionHistoryStore(store);
             _sessions = new ConnectionSessionTracker(_history, _timeProvider);
@@ -118,6 +125,8 @@ public sealed class MonitoringService : IDisposable
         {
             try { (_icmpMonitor ?? icmpMonitor)?.Dispose(); }
             catch (Exception exception) { Trace.TraceWarning($"Could not stop ICMP monitoring after startup failure: {exception.Message}"); }
+            try { (_reachabilityMonitor ?? reachabilityMonitor)?.Dispose(); }
+            catch (Exception exception) { Trace.TraceWarning($"Could not stop internet reachability after startup failure: {exception.Message}"); }
             try { _timer?.Dispose(); }
             catch (Exception exception) { Trace.TraceWarning($"Could not stop sampling after startup failure: {exception.Message}"); }
             try { _vpnSessions?.Dispose(); }
@@ -144,6 +153,7 @@ public sealed class MonitoringService : IDisposable
             _profileMonitor.Start();
             _vpnSessions.Start();
             _icmpMonitor.Start();
+            _reachabilityMonitor.Start();
             if (!_suspended) _timer.Change(1000, 1000);
         }
         RaiseChanged();
@@ -427,6 +437,7 @@ public sealed class MonitoringService : IDisposable
             _previousSnapshot = null;
             _vpnSessions.Suspend();
             _icmpMonitor.Suspend();
+            _reachabilityMonitor.Suspend();
             FlushPendingForLifecycle();
             UpdateSessionHistory(_sessions.Sleep);
             _profileMonitor.Refresh(invalidatePending: true);
@@ -446,6 +457,7 @@ public sealed class MonitoringService : IDisposable
             _suspended = false;
             _vpnSessions.Resume();
             _icmpMonitor.Resume();
+            _reachabilityMonitor.Resume();
             if (_started) _timer.Change(1000, 1000);
         }
         RaiseChanged();
@@ -465,7 +477,11 @@ public sealed class MonitoringService : IDisposable
             // No application lock is held while joining native recognition/VPN workers.
             try
             {
-                try { _icmpMonitor.Dispose(); }
+                try
+                {
+                    try { _reachabilityMonitor.Dispose(); }
+                    finally { _icmpMonitor.Dispose(); }
+                }
                 finally { _vpnSessions.Dispose(); }
             }
             finally

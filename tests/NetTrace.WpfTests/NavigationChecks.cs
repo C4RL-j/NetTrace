@@ -32,7 +32,7 @@ internal static class NavigationChecks
         using var icmp = new IcmpMonitor(pings, interval: TimeSpan.FromMilliseconds(40));
         using var monitoring = new MonitoringService(store, new OwnedIdentity(adapterId),
             vpnVerifier: new VpnRouteVerifier(new VpnDetectionService(new OwnedTunnel()), new OwnedRoutes()),
-            networkMonitor: counters, timeProvider: clock, icmpMonitor: icmp);
+            networkMonitor: counters, timeProvider: clock, icmpMonitor: icmp, reachabilityMonitor: TestReachability.Create());
         var startup = new OwnedStartup();
         var windowsCreated = 0;
         var exits = 0;
@@ -92,7 +92,7 @@ internal static class NavigationChecks
             OnPage(tabs[4], Control<TextBlock>(window, "DatabasePathText")),
             "Settings contains startup registration and the existing local database path");
         check(OnPage(tabs[1], Control<StackPanel>(window, "HealthContent")) &&
-            new[] { "IcmpQualityText", "IcmpTargetText", "IcmpLatencyText", "IcmpJitterText", "IcmpPacketLossText", "IcmpRepliesText", "IcmpLastSampleText" }
+            new[] { "InternetReachabilityText", "IcmpQualityText", "IcmpTargetText", "IcmpLatencyText", "IcmpJitterText", "IcmpPacketLossText", "IcmpRepliesText", "IcmpLastSampleText" }
                 .All(name => OnPage(tabs[1], Control<TextBlock>(window, name))) &&
             OnPage(tabs[1], Control<IcmpStabilityChart>(window, "IcmpStabilityChart")) &&
             OnPage(tabs[1], Control<IcmpPacketLossChart>(window, "IcmpPacketLossChart")) &&
@@ -220,7 +220,7 @@ internal static class NavigationChecks
         using var monitoring = new MonitoringService(store, new OwnedIdentity(adapterId),
             vpnVerifier: new VpnRouteVerifier(new VpnDetectionService(new OwnedTunnel()), new OwnedRoutes()),
             networkMonitor: new OwnedCounters(adapterId, clock.GetUtcNow()), timeProvider: clock,
-            icmpMonitor: new IcmpMonitor(new OwnedPing()));
+            icmpMonitor: new IcmpMonitor(new OwnedPing()), reachabilityMonitor: TestReachability.Create());
         using var context = new TrayApplicationContext(Application.Current, monitoring,
             dashboardFactory: service => new MainWindow(service, new OwnedStartup())
                 { ShowActivated = false, ShowInTaskbar = false, Opacity = 0 }, shutdownAction: () => { });

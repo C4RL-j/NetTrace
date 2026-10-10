@@ -81,4 +81,23 @@ and mixed ICMP, missing/invalid measurements, unweighted per-cycle averages,
 newest-12 selection and rollover, observation order, unchanged source history,
 deterministic immutable summaries and finite extreme averages.
 
+Network Health 006 adds 45 groups in `InternetReachabilityTests.cs`, bringing the
+console suite to 349 groups. Fake probe sources, DNS delegates and HTTP handlers
+cover Checking/Available/Limited/Unavailable, independent-provider fallback,
+HTTP 200/204/301/403/404/503 responses, headers-only reads, transport reuse and
+privacy, a shared parallel timeout with retained successes, expected failures,
+nonblocking shutdown, late faults, no overlapping cycles, suspend discard,
+fresh resume observations and independence from ICMP history/quality. All existing
+monitoring fixtures explicitly inject fake DNS/HTTPS probes.
+
+One live check can be run separately with:
+
+```powershell
+dotnet run --project tests/NetTrace.RegressionTests/NetTrace.RegressionTests.csproj -- --reachability-live-validation
+```
+
+This explicit command performs one real reachability cycle and prints the configured
+endpoints, UTC result and DNS/HTTPS flags. It opens no database and never runs as part
+of the automated cases.
+
 Both harnesses use owned temporary databases and injected network/VPN/ICMP evidence. They do not open real application data or change Windows network settings.

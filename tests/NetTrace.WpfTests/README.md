@@ -1,6 +1,6 @@
 # NetTrace WPF integration tests
 
-The 272 Windows-only STA integration checks use isolated temporary databases and injected
+The 306 Windows-only STA integration checks use isolated temporary databases and injected
 physical/VPN identities. They exercise the existing dashboard, persistence,
 profile, power, recovery and ownership behavior together with Task 005A tray and
 background lifecycle behavior. They retain the previous 77 WPF lifecycle checks,
@@ -70,6 +70,16 @@ Navigation, restore and tray recreation immediately show current quality without
 another timer, probe worker or physical session. Six state previews and the minimum
 760×600 layout are saved beneath `icmp-quality-previews` in the owned test directory;
 the existing vertical scroll still exposes the full packet-loss strip.
+
+Network Health 006 adds 34 checks in `InternetReachabilityChecks.cs`. Controlled
+DNS/HTTPS probes exercise all four states, independent ICMP quality (including
+Available reachability with Unavailable ICMP), the existing presentation timer,
+immediate page entry, navigation/hide/minimize/restore/tray recreation, unfinished
+sleep-cycle discard, fresh resume checks and cancellation on Tray Exit. Every
+monitoring fixture, including child processes, injects `TestReachability` or another
+controlled source so the full suite performs no public DNS/HTTPS requests. Seven
+PNGs under `internet-reachability-previews` cover the states, ICMP combinations and 760×600
+layout; the existing two cards and vertical chart scrolling remain intact.
 
 ```powershell
 dotnet run --project tests/NetTrace.WpfTests/NetTrace.WpfTests.csproj

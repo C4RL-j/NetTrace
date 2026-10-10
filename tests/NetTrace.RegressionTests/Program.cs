@@ -13,6 +13,10 @@ using NetTrace.Utils;
 if (args.Length > 0 && args[0] == "--lease-test-child")
     return RunLeaseChild(args);
 
+// Explicit opt-in only. The ordinary regression suite never sends DNS/HTTPS probes.
+if (args.Length > 0 && args[0] == "--reachability-live-validation")
+    return await InternetReachabilityTests.RunLiveValidationAsync();
+
 var tests = new (string Name, Action Run)[]
 {
     ("Clean install initializes the NetTrace database and version", CleanInstall),
@@ -217,7 +221,7 @@ var tests = new (string Name, Action Run)[]
     ("Equivalent absolute executable paths produce the same canonical registration", StartupRegistrationCanonicalPath)
 }.Concat(IcmpHealthTests.Cases).Concat(IcmpRollingTests.Cases)
     .Concat(IcmpStabilityChartTests.Cases).Concat(IcmpPacketLossChartTests.Cases)
-    .Concat(IcmpQualityTests.Cases).ToArray();
+    .Concat(IcmpQualityTests.Cases).Concat(InternetReachabilityTests.Cases).ToArray();
 
 var failed = 0;
 foreach (var (name, run) in tests)
@@ -4343,7 +4347,8 @@ static void TrafficPeaksCoreBatchAndRestart()
     var identity = new FakeNetworkIdentityService { Network = test.Identity.Network };
     var verifier = new VpnRouteVerifier(new VpnDetectionService(new FakeVpnInterfaceSource()), new FakeVpnRouteSource());
     using var restarted = MonitoringService.CreateForDataRoot(test.Root, identity, verifier, test.Network, test.Clock,
-        new IcmpMonitor(new NoInternetPingSource(), timeProvider: test.Clock));
+        new IcmpMonitor(new NoInternetPingSource(), timeProvider: test.Clock),
+        new InternetReachabilityMonitor(new NoInternetReachabilitySource(), timeProvider: test.Clock));
     Equal((2345d, 67d), restarted.Usage.GetTrafficPeaks(test.Day), "Normal exit persists peaks newer than the last periodic flush");
     Equal(2345d, restarted.GetSnapshot().PeakDownloadBytesPerSecond, "Restart loads today's persisted download peak");
     Equal(67d, restarted.GetSnapshot().PeakUploadBytesPerSecond, "Restart loads today's persisted upload peak");
@@ -5006,6 +5011,21 @@ sealed class NoInternetPingSource : IPingSource
     }
 }
 
+sealed class NoInternetReachabilitySource : IInternetReachabilityProbeSource
+{
+    public Task<bool> ResolveDnsAsync(string hostname, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(false);
+    }
+
+    public Task<bool> ProbeHttpsAsync(Uri endpoint, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(false);
+    }
+}
+
 sealed class HeadlessMonitoringContext : IDisposable
 {
     private readonly TestWorkspace _workspace = new();
@@ -5047,7 +5067,8 @@ sealed class HeadlessMonitoringContext : IDisposable
         try
         {
             Service = MonitoringService.CreateForDataRoot(_workspace.Root, Identity, verifier, Network, Clock,
-                new IcmpMonitor(new NoInternetPingSource(), timeProvider: Clock));
+                new IcmpMonitor(new NoInternetPingSource(), timeProvider: Clock),
+                new InternetReachabilityMonitor(new NoInternetReachabilitySource(), timeProvider: Clock));
             Vpn = new VpnSessionStore(Service.Usage);
             Service.Start();
             var deadline = Stopwatch.StartNew();

@@ -29,7 +29,7 @@ internal static class IcmpStabilityChartChecks
             timeout: TimeSpan.FromMinutes(5), timeProvider: clock);
         using var monitoring = new MonitoringService(store, new OwnedIdentity(adapterId),
             vpnVerifier: new VpnRouteVerifier(new VpnDetectionService(new NoTunnel()), new NoRoutes()),
-            networkMonitor: counters, timeProvider: clock, icmpMonitor: icmp);
+            networkMonitor: counters, timeProvider: clock, icmpMonitor: icmp, reachabilityMonitor: TestReachability.Create());
         var created = 0;
         var exits = 0;
         using var context = new TrayApplicationContext(Application.Current, monitoring,

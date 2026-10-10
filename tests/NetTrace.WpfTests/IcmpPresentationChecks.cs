@@ -27,7 +27,7 @@ internal static class IcmpPresentationChecks
             interval: TimeSpan.FromMilliseconds(40), timeout: TimeSpan.FromMinutes(5), timeProvider: clock);
         using var monitoring = new MonitoringService(store, new OwnedIdentity(adapterId),
             vpnVerifier: new VpnRouteVerifier(new VpnDetectionService(new NoTunnel()), new NoRoutes()),
-            networkMonitor: new OwnedCounters(adapterId, clock), timeProvider: clock, icmpMonitor: icmp);
+            networkMonitor: new OwnedCounters(adapterId, clock), timeProvider: clock, icmpMonitor: icmp, reachabilityMonitor: TestReachability.Create());
         var created = 0;
         var exits = 0;
         using var context = new TrayApplicationContext(Application.Current, monitoring,
