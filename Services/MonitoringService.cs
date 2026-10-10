@@ -220,7 +220,18 @@ public sealed class MonitoringService : IDisposable
         RaiseChanged();
     }
 
-    public void RefreshRecognition() => _profileMonitor.Refresh();
+    public void RefreshRecognition()
+    {
+        lock (_gate)
+        {
+            if (_stopping || _disposed) return;
+            // A profile edit must discard resolutions captured before its commit,
+            // including observations already published but waiting for this gate.
+            // Keep the physical connection/session visible during the existing refresh.
+            var cutoff = _profileMonitor.Refresh(invalidatePending: true, preserveCurrentState: true);
+            _lastHandledObservationSequence = Math.Max(_lastHandledObservationSequence, cutoff);
+        }
+    }
 
     private void ProfileMonitor_OnObservationReceived(object? sender, ConnectionObservationEventArgs observation)
     {

@@ -23,6 +23,8 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args.Length > 0 && args[0] == "--profiles-live-validation")
+            return LiveProfileValidation.Run();
         if (args.Length == 3 && args[0] == "--background-exit-child")
             return RunBackgroundExitChild(args[1], args[2]);
         if (args.Length >= 3 && args[0] == "--launch-child")
@@ -279,6 +281,7 @@ internal static class Program
             IcmpQualityChecks.Run(ownedRoot, adapter.Id, Check);
             InternetReachabilityChecks.Run(ownedRoot, adapter.Id, Check);
             ConnectionDetailsChecks.Run(ownedRoot, Check);
+            ProfileManagementChecks.Run(ownedRoot, Check);
             Console.WriteLine($"{_passed}/{_passed} WPF integration checks passed. Isolated data: {ownedRoot}");
             return 0;
         }

@@ -81,7 +81,7 @@ The current schema uses `PRAGMA user_version = 5`. Compatible unversioned databa
 
 A profile represents Telco / ISP + Device, such as `DITO — D2 Router`. Network mappings are separate: several SSIDs can belong to the same profile. No telco is guessed and no profile is created automatically.
 
-On **Connections**, use **Profiles** in the current-connection card to create or edit profiles and see their mappings. For an **Unassigned network**, choose **Assign profile**, select an existing profile, or choose **New profile** and enter the Telco / ISP and Device names. Creating and assigning together is atomic. Repeating an assignment to the same profile keeps the existing mapping; a conflicting assignment is rejected. Profile deletion is deferred.
+On **Connections**, use **Profiles** in the current-connection card to create or edit profiles and manage their mappings. **Map current connection** maps the latest usable identity to the selected saved profile. Repeating the same mapping is a no-op; moving another profile's mapping requires **Move** confirmation. **Remove mapping** removes only the selected network, and **Delete profile** requires explicit confirmation. For an **Unassigned network**, **Assign profile** retains the existing assignment workflow, including atomic creation and assignment together.
 
 Wi-Fi recognition reads the actual associated SSID through Windows Native Wi-Fi APIs. Exact SSID case and whitespace are preserved; non-text SSIDs use lossless byte identities. Ethernet recognition uses an identified Windows network GUID, not an adapter GUID. Windows location permissions may be needed to read Wi-Fi SSIDs, and unidentified Ethernet networks cannot be assigned until Windows supplies a stable identity.
 
@@ -91,7 +91,7 @@ Physical connection recognition is independent of the bandwidth adapter selector
 
 ## Connection sessions and events
 
-A session is one continuous observed physical network identity and adapter. Different SSIDs create different sessions even when they map to the same profile. Repeated callbacks and friendly-name changes do not split a session. Valid unassigned networks get sessions with no profile; assigning the current network associates only its active session. Completed sessions keep their profile association and captured network identity. Profile names in history follow their stable profile ID.
+A session is one continuous observed physical network identity and adapter. Different SSIDs create different sessions even when they map to the same profile. Repeated callbacks and friendly-name changes do not split a session. Valid unassigned networks get sessions with no profile; assigning the current network associates only its active session. Completed sessions keep their profile association and captured network identity unless that profile is explicitly deleted. Profile names in history follow their stable profile ID; profile deletion clears the association while retaining the connection records.
 
 Dashboard and Connections show the current session duration and traffic. On **History**, choose **View history** to open the latest 100 sessions and 200 events, with UTC timestamps displayed in local time. Events include connection/disconnection, network change, profile assignment/change, sleep, resume, unexpected-exit recovery, normal application exit, and network-identity unavailability.
 
@@ -372,6 +372,60 @@ The Connections checks use owned snapshots and network/probe fakes. A separate
 explicit `--connections-live-validation` regression-harness command reads one
 current default monitored adapter and existing identity without changing adapter
 configuration, sending probes, or opening the real application database.
+
+## Connections 002 — Profile Management UX
+
+The Profiles window retains its rectangular utility style, left profile list and
+right editor. Telco / ISP and Device remain required, surrounding whitespace is
+trimmed, and the existing `Telco — Device` preview updates while typing. Duplicate
+display names remain allowed by the existing model; saving a selected profile
+updates its ID rather than creating another row.
+
+**New profile** clears selection, editable fields and mappings and enters an
+explicit unsaved state. It writes nothing until Save and makes deletion unavailable.
+General profile management creates only the profile on Save. The existing explicit
+assignment workflow retains atomic Create and assign behavior.
+
+**Map current connection** reads the latest eligible connection identity from the
+existing `MonitoringService` snapshot. Disconnected, detecting, sleeping and
+identity-unavailable states cannot create a mapping. Save edits before mapping a
+selected profile. Repeated identical mappings keep the same row. A mapping owned
+by another profile opens a compact **Move / Cancel** confirmation naming its owner;
+Move transfers the existing row transactionally and checks that its owner and the
+current connection have not changed while the confirmation was open.
+
+**Remove mapping** is enabled only for a selected mapping. It removes that row
+immediately, leaves the profile and other networks intact, and refreshes resolution.
+**Delete profile** is available only for saved profiles and requires **Delete / Cancel**
+confirmation. One transaction clears the deleted profile's nullable associations
+in sessions/events, removes its mappings and then removes the profile. History,
+network identities, timestamps, byte totals and VPN intervals remain. The deleted
+profile's name is no longer available through those detached history associations;
+existing event messages remain. Another profile is selected afterward, or the
+editor enters a clean empty/new state. The existing schema and foreign-key rules
+are unchanged.
+
+All actions persist through `ProfileStore` in the existing SQLite database. Failed
+writes keep saved state intact and show an inline message. Successful mutations
+raise the existing `ProfilesChanged` event, and the existing recognition refresh
+updates both current-connection presentation and Connections 001 details without
+restarting monitoring or splitting a session. Profile refreshes reject resolutions
+captured before the write while retaining the visible physical connection. The
+window consumes monitoring notifications and detaches on close; it starts no
+worker, timer, watcher or polling loop and does not reset editor drafts on network
+changes.
+
+The editor uses vertical scrolling at the existing 620×500 minimum size. Long
+profile/network names trim or wrap with tooltips within their columns. Move and
+Delete confirmations use the same simple rectangular styling.
+
+Deterministic regression/WPF checks use owned data and fake network/probe sources.
+The WPF harness also offers an explicit `--profiles-live-validation` command. It
+opens Profiles against an isolated database, maps a real current identity, checks
+the main Connections presentation, removes the temporary mapping/profile and
+retains the connection session. Health transports are fakes, and it never opens
+the user's real profile database or changes network configuration. An unavailable
+native identity skips that live-only check with its reason instead of guessing.
 
 ## Verification
 

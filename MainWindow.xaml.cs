@@ -304,7 +304,7 @@ public partial class MainWindow : Window
     {
         try
         {
-            var dialog = new ProfileManagerWindow(_monitoring.Profiles, network) { Owner = this };
+            var dialog = new ProfileManagerWindow(_monitoring.Profiles, network, _monitoring) { Owner = this };
             dialog.ProfilesChanged += (_, _) => _monitoring.RefreshRecognition();
             dialog.ShowDialog();
             _monitoring.RefreshRecognition();

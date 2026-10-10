@@ -69,6 +69,99 @@ public sealed class ProfileStore
         return mappings;
     }
 
+    public NetworkMapping? GetMapping(string networkType, string networkIdentifier)
+    {
+        var type = ValidateIdentity(networkType, networkIdentifier);
+        using var connection = Open();
+        return FindMapping(connection, null, type, networkIdentifier);
+    }
+
+    public NetworkMapping MoveMapping(long mappingId, long expectedProfileId, long destinationProfileId)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(mappingId);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(expectedProfileId);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(destinationProfileId);
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+        NetworkMapping existing;
+        using (var command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = """
+                SELECT Id, ProfileId, NetworkType, NetworkIdentifier, FriendlyName, CreatedAt
+                FROM NetworkMappings WHERE Id=$id AND ProfileId=$expectedProfileId;
+                """;
+            command.Parameters.AddWithValue("$id", mappingId);
+            command.Parameters.AddWithValue("$expectedProfileId", expectedProfileId);
+            using var reader = command.ExecuteReader();
+            if (!reader.Read()) throw MappingChanged();
+            existing = ReadMapping(reader);
+        }
+        RequireProfile(connection, transaction, destinationProfileId);
+        if (expectedProfileId == destinationProfileId)
+        {
+            transaction.Commit();
+            return existing;
+        }
+
+        NetworkMapping moved;
+        using (var command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = """
+                UPDATE NetworkMappings SET ProfileId=$destinationProfileId
+                WHERE Id=$id AND ProfileId=$expectedProfileId
+                RETURNING Id, ProfileId, NetworkType, NetworkIdentifier, FriendlyName, CreatedAt;
+                """;
+            command.Parameters.AddWithValue("$id", mappingId);
+            command.Parameters.AddWithValue("$expectedProfileId", expectedProfileId);
+            command.Parameters.AddWithValue("$destinationProfileId", destinationProfileId);
+            using var reader = command.ExecuteReader();
+            if (!reader.Read()) throw MappingChanged();
+            moved = ReadMapping(reader);
+        }
+        transaction.Commit();
+        return moved;
+    }
+
+    public void RemoveMapping(long mappingId, long profileId)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(mappingId);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(profileId);
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "DELETE FROM NetworkMappings WHERE Id=$id AND ProfileId=$profileId;";
+        command.Parameters.AddWithValue("$id", mappingId);
+        command.Parameters.AddWithValue("$profileId", profileId);
+        if (command.ExecuteNonQuery() != 1) throw MappingChanged();
+        transaction.Commit();
+    }
+
+    public void DeleteProfile(long profileId)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(profileId);
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+        RequireProfile(connection, transaction, profileId);
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        // History keeps its identities, events, timestamps and totals after a profile is removed.
+        // Existing restrictive foreign keys remain; detach only the nullable profile associations.
+        command.CommandText = """
+            UPDATE ConnectionSessions SET ProfileId=NULL WHERE ProfileId=$profileId;
+            UPDATE ConnectionEvents SET ProfileId=NULL WHERE ProfileId=$profileId;
+            DELETE FROM NetworkMappings WHERE ProfileId=$profileId;
+            """;
+        command.Parameters.AddWithValue("$profileId", profileId);
+        command.ExecuteNonQuery();
+        command.CommandText = "DELETE FROM ConnectionProfiles WHERE Id=$profileId;";
+        if (command.ExecuteNonQuery() != 1)
+            throw new InvalidOperationException("The selected connection profile no longer exists. Refresh the profile list and try again.");
+        transaction.Commit();
+    }
+
     public ConnectionProfile CreateProfile(string telcoName, string deviceName)
     {
         var names = ValidateNames(telcoName, deviceName);
@@ -216,7 +309,7 @@ public sealed class ProfileStore
     }
 
     private static NetworkMapping? FindMapping(
-        SqliteConnection connection, SqliteTransaction transaction, string networkType, string networkIdentifier)
+        SqliteConnection connection, SqliteTransaction? transaction, string networkType, string networkIdentifier)
     {
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
@@ -229,6 +322,16 @@ public sealed class ProfileStore
         command.Parameters.AddWithValue("$identifier", networkIdentifier);
         using var reader = command.ExecuteReader();
         return reader.Read() ? ReadMapping(reader) : null;
+    }
+
+    private static void RequireProfile(SqliteConnection connection, SqliteTransaction transaction, long profileId)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT count(*) FROM ConnectionProfiles WHERE Id=$profileId;";
+        command.Parameters.AddWithValue("$profileId", profileId);
+        if (Convert.ToInt64(command.ExecuteScalar()) == 0)
+            throw new InvalidOperationException("The selected connection profile no longer exists. Refresh the profile list and try again.");
     }
 
     private static (string Telco, string Device) ValidateNames(string telcoName, string deviceName)
@@ -261,4 +364,7 @@ public sealed class ProfileStore
 
     private static InvalidOperationException MappingConflict() => new(
         "This network is already assigned to another connection profile. Refresh the connection and use its existing assignment.");
+
+    private static InvalidOperationException MappingChanged() => new(
+        "This network mapping was removed or moved to another profile. Refresh the mapping list and try again.");
 }

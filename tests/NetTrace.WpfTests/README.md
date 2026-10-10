@@ -1,6 +1,6 @@
 # NetTrace WPF integration tests
 
-The 335 Windows-only STA integration checks use isolated temporary databases and injected
+The 370 Windows-only STA integration checks use isolated temporary databases and injected
 physical/VPN identities. They exercise the existing dashboard, persistence,
 profile, power, recovery and ownership behavior together with Task 005A tray and
 background lifecycle behavior. They retain the previous 77 WPF lifecycle checks,
@@ -93,6 +93,29 @@ minimize/restore, tray recreation and shutdown checks retain the existing worker
 and timers. Thirteen PNG previews under `connection-details-previews` show the
 requested states, each entire adapter card, and the 760×600 minimum layout with
 long IPv6 and multiple DNS servers.
+
+Connections 002 adds 35 checks in `ProfileManagementChecks.cs`. They exercise new
+and edited profiles, required trimmed fields, preserved duplicate-name rules,
+latest-identity mapping, duplicate no-ops, Move/Cancel conflicts, selected-mapping
+removal, Delete/Cancel and the final-profile empty state. Failed writes retain UI
+and persisted state; mapping changes during confirmation cannot move a replacement
+network even if SQLite reuses its row ID. Active profile changes update Connections
+without changing the physical session or adding monitors, timers or subscriptions.
+Nine PNGs under `profile-management-previews` cover existing/new/empty profiles,
+selected/unselected mappings, both confirmations, long names and the 620×500 minimum.
+
+One explicit live validation can be run separately with:
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests/NetTrace.WpfTests.csproj -- --profiles-live-validation
+```
+
+This uses the real existing identity/adapter implementation with an owned temporary
+database. It creates a temporary profile through Profiles, maps the current network,
+verifies the main Connections presentation, removes the temporary mapping and deletes
+the temporary profile while retaining its physical session. It never opens or edits
+the user's real profile database, changes network settings or sends health probes.
+It reports an unavailable identity as a skip and never runs in the automated suite.
 
 Legacy sampler/lifecycle fixtures now use owned adapter inventory and counters,
 including child processes. The complete suite requires no real adapter or network

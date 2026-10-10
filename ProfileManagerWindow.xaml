@@ -11,7 +11,7 @@
             <Setter Property="Padding" Value="8,6"/>
         </Style>
         <Style TargetType="Button">
-            <Setter Property="Padding" Value="12,6"/>
+            <Setter Property="Padding" Value="10,6"/>
             <Setter Property="Background" Value="#172036"/>
             <Setter Property="Foreground" Value="#F8FAFC"/>
             <Setter Property="BorderBrush" Value="#2B3957"/>
@@ -20,6 +20,9 @@
             <Setter Property="Background" Value="#111A2E"/>
             <Setter Property="Foreground" Value="#F8FAFC"/>
             <Setter Property="BorderBrush" Value="#2B3957"/>
+            <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled"/>
+            <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
         </Style>
     </Window.Resources>
     <Grid Margin="22">
@@ -28,10 +31,10 @@
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
-        <StackPanel Margin="0,0,0,18">
+        <StackPanel Margin="0,0,0,16">
             <TextBlock x:Name="HeadingText" Text="Connection profiles" FontSize="22" FontWeight="SemiBold"/>
             <TextBlock x:Name="AssignmentText" Text="Select a profile to edit, or create a new one." Foreground="#94A3B8"
-                       Margin="0,6,0,0" TextWrapping="Wrap"/>
+                       Margin="0,6,0,0" TextTrimming="CharacterEllipsis"/>
         </StackPanel>
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
@@ -40,51 +43,54 @@
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
             <DockPanel>
-                <Button x:Name="NewProfileButton" Content="New profile" Click="NewProfile_OnClick" DockPanel.Dock="Bottom" Margin="0,10,0,0"/>
-                <ListBox x:Name="ProfilesList" DisplayMemberPath="DisplayName" SelectionChanged="ProfilesList_OnSelectionChanged"/>
-            </DockPanel>
-            <Grid Grid.Column="2">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="*"/>
-                </Grid.RowDefinitions>
-                <StackPanel>
-                    <TextBlock Text="Telco / ISP" Foreground="#94A3B8" Margin="0,0,0,5"/>
-                    <TextBox x:Name="TelcoNameBox" MaxLength="200" TextChanged="ProfileFields_OnTextChanged"/>
+                <StackPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
+                    <Button x:Name="NewProfileButton" Content="New profile" Click="NewProfile_OnClick"/>
+                    <Button x:Name="DeleteProfileButton" Content="Delete profile" Click="DeleteProfile_OnClick" Margin="0,8,0,0" IsEnabled="False"/>
                 </StackPanel>
-                <StackPanel Grid.Row="1" Margin="0,12,0,0">
-                    <TextBlock Text="Device" Foreground="#94A3B8" Margin="0,0,0,5"/>
-                    <TextBox x:Name="DeviceNameBox" MaxLength="200" TextChanged="ProfileFields_OnTextChanged"/>
-                </StackPanel>
-                <TextBlock x:Name="PreviewText" Grid.Row="2" FontSize="17" FontWeight="SemiBold" Margin="0,14,0,0" TextTrimming="CharacterEllipsis"/>
-                <WrapPanel Grid.Row="3" Margin="0,12,0,0">
-                    <Button x:Name="SaveProfileButton" Content="Save profile" Click="SaveProfile_OnClick" Margin="0,0,8,0"/>
-                    <Button x:Name="AssignNetworkButton" Content="Assign this network" Click="AssignNetwork_OnClick" Visibility="Collapsed"/>
-                </WrapPanel>
-                <TextBlock Grid.Row="4" Text="Known network mappings" Foreground="#94A3B8" Margin="0,18,0,7"/>
-                <ListBox x:Name="MappingsList" Grid.Row="5">
+                <ListBox x:Name="ProfilesList" SelectionChanged="ProfilesList_OnSelectionChanged">
                     <ListBox.ItemTemplate>
                         <DataTemplate>
-                            <StackPanel Margin="4">
-                                <TextBlock Text="{Binding TypeDisplayName}" Foreground="#94A3B8" FontSize="11"/>
-                                <TextBlock Text="{Binding DisplayName}" TextWrapping="Wrap"/>
-                            </StackPanel>
+                            <TextBlock Text="{Binding DisplayName}" ToolTip="{Binding DisplayName}" TextTrimming="CharacterEllipsis" Margin="4"/>
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>
-            </Grid>
+            </DockPanel>
+            <ScrollViewer x:Name="ProfileEditorScrollViewer" Grid.Column="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel>
+                    <TextBlock x:Name="EditorStateText" Text="New profile" Foreground="#94A3B8" Margin="0,0,0,10"/>
+                    <TextBlock Text="Telco / ISP" Foreground="#94A3B8" Margin="0,0,0,5"/>
+                    <TextBox x:Name="TelcoNameBox" MaxLength="200" TextChanged="ProfileFields_OnTextChanged"/>
+                    <TextBlock Text="Device" Foreground="#94A3B8" Margin="0,10,0,5"/>
+                    <TextBox x:Name="DeviceNameBox" MaxLength="200" TextChanged="ProfileFields_OnTextChanged"/>
+                    <TextBlock x:Name="PreviewText" FontSize="17" FontWeight="SemiBold" Margin="0,12,0,0" TextTrimming="CharacterEllipsis"/>
+                    <WrapPanel Margin="0,10,0,0">
+                        <Button x:Name="SaveProfileButton" Content="Save profile" Click="SaveProfile_OnClick" Margin="0,0,8,0"/>
+                        <Button x:Name="AssignNetworkButton" Content="Map current connection" Click="AssignNetwork_OnClick"/>
+                    </WrapPanel>
+                    <DockPanel Margin="0,14,0,6">
+                        <Button x:Name="RemoveMappingButton" Content="Remove mapping" Click="RemoveMapping_OnClick" DockPanel.Dock="Right" Margin="8,0,0,0" IsEnabled="False"/>
+                        <TextBlock Text="Known network mappings" Foreground="#94A3B8" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                    </DockPanel>
+                    <ListBox x:Name="MappingsList" Height="110" SelectionChanged="MappingsList_OnSelectionChanged">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Margin="4">
+                                    <TextBlock Text="{Binding TypeDisplayName}" Foreground="#94A3B8" FontSize="11"/>
+                                    <TextBlock Text="{Binding DisplayName}" ToolTip="{Binding DisplayName}" TextTrimming="CharacterEllipsis"/>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </StackPanel>
+            </ScrollViewer>
         </Grid>
         <Grid Grid.Row="2" Margin="0,16,0,0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
-            <TextBlock x:Name="MessageText" TextWrapping="Wrap" Foreground="#FBBF24" Margin="0,0,12,0" VerticalAlignment="Center"/>
-            <Button Grid.Column="1" Content="Close" IsCancel="True"/>
+            <TextBlock x:Name="MessageText" TextWrapping="Wrap" Foreground="#FBBF24" Margin="0,0,12,0" VerticalAlignment="Center" MaxHeight="50"/>
+            <Button x:Name="CloseButton" Grid.Column="1" Content="Close" IsCancel="True" Click="Close_OnClick"/>
         </Grid>
     </Grid>
 </Window>

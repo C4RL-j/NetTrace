@@ -119,4 +119,14 @@ It performs no lookups/probes, configuration changes or database access. Profile
 mapping is intentionally not loaded from real application data. It never runs as
 part of the automated cases.
 
+Connections 002 adds 23 groups in `ProfileManagementTests.cs`, bringing the console
+suite to 406 groups. They cover saved-profile creation/editing and name rules,
+exact mapping identity, duplicate no-ops, guarded ownership moves/removal,
+persistence after reopening, atomic profile deletion and rollback. Deletion keeps
+physical/VPN history, events, usage and peaks while clearing references to the
+deleted profile. A deliberately delayed resolved observation verifies immediate
+recognition refresh rejects stale profile state without replacing the current
+physical session or counter baseline. Existing schema and matching rules remain
+unchanged.
+
 Both harnesses use owned temporary databases and injected network/VPN/ICMP evidence. They do not open real application data or change Windows network settings.

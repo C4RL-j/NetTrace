@@ -49,7 +49,7 @@ public sealed class ConnectionProfileMonitor : IDisposable
         Refresh();
     }
 
-    public long Refresh(bool invalidatePending = false)
+    public long Refresh(bool invalidatePending = false, bool preserveCurrentState = false)
     {
         lock (_gate)
         {
@@ -58,7 +58,8 @@ public sealed class ConnectionProfileMonitor : IDisposable
                 if (invalidatePending)
                 {
                     _generation++;
-                    _current = new(ConnectionStatus.Detecting, null, null, "Detecting physical connection…");
+                    if (!preserveCurrentState)
+                        _current = new(ConnectionStatus.Detecting, null, null, "Detecting physical connection…");
                 }
                 _refreshTimer.Change(200, Timeout.Infinite);
             }
