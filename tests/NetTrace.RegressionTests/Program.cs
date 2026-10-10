@@ -134,7 +134,37 @@ var tests = new (string Name, Action Run)[]
     ("No usable IP family cannot manufacture a full or split tunnel", VpnFamilyNeitherUsable),
     ("Unknown native family observations cannot be ignored during aggregation", VpnFamilyUnknownNotIgnored),
     ("Completed loopback and inactive family snapshots prove unavailability", VpnFamilyUnavailableEvidence),
-    ("Missing or contradictory family metadata cannot claim unavailability", VpnFamilyMetadataSafety)
+    ("Missing or contradictory family metadata cannot claim unavailability", VpnFamilyMetadataSafety),
+    ("Version-three migration preserves usage, profiles, mappings and physical history", VpnVersionThreeUpgrade),
+    ("Fresh version-four schema stores protected VPN intervals without byte columns", VpnFreshSchema),
+    ("A failed version-four migration rolls back schema and retains prior data", VpnFailedMigration),
+    ("Legacy version-three copy migrates without changing its rollback source", VpnLegacyVersionThreeUpgrade),
+    ("VPN off to on opens one child interval without changing its physical session", VpnSessionStarts),
+    ("Repeated VPN observations confirm the same interval after reopening", VpnSessionRepeated),
+    ("VPN on to off ends only the VPN interval", VpnSessionDisconnects),
+    ("Physical session boundaries atomically close their active VPN interval", VpnSessionParentCloses),
+    ("Routing mode changes update one VPN interval deterministically", VpnSessionRouteChanges),
+    ("SQLite enforces at most one active VPN interval", VpnSessionSingleActive),
+    ("VPN child relationships protect historical physical session references", VpnSessionRelationships),
+    ("A failed VPN tunnel transition rolls back the previous interval closure", VpnSessionAtomicTransition),
+    ("Unavailable or ambiguous VPN detection does not invent a child interval", VpnSessionUncertainDetection),
+    ("Changing native tunnel identity ends and replaces the VPN interval", VpnSessionTunnelChanges),
+    ("RAS-only VPN identities persist honestly without synthetic interface identifiers", VpnSessionRasIdentity),
+    ("Stale and out-of-order VPN observations cannot rewrite confirmed intervals", VpnSessionObservationSafety),
+    ("VPN persistence leaves bandwidth totals and physical event history unchanged", VpnSessionPreservesPhysicalAccounting),
+    ("Closed or unconfirmed physical parents cannot accept VPN observations", VpnSessionParentValidation),
+    ("VPN history queries return deterministic parent-scoped intervals", VpnSessionHistoryQueries),
+    ("VPN monitoring persists native observations without physical or event duplication", VpnSessionMonitorObservations),
+    ("A slow VPN query cannot attach an old observation to a successor physical session", VpnSessionMonitorStaleParent),
+    ("VPN activation records one connected event with its physical context", VpnEventsConnected),
+    ("Repeated and reopened VPN observations do not duplicate connection events", VpnEventsRepeated),
+    ("Actual routing mode changes record one event without restarting intervals", VpnEventsRouteChanged),
+    ("VPN off records one disconnected event while the physical connection remains active", VpnEventsDisconnected),
+    ("VPN event context follows the current physical profile without rewriting history", VpnEventsPhysicalContext),
+    ("Physical session boundaries record exactly one VPN disconnect on the original parent", VpnEventsParentClosure),
+    ("Failed VPN event inserts roll back VPN and physical lifecycle changes atomically", VpnEventsAtomicFailure),
+    ("Existing version-four databases gain VPN event triggers without backfilling history", VpnEventsExistingVersionFour),
+    ("Native tunnel replacement records a disconnect and connect in deterministic order", VpnEventsTunnelReplacement)
 };
 
 var failed = 0;
@@ -163,7 +193,7 @@ static void CleanInstall()
     Equal(workspace.CurrentPath, store.DatabasePath, "Database path");
     Require(File.Exists(workspace.CurrentPath), "The current database must be created.");
     Require(!Directory.Exists(Path.GetDirectoryName(workspace.LegacyPath)), "A clean install must not create a legacy directory.");
-    Equal(3L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Schema version");
+    Equal(4L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Schema version");
     Equal((0L, 0L), store.GetTotals(new DateOnly(2026, 1, 1), new DateOnly(2026, 1, 31)), "Fresh totals");
 
     using var connection = Open(workspace.CurrentPath);
@@ -186,7 +216,7 @@ static void LegacyUpgrade()
 
     Equal(workspace.CurrentPath, store.DatabasePath, "Migrated database path");
     AssertFixtureTotals(store);
-    Equal(3L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Migrated schema version");
+    Equal(4L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Migrated schema version");
     Equal(0L, ReadInteger(workspace.LegacyPath, "PRAGMA user_version;"), "Legacy schema version");
     Equal(1L, ReadInteger(workspace.CurrentPath, "SELECT count(*) FROM legacy_metadata WHERE value = 'keep this table';"), "Other legacy tables");
     Equal(original, Hash(workspace.LegacyPath), "Legacy database bytes");
@@ -200,7 +230,7 @@ static void ExistingUnversionedDatabase()
     var store = new UsageStore(workspace.Root);
 
     AssertFixtureTotals(store);
-    Equal(3L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Existing database schema version");
+    Equal(4L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Existing database schema version");
     Equal(1L, ReadInteger(workspace.CurrentPath, "SELECT count(*) FROM legacy_metadata;"), "Existing unrelated table");
     Require(!File.Exists(workspace.LegacyPath), "Existing NetTrace startup must not create a legacy database.");
 }
@@ -238,7 +268,7 @@ static void PersistedTotals()
     Equal((1_500L, 300L), reopened.GetTotals(today, today), "Today totals");
     Equal((4_500L, 700L), reopened.GetTotals(today.AddDays(-6), today), "Seven-day inclusive totals");
     Equal((9_500L, 1_300L), reopened.GetTotals(today.AddDays(-29), today), "Thirty-day inclusive totals");
-    Equal(3L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Version after reopening");
+    Equal(4L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Version after reopening");
 }
 
 static void WalUpgrade()
@@ -258,7 +288,7 @@ static void WalUpgrade()
 
     Equal((987_654L, 321L), store.GetTotals(new DateOnly(2026, 1, 16), new DateOnly(2026, 1, 16)), "WAL-only history");
     AssertFixtureTotals(store);
-    Equal(3L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "WAL copy schema version");
+    Equal(4L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "WAL copy schema version");
     Equal(databaseHash, Hash(workspace.LegacyPath), "Legacy main file during WAL migration");
     Equal(walHash, Hash(walPath), "Legacy WAL during migration");
     Equal(0L, ReadInteger(workspace.LegacyPath, "PRAGMA user_version;"), "Legacy WAL schema version");
@@ -292,13 +322,13 @@ static void InvalidCurrentSchema()
 static void FutureCurrentVersion()
 {
     using var workspace = new TestWorkspace();
-    CreateFixture(workspace.CurrentPath, version: 4);
+    CreateFixture(workspace.CurrentPath, version: 5);
     var original = Hash(workspace.CurrentPath);
 
     ExpectStartupFailure(workspace.Root);
 
     Equal(original, Hash(workspace.CurrentPath), "Future current database bytes");
-    Equal(4L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Future current version");
+    Equal(5L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Future current version");
 }
 
 static void InvalidVersionedCurrentSchema()
@@ -316,14 +346,14 @@ static void InvalidVersionedCurrentSchema()
 static void FutureLegacyVersion()
 {
     using var workspace = new TestWorkspace();
-    CreateFixture(workspace.LegacyPath, version: 4);
+    CreateFixture(workspace.LegacyPath, version: 5);
     var original = Hash(workspace.LegacyPath);
 
     ExpectStartupFailure(workspace.Root);
 
     Require(!File.Exists(workspace.CurrentPath), "A future legacy schema must not be published as a usable current database.");
     Equal(original, Hash(workspace.LegacyPath), "Future legacy database bytes");
-    Equal(4L, ReadInteger(workspace.LegacyPath, "PRAGMA user_version;"), "Future legacy version");
+    Equal(5L, ReadInteger(workspace.LegacyPath, "PRAGMA user_version;"), "Future legacy version");
 }
 
 static void CorruptLegacy()
@@ -397,7 +427,7 @@ static void VersionOneUpgrade()
     var store = new UsageStore(workspace.Root);
 
     AssertFixtureTotals(store);
-    Equal(3L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Version-one upgrade version");
+    Equal(4L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Version-one upgrade version");
     Equal(originalSchema, ReadText(workspace.CurrentPath, "SELECT sql FROM sqlite_schema WHERE name = 'daily_usage';"), "Usage table definition after upgrade");
     Equal(originalRootPage, ReadInteger(workspace.CurrentPath, "SELECT rootpage FROM sqlite_schema WHERE name = 'daily_usage';"), "Usage table remains in its original B-tree");
     Equal(3L, ReadInteger(workspace.CurrentPath, "SELECT count(*) FROM daily_usage;"), "Original daily rows");
@@ -1088,7 +1118,7 @@ static void VersionTwoUpgrade()
 
     var store = new UsageStore(workspace.Root);
 
-    Equal(3L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Version-two upgrade version");
+    Equal(4L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Version-two upgrade version");
     AssertFixtureTotals(store);
     foreach (var (table, original) in originalTables)
     {
@@ -1102,6 +1132,59 @@ static void VersionTwoUpgrade()
     Equal(41L, new ProfileStore(store).ResolveProfile("WiFi", "DITO_HOME_5G")!.Id, "Migrated recognition still works");
 }
 
+// An independent pre-VPN fixture: never derive historical schema by downgrading the current database.
+static void CreateVersionThreeFixture(string path)
+{
+    CreateVersionTwoFixture(path);
+    using var connection = Open(path);
+    Execute(connection, """
+        CREATE TABLE ConnectionSessions (
+            Id INTEGER PRIMARY KEY,
+            ProfileId INTEGER REFERENCES ConnectionProfiles(Id) ON DELETE RESTRICT,
+            NetworkType TEXT NOT NULL CHECK(length(trim(NetworkType)) > 0),
+            NetworkIdentifier TEXT NOT NULL COLLATE BINARY CHECK(length(NetworkIdentifier) > 0),
+            NetworkFriendlyName TEXT NOT NULL,
+            AdapterId TEXT NOT NULL,
+            StartedAtUtc TEXT NOT NULL,
+            LastConfirmedAtUtc TEXT NOT NULL,
+            EndedAtUtc TEXT,
+            EndReason TEXT,
+            DownloadBytes INTEGER NOT NULL DEFAULT 0 CHECK(DownloadBytes >= 0),
+            UploadBytes INTEGER NOT NULL DEFAULT 0 CHECK(UploadBytes >= 0),
+            CHECK(LastConfirmedAtUtc >= StartedAtUtc),
+            CHECK(EndedAtUtc IS NULL OR EndedAtUtc >= LastConfirmedAtUtc),
+            CHECK((EndedAtUtc IS NULL AND EndReason IS NULL) OR
+                  (EndedAtUtc IS NOT NULL AND EndReason IS NOT NULL))
+        );
+        CREATE UNIQUE INDEX UX_ConnectionSessions_Active ON ConnectionSessions((1)) WHERE EndedAtUtc IS NULL;
+        CREATE INDEX IX_ConnectionSessions_StartedAtUtc ON ConnectionSessions(StartedAtUtc DESC, Id DESC);
+        CREATE INDEX IX_ConnectionSessions_ProfileId ON ConnectionSessions(ProfileId, StartedAtUtc DESC);
+        CREATE TABLE ConnectionEvents (
+            Id INTEGER PRIMARY KEY,
+            OccurredAtUtc TEXT NOT NULL,
+            EventType TEXT NOT NULL CHECK(length(trim(EventType)) > 0),
+            SessionId INTEGER REFERENCES ConnectionSessions(Id) ON DELETE RESTRICT,
+            ProfileId INTEGER REFERENCES ConnectionProfiles(Id) ON DELETE RESTRICT,
+            NetworkType TEXT,
+            NetworkIdentifier TEXT COLLATE BINARY,
+            Message TEXT NOT NULL
+        );
+        CREATE INDEX IX_ConnectionEvents_OccurredAtUtc ON ConnectionEvents(OccurredAtUtc DESC, Id DESC);
+        CREATE INDEX IX_ConnectionEvents_SessionId ON ConnectionEvents(SessionId);
+        CREATE INDEX IX_ConnectionEvents_ProfileId ON ConnectionEvents(ProfileId);
+        INSERT INTO ConnectionSessions VALUES (61, NULL, 'WiFi', 'OLD_HOME', 'Original old SSID', 'physical-wifi',
+            '2026-01-15T01:00:00.0000000+00:00', '2026-01-15T02:00:00.0000000+00:00',
+            '2026-01-15T02:00:00.0000000+00:00', 'NetworkChanged', 4096, 512);
+        INSERT INTO ConnectionSessions VALUES (62, 41, 'WiFi', 'DITO_HOME', 'Current Wi-Fi', 'physical-wifi',
+            '2026-01-15T03:00:00.0000000+00:00', '2026-01-15T03:15:00.0000000+00:00', NULL, NULL, 8192, 1024);
+        INSERT INTO ConnectionEvents VALUES (71, '2026-01-15T01:00:00.0000000+00:00', 'Connected', 61, NULL,
+            'WiFi', 'OLD_HOME', 'Original event');
+        INSERT INTO ConnectionEvents VALUES (72, '2026-01-15T03:00:00.0000000+00:00', 'NetworkChanged', 62, 41,
+            'WiFi', 'DITO_HOME', 'Current event');
+        PRAGMA user_version=3;
+        """);
+}
+
 static void LegacyVersionTwoUpgrade()
 {
     using var workspace = new TestWorkspace();
@@ -1111,7 +1194,7 @@ static void LegacyVersionTwoUpgrade()
     var store = new UsageStore(workspace.Root);
 
     AssertFixtureTotals(store);
-    Equal(3L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Copied version-two database reaches version three");
+    Equal(4L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Copied version-two database reaches version four");
     Equal(2L, ReadInteger(workspace.LegacyPath, "PRAGMA user_version;"), "Original version-two database is not migrated in place");
     Equal(original, Hash(workspace.LegacyPath), "Legacy version-two database bytes remain unchanged");
     Equal(41L, new ProfileStore(store).ResolveProfile("WiFi", "DITO_HOME")!.Id, "Legacy profile recognition preserved");
@@ -1633,7 +1716,7 @@ static void InvalidVersionThreeConstraints()
 
     ExpectStartupFailure(test.Root);
 
-    Equal(3L, ReadInteger(test.DatabasePath, "PRAGMA user_version;"), "Damaged v3 is not reversioned");
+    Equal(4L, ReadInteger(test.DatabasePath, "PRAGMA user_version;"), "Damaged history schema is not reversioned");
     Equal(1L, ReadInteger(test.DatabasePath, "SELECT count(*) FROM ConnectionSessions;"), "Startup rejection preserves session rows");
     Equal(1L, ReadInteger(test.DatabasePath, "SELECT count(*) FROM ConnectionEvents;"), "Startup rejection preserves events");
     Equal(1L, ReadInteger(test.DatabasePath, "SELECT count(*) FROM ConnectionProfiles;"), "Startup rejection preserves profiles");
@@ -1747,7 +1830,7 @@ static void DatabaseLeaseBeforeInitialization()
     Require(!File.Exists(workspace.CurrentPath), "Rejected startup must not create, migrate or open the database");
     var usage = new UsageStore(workspace.Root, owner);
     Equal(workspace.CurrentPath, usage.DatabasePath, "Held initialization ownership points to the same database");
-    Equal(3L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Owned startup initializes schema v3");
+    Equal(4L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Owned startup initializes schema v4");
     Require(owner.IsHeld, "Initialization does not release the caller's run ownership");
 }
 
@@ -1819,7 +1902,7 @@ static void StaleDatabaseLeaseFile()
     {
         Require(lease.IsHeld, "An unheld preexisting lock file is reusable");
         var store = new UsageStore(workspace.Root, lease);
-        Equal(3L, ReadInteger(store.DatabasePath, "PRAGMA user_version;"), "Stale sidecar does not block fresh database startup");
+        Equal(4L, ReadInteger(store.DatabasePath, "PRAGMA user_version;"), "Stale sidecar does not block fresh database startup");
     }
     Require(File.Exists(lockPath), "Shutdown does not delete and recreate the shared lock-file name");
     using var next = new DatabaseRunLease(workspace.CurrentPath);
@@ -1898,17 +1981,18 @@ static void HistoryQueryIndices()
 
 static void ExistingVersionThreeIndices()
 {
-    using var test = new SessionTestContext();
-    test.Tracker.ObserveConnection(Connected(Wifi()));
-    var originalSession = test.History.GetActiveSession();
-    var originalEvents = test.History.GetRecentEvents().ToArray();
-    using (var connection = Open(test.DatabasePath))
+    using var workspace = new TestWorkspace();
+    CreateVersionThreeFixture(workspace.CurrentPath);
+    var history = new ConnectionHistoryStore(workspace.CurrentPath);
+    var originalSession = history.GetActiveSession();
+    var originalEvents = history.GetRecentEvents().ToArray();
+    using (var connection = Open(workspace.CurrentPath))
         Execute(connection, "DROP INDEX IX_ConnectionEvents_SessionId; DROP INDEX IX_ConnectionEvents_ProfileId;");
-    _ = new UsageStore(test.Root);
-    Equal(3L, ReadInteger(test.DatabasePath, "PRAGMA user_version;"), "Index-only compatibility maintenance preserves v3");
-    Equal(originalSession, test.History.GetActiveSession(), "Index maintenance does not recover or rewrite active session rows");
-    Require(originalEvents.SequenceEqual(test.History.GetRecentEvents()), "Index maintenance does not rewrite event history");
-    Equal(2L, ReadInteger(test.DatabasePath, "SELECT count(*) FROM sqlite_schema WHERE name IN ('IX_ConnectionEvents_SessionId','IX_ConnectionEvents_ProfileId') AND type='index';"), "Both missing event relationship indices are restored");
+    _ = new UsageStore(workspace.Root);
+    Equal(4L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Historical v3 compatibility maintenance reaches current schema v4");
+    Equal(originalSession, history.GetActiveSession(), "Index maintenance does not recover or rewrite active session rows");
+    Require(originalEvents.SequenceEqual(history.GetRecentEvents()), "Index maintenance does not rewrite event history");
+    Equal(2L, ReadInteger(workspace.CurrentPath, "SELECT count(*) FROM sqlite_schema WHERE name IN ('IX_ConnectionEvents_SessionId','IX_ConnectionEvents_ProfileId') AND type='index';"), "Both missing event relationship indices are restored");
 }
 
 static void MalformedHistoryIndices()
@@ -1930,7 +2014,7 @@ static void MalformedHistoryIndices()
         Equal(originalHash, Hash(test.DatabasePath), "Rejected index definitions roll back all attempted index creation");
         Equal(0L, ReadInteger(test.DatabasePath, "SELECT count(*) FROM sqlite_schema WHERE name='IX_ConnectionEvents_ProfileId';"), "Failed validation does not publish an unrelated index repair");
         Equal(active, test.History.GetActiveSession(), "Rejected index definitions preserve the active session");
-        Equal(3L, ReadInteger(test.DatabasePath, "PRAGMA user_version;"), "Rejected index definitions preserve schema version");
+        Equal(4L, ReadInteger(test.DatabasePath, "PRAGMA user_version;"), "Rejected index definitions preserve schema version");
     }
 }
 
@@ -2614,6 +2698,817 @@ static void VpnFamilyMetadataSafety()
         "Incomplete competing route metadata still prevents confident route verification");
 }
 
+static void VpnVersionThreeUpgrade()
+{
+    using var workspace = new TestWorkspace();
+    CreateVersionThreeFixture(workspace.CurrentPath);
+    var tables = new[] { "daily_usage", "ConnectionProfiles", "NetworkMappings", "ConnectionSessions", "ConnectionEvents" };
+    var before = tables.ToDictionary(table => table, table => (
+        Schema: ReadText(workspace.CurrentPath, $"SELECT sql FROM sqlite_schema WHERE name='{table}';"),
+        Root: ReadInteger(workspace.CurrentPath, $"SELECT rootpage FROM sqlite_schema WHERE name='{table}';"),
+        Rows: SnapshotRows(workspace.CurrentPath, table)));
+
+    var usage = new UsageStore(workspace.Root);
+
+    Equal(4L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Version-three database reaches version four");
+    AssertFixtureTotals(usage);
+    foreach (var table in tables)
+    {
+        Equal(before[table].Schema, ReadText(workspace.CurrentPath, $"SELECT sql FROM sqlite_schema WHERE name='{table}';"), $"{table} definition preserved");
+        Equal(before[table].Root, ReadInteger(workspace.CurrentPath, $"SELECT rootpage FROM sqlite_schema WHERE name='{table}';"), $"{table} B-tree preserved");
+        Equal(before[table].Rows, SnapshotRows(workspace.CurrentPath, table), $"All {table} fields preserved");
+    }
+    Equal(62L, new ConnectionHistoryStore(usage).GetActiveSession()!.Id, "Migration does not recover or replace the active physical interval");
+    Equal(0L, ReadInteger(workspace.CurrentPath, "SELECT count(*) FROM VpnSessions;"), "Migration invents no prior VPN intervals");
+}
+
+static string SnapshotRows(string path, string table, string? condition = null)
+{
+    using var connection = Open(path);
+    using var command = connection.CreateCommand();
+    command.CommandText = $"SELECT * FROM {table}" + (condition is null ? "" : $" WHERE {condition}") + " ORDER BY rowid;";
+    using var reader = command.ExecuteReader();
+    var rows = new List<string>();
+    while (reader.Read())
+        rows.Add(string.Join("|", Enumerable.Range(0, reader.FieldCount).Select(index =>
+            reader.IsDBNull(index) ? "<null>" : Convert.ToString(reader.GetValue(index), System.Globalization.CultureInfo.InvariantCulture))));
+    return string.Join("\n", rows);
+}
+
+static void VpnFreshSchema()
+{
+    using var workspace = new TestWorkspace();
+    var usage = new UsageStore(workspace.Root);
+    Equal(4L, ReadInteger(usage.DatabasePath, "PRAGMA user_version;"), "Fresh install version");
+    Equal(0L, ReadInteger(usage.DatabasePath, "SELECT count(*) FROM VpnSessions;"), "Fresh VPN history is empty");
+    using var connection = Open(usage.DatabasePath);
+    using var command = connection.CreateCommand();
+    command.CommandText = "PRAGMA table_info(VpnSessions);";
+    var columns = new List<string>();
+    using (var reader = command.ExecuteReader())
+        while (reader.Read()) columns.Add(reader.GetString(1));
+    foreach (var column in new[] { "Id", "ConnectionSessionId", "InterfaceIndex", "InterfaceGuid", "InterfaceName", "RoutingMode", "StartedAtUtc", "LastConfirmedAtUtc", "EndedAtUtc", "EndReason" })
+        Require(columns.Contains(column), $"VPN history includes {column}.");
+    Require(!columns.Any(column => column.Contains("Bytes", StringComparison.OrdinalIgnoreCase)), "VPN history has no traffic accounting columns.");
+    command.CommandText = "PRAGMA foreign_key_list(VpnSessions);";
+    using (var reader = command.ExecuteReader())
+    {
+        Require(reader.Read(), "VPN interval has a physical parent relationship.");
+        Equal("ConnectionSessions", reader.GetString(2), "VPN parent table");
+        Equal("ConnectionSessionId", reader.GetString(3), "VPN parent key");
+        Equal("RESTRICT", reader.GetString(6), "Historical parent deletion is restricted");
+        Require(!reader.Read(), "VPN interval has one physical parent relationship.");
+    }
+    Require(new VpnSessionStore(usage).GetActiveSession() is null, "Fresh schema has no active VPN interval.");
+}
+
+static void VpnFailedMigration()
+{
+    using var workspace = new TestWorkspace();
+    CreateVersionThreeFixture(workspace.CurrentPath);
+    var sessions = SnapshotRows(workspace.CurrentPath, "ConnectionSessions");
+    var events = SnapshotRows(workspace.CurrentPath, "ConnectionEvents");
+    using (var connection = Open(workspace.CurrentPath))
+        Execute(connection, "CREATE TABLE VpnSessions(sentinel TEXT); INSERT INTO VpnSessions VALUES('retain conflicting VPN data');");
+
+    ExpectStartupFailure(workspace.Root);
+
+    Equal(3L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Failed upgrade retains version three");
+    Equal("retain conflicting VPN data", ReadText(workspace.CurrentPath, "SELECT sentinel FROM VpnSessions;"), "Conflicting data is preserved");
+    Equal(sessions, SnapshotRows(workspace.CurrentPath, "ConnectionSessions"), "Failed migration preserves all physical sessions");
+    Equal(events, SnapshotRows(workspace.CurrentPath, "ConnectionEvents"), "Failed migration preserves all existing events");
+    Equal(126_456L, ReadInteger(workspace.CurrentPath, "SELECT sum(downloaded) FROM daily_usage;"), "Failed migration preserves usage");
+    Equal(1L, ReadInteger(workspace.CurrentPath, "SELECT count(*) FROM ConnectionProfiles;"), "Failed migration preserves profiles");
+    Equal(2L, ReadInteger(workspace.CurrentPath, "SELECT count(*) FROM NetworkMappings;"), "Failed migration preserves mappings");
+    Equal(0L, ReadInteger(workspace.CurrentPath, "SELECT count(*) FROM sqlite_schema WHERE name LIKE '%VpnSessions%' AND type IN ('index','trigger');"), "Partial VPN schema objects roll back");
+}
+
+static void VpnLegacyVersionThreeUpgrade()
+{
+    using var workspace = new TestWorkspace();
+    CreateVersionThreeFixture(workspace.LegacyPath);
+    var original = Hash(workspace.LegacyPath);
+    var originalSessions = SnapshotRows(workspace.LegacyPath, "ConnectionSessions");
+    var usage = new UsageStore(workspace.Root);
+    AssertFixtureTotals(usage);
+    Equal(4L, ReadInteger(workspace.CurrentPath, "PRAGMA user_version;"), "Copied legacy database reaches version four");
+    Equal(3L, ReadInteger(workspace.LegacyPath, "PRAGMA user_version;"), "Legacy rollback schema version is unchanged");
+    Equal(original, Hash(workspace.LegacyPath), "Legacy rollback database bytes are untouched");
+    Equal(originalSessions, SnapshotRows(workspace.CurrentPath, "ConnectionSessions"), "Copied physical history is preserved");
+    Equal(0L, ReadInteger(workspace.CurrentPath, "SELECT count(*) FROM VpnSessions;"), "Legacy migration fabricates no VPN history");
+}
+
+static VpnRoutingState VpnStoredObservation(VpnRoutingMode mode = VpnRoutingMode.Unverified,
+    VpnInterfaceInfo? tunnel = null)
+{
+    tunnel ??= DetectedVpn().Interfaces.Single();
+    var ipv4 = new VpnFamilyRoutingResult(AddressFamily.InterNetwork, mode,
+        Array.Empty<VpnRouteEvidence>(), "Controlled routing observation", IpFamilyAvailability.Usable);
+    var ipv6 = new VpnFamilyRoutingResult(AddressFamily.InterNetworkV6, mode,
+        Array.Empty<VpnRouteEvidence>(), "Controlled routing observation", IpFamilyAvailability.Usable);
+    return new(new(VpnStatus.TunnelDetected, new[] { tunnel }, null),
+        new[] { new VpnTunnelRoutingResult(tunnel, mode, ipv4, ipv6) });
+}
+
+static VpnRoutingState VpnAbsentObservation(VpnStatus status = VpnStatus.NoVpn) =>
+    new(new(status, Array.Empty<VpnInterfaceInfo>(), status == VpnStatus.Indeterminate ? "Native query failed" : null),
+        Array.Empty<VpnTunnelRoutingResult>());
+
+static long StartVpnPhysicalParent(SessionTestContext test)
+{
+    test.Tracker.ObserveConnection(Connected(Wifi()));
+    test.Tracker.Flush();
+    return test.Tracker.Current!.Id;
+}
+
+static DateTimeOffset ConfirmVpnPhysicalParent(SessionTestContext test, long id, int seconds = 1)
+{
+    test.Clock.Advance(TimeSpan.FromSeconds(seconds));
+    var parent = test.History.GetActiveSession() ?? throw new InvalidOperationException("Expected an active physical parent.");
+    test.History.Confirm(id, test.Clock.GetUtcNow(), parent.DownloadBytes, parent.UploadBytes);
+    return test.Clock.GetUtcNow();
+}
+
+static void VpnSessionStarts()
+{
+    using var test = new SessionTestContext();
+    var id = StartVpnPhysicalParent(test);
+    var store = new VpnSessionStore(test.Usage);
+    Require(store.Observe(id, VpnAbsentObservation(), test.Clock.GetUtcNow()) is null, "VPN off creates no child interval.");
+    var startedAt = ConfirmVpnPhysicalParent(test, id);
+    var row = store.Observe(id, VpnStoredObservation(VpnRoutingMode.FullTunnel), startedAt)!;
+    Equal(id, row.ConnectionSessionId, "VPN interval belongs to the current physical session");
+    Equal(startedAt, row.StartedAtUtc, "VPN start timestamp");
+    Equal(startedAt, row.LastConfirmedAtUtc, "VPN initial confirmation");
+    Equal(VpnRoutingMode.FullTunnel, row.RoutingMode, "Verified mode is stored");
+    Equal(DetectedVpn().Interfaces[0].InterfaceGuid, row.InterfaceGuid, "Native interface GUID is preserved");
+    Equal(DetectedVpn().Interfaces[0].InterfaceIndex, row.InterfaceIndex, "Native interface index is preserved");
+    Equal(DetectedVpn().Interfaces[0].InterfaceName, row.InterfaceName, "Native display name is preserved");
+    Require(row.EndedAtUtc is null && row.EndReason is null, "The new VPN interval remains open.");
+    Equal(1, test.History.GetRecentSessions().Count, "VPN activation does not start another physical session");
+    Equal(id, test.History.GetActiveSession()!.Id, "VPN activation retains the physical identity");
+}
+
+static void VpnSessionRepeated()
+{
+    using var test = new SessionTestContext();
+    var id = StartVpnPhysicalParent(test);
+    var store = new VpnSessionStore(test.Usage);
+    var row = store.Observe(id, VpnStoredObservation(), test.Clock.GetUtcNow())!;
+    for (var index = 0; index < 8; index++)
+    {
+        var observedAt = ConfirmVpnPhysicalParent(test, id);
+        store = new VpnSessionStore(test.DatabasePath);
+        Equal(row.Id, store.Observe(id, VpnStoredObservation(), observedAt)!.Id, "Repeated observations retain the same persisted interval");
+    }
+    Equal(1, store.GetRecentSessions().Count, "Reopening and repeated observations do not duplicate VPN history");
+    Equal(test.Clock.GetUtcNow(), store.GetActiveSession()!.LastConfirmedAtUtc, "Repeated observations persist VPN liveness");
+    Equal(row.StartedAtUtc, store.GetActiveSession()!.StartedAtUtc, "Repeated observations retain the original VPN start");
+}
+
+static void VpnSessionDisconnects()
+{
+    using var test = new SessionTestContext();
+    var id = StartVpnPhysicalParent(test);
+    var store = new VpnSessionStore(test.Usage);
+    var vpn = store.Observe(id, VpnStoredObservation(), test.Clock.GetUtcNow())!;
+    var endedAt = ConfirmVpnPhysicalParent(test, id, 5);
+    Require(store.Observe(id, VpnAbsentObservation(), endedAt) is null, "VPN off has no active child interval.");
+    Require(store.GetActiveSession() is null, "The VPN interval is closed.");
+    var ended = store.GetRecentSessions().Single();
+    Equal(vpn.Id, ended.Id, "VPN disconnect closes the original interval");
+    Equal<DateTimeOffset?>(endedAt, ended.EndedAtUtc, "VPN disconnect boundary");
+    Equal("VpnDisconnected", ended.EndReason, "VPN disconnect reason");
+    Equal(id, test.History.GetActiveSession()!.Id, "VPN disconnect does not end the physical session");
+    Equal(1, test.History.GetRecentEvents().Count(item => !IsVpnEvent(item)), "VPN disconnect creates no physical events");
+    Equal(2, GetVpnEvents(test.History).Length, "VPN interval records its connected and disconnected events");
+    store.Observe(id, VpnAbsentObservation(), endedAt);
+    Equal(1, store.GetRecentSessions().Count, "Repeated VPN off does not create rows");
+    var restartedAt = ConfirmVpnPhysicalParent(test, id);
+    var restarted = store.Observe(id, VpnStoredObservation(), restartedAt)!;
+    Require(restarted.Id != vpn.Id, "VPN reconnect creates a new VPN interval on the same physical session.");
+    Equal(id, restarted.ConnectionSessionId, "VPN reconnect retains the physical parent");
+}
+
+static void VpnSessionParentCloses()
+{
+    foreach (var transition in new[] { "Disconnected", "NetworkChanged", "ApplicationExit" })
+    {
+        using var test = new SessionTestContext();
+        var id = StartVpnPhysicalParent(test);
+        var store = new VpnSessionStore(test.Usage);
+        var vpn = store.Observe(id, VpnStoredObservation(), test.Clock.GetUtcNow())!;
+        test.Clock.Advance(TimeSpan.FromSeconds(10));
+        if (transition == "Disconnected") test.Tracker.ObserveConnection(Disconnected());
+        else if (transition == "NetworkChanged") test.Tracker.ObserveConnection(Connected(Wifi("Other Wi-Fi")));
+        else test.Tracker.Close();
+        Require(store.GetActiveSession() is null, $"{transition} closes the active VPN interval atomically.");
+        var parent = test.History.GetRecentSessions().Single(row => row.Id == id);
+        var child = store.GetRecentSessions().Single();
+        Equal(vpn.Id, child.Id, "Parent closure retains the child interval");
+        Equal(parent.EndedAtUtc, child.EndedAtUtc, "Child ends at its physical parent's boundary");
+        Require(!string.IsNullOrWhiteSpace(child.EndReason), "Physical boundary records a VPN end reason.");
+        Equal(1L, ReadInteger(test.DatabasePath, "SELECT count(*) FROM VpnSessions;"), "A physical boundary does not create VPN history for the successor");
+    }
+}
+
+static void VpnSessionRouteChanges()
+{
+    using var test = new SessionTestContext();
+    var id = StartVpnPhysicalParent(test);
+    var store = new VpnSessionStore(test.Usage);
+    var first = store.Observe(id, VpnStoredObservation(), test.Clock.GetUtcNow())!;
+    foreach (var mode in new[] { VpnRoutingMode.FullTunnel, VpnRoutingMode.SplitTunnel, VpnRoutingMode.Unverified, VpnRoutingMode.FullTunnel })
+    {
+        var observedAt = ConfirmVpnPhysicalParent(test, id);
+        var current = store.Observe(id, VpnStoredObservation(mode), observedAt)!;
+        Equal(first.Id, current.Id, "Route mode changes retain interval identity");
+        Equal(mode, current.RoutingMode, "Latest routing mode is stored deterministically");
+        Equal(mode, new VpnSessionStore(test.DatabasePath).GetActiveSession()!.RoutingMode, "Updated route mode survives repository reopening");
+        Equal(first.StartedAtUtc, current.StartedAtUtc, "Routing mode change does not restart the VPN interval");
+    }
+    Equal(1, store.GetRecentSessions().Count, "Routing changes do not duplicate VPN intervals");
+}
+
+static void VpnSessionSingleActive()
+{
+    using var test = new SessionTestContext();
+    var id = StartVpnPhysicalParent(test);
+    var store = new VpnSessionStore(test.Usage);
+    store.Observe(id, VpnStoredObservation(), test.Clock.GetUtcNow());
+    using var connection = Open(test.DatabasePath);
+    Execute(connection, "PRAGMA foreign_keys=ON;");
+    using var command = connection.CreateCommand();
+    command.CommandText = "PRAGMA table_info(VpnSessions);";
+    var columns = new List<string>();
+    using (var reader = command.ExecuteReader())
+        while (reader.Read())
+            if (reader.GetString(1) != "Id") columns.Add(reader.GetString(1));
+    var copyColumns = string.Join(",", columns);
+    var failure = ExpectFailure(() => Execute(connection, $"INSERT INTO VpnSessions({copyColumns}) SELECT {copyColumns} FROM VpnSessions;"), "Duplicate active VPN interval");
+    Require(failure is SqliteException { SqliteErrorCode: 19 }, "SQLite enforces the single-active VPN constraint.");
+    Require(failure.Message.Contains("UNIQUE", StringComparison.OrdinalIgnoreCase), "The duplicate is rejected by the active interval uniqueness rule.");
+    Equal(1L, ReadInteger(test.DatabasePath, "SELECT count(*) FROM VpnSessions WHERE EndedAtUtc IS NULL;"), "Only one active interval remains");
+}
+
+static void VpnSessionRelationships()
+{
+    using var test = new SessionTestContext();
+    var id = StartVpnPhysicalParent(test);
+    var store = new VpnSessionStore(test.Usage);
+    store.Observe(id, VpnStoredObservation(), test.Clock.GetUtcNow());
+    test.Clock.Advance(TimeSpan.FromSeconds(5));
+    test.Tracker.ObserveConnection(Disconnected());
+    using var connection = Open(test.DatabasePath);
+    Execute(connection, "PRAGMA foreign_keys=ON;");
+    // Remove independent physical events so this failure proves the VPN child's relationship.
+    Execute(connection, "DELETE FROM ConnectionEvents;");
+    var deletion = ExpectFailure(() => Execute(connection, $"DELETE FROM ConnectionSessions WHERE Id={id};"), "Deleting a VPN interval's physical parent");
+    Require(deletion is SqliteException { SqliteErrorCode: 19 }, "Historical VPN parent deletion is restricted.");
+    var reassignment = ExpectFailure(() => Execute(connection, "UPDATE VpnSessions SET ConnectionSessionId=999999;"), "Assigning a nonexistent physical parent");
+    Require(reassignment is SqliteException { SqliteErrorCode: 19 }, "VPN relationships reject nonexistent parent IDs.");
+    Equal(id, store.GetRecentSessions().Single().ConnectionSessionId, "Relationship failures retain the original historical parent");
+}
+
+static void VpnSessionAtomicTransition()
+{
+    using var test = new SessionTestContext();
+    var id = StartVpnPhysicalParent(test);
+    var store = new VpnSessionStore(test.Usage);
+    var first = store.Observe(id, VpnStoredObservation(), test.Clock.GetUtcNow())!;
+    var observedAt = ConfirmVpnPhysicalParent(test, id);
+    using (var connection = Open(test.DatabasePath))
+        Execute(connection, "CREATE TRIGGER FailVpnInsert BEFORE INSERT ON VpnSessions BEGIN SELECT RAISE(ABORT,'simulate VPN storage failure'); END;");
+    var other = DetectedVpn().Interfaces[0] with { InterfaceGuid = Guid.NewGuid(), InterfaceIndex = 43 };
+    ExpectFailure(() => store.Observe(id, VpnStoredObservation(tunnel: other), observedAt), "Failed tunnel replacement");
+    var retained = store.GetActiveSession()!;
+    Equal(first.Id, retained.Id, "Insert failure rolls back closure of the prior VPN interval");
+    Equal(first.LastConfirmedAtUtc, retained.LastConfirmedAtUtc, "Failed replacement does not manufacture liveness");
+    Equal(1, store.GetRecentSessions().Count, "Failed replacement creates no partial VPN history");
+    using (var connection = Open(test.DatabasePath)) Execute(connection, "DROP TRIGGER FailVpnInsert;");
+    var replacement = store.Observe(id, VpnStoredObservation(tunnel: other), observedAt)!;
+    Require(replacement.Id != first.Id, "The same transition can succeed after a storage failure is corrected.");
+    Equal(2, store.GetRecentSessions().Count, "Successful retry publishes both complete intervals");
+}
+
+static void VpnSessionUncertainDetection()
+{
+    using var test = new SessionTestContext();
+    var id = StartVpnPhysicalParent(test);
+    var store = new VpnSessionStore(test.Usage);
+    Require(store.Observe(id, VpnAbsentObservation(VpnStatus.Indeterminate), test.Clock.GetUtcNow()) is null, "Uncertain detection cannot start a VPN interval.");
+    Equal(0, store.GetRecentSessions().Count, "Uncertainty fabricates no VPN history");
+    var first = store.Observe(id, VpnStoredObservation(), test.Clock.GetUtcNow())!;
+    var failedAt = ConfirmVpnPhysicalParent(test, id, 10);
+    store.Observe(id, VpnAbsentObservation(VpnStatus.Indeterminate), failedAt);
+    var ended = store.GetRecentSessions().Single();
+    Equal<DateTimeOffset?>(first.LastConfirmedAtUtc, ended.EndedAtUtc, "Lost detection ends at the last confirmed VPN observation");
+    Equal("DetectionUnavailable", ended.EndReason, "Uncertain detection is distinct from VPN off");
+    var nextAt = ConfirmVpnPhysicalParent(test, id);
+    store.Observe(id, VpnStoredObservation(), nextAt);
+    var active = store.GetActiveSession()!;
+    var firstTunnel = DetectedVpn().Interfaces.Single();
+    var secondTunnel = firstTunnel with { InterfaceGuid = Guid.NewGuid(), InterfaceIndex = 43 };
+    var ambiguous = new VpnRoutingState(new(VpnStatus.TunnelDetected, new[] { firstTunnel, secondTunnel }, null),
+        new[] { VpnStoredObservation(tunnel: firstTunnel).Tunnels[0], VpnStoredObservation(tunnel: secondTunnel).Tunnels[0] });
+    var ambiguousAt = ConfirmVpnPhysicalParent(test, id);
+    Require(store.Observe(id, ambiguous, ambiguousAt) is null, "Multiple active candidates do not select an arbitrary VPN interval.");
+    var last = store.GetRecentSessions().Single(row => row.Id == active.Id);
+    Equal<DateTimeOffset?>(active.LastConfirmedAtUtc, last.EndedAtUtc, "Ambiguous detection closes at known VPN liveness");
+    Equal("AmbiguousTunnel", last.EndReason, "Ambiguous identity has a distinct end reason");
+    Equal(id, test.History.GetActiveSession()!.Id, "Detection uncertainty does not end physical connectivity");
+}
+
+static void VpnSessionTunnelChanges()
+{
+    using var test = new SessionTestContext();
+    var id = StartVpnPhysicalParent(test);
+    var store = new VpnSessionStore(test.Usage);
+    var originalTunnel = DetectedVpn().Interfaces.Single();
+    var first = store.Observe(id, VpnStoredObservation(tunnel: originalTunnel), test.Clock.GetUtcNow())!;
+    var nameAt = ConfirmVpnPhysicalParent(test, id);
+    var renamed = originalTunnel with { InterfaceName = "A friendly renamed VPN" };
+    var same = store.Observe(id, VpnStoredObservation(tunnel: renamed), nameAt)!;
+    Equal(first.Id, same.Id, "Native GUID identity does not split solely for a friendly-name change");
+    var changedAt = ConfirmVpnPhysicalParent(test, id);
+    var changed = renamed with { InterfaceGuid = Guid.NewGuid(), InterfaceIndex = 43 };
+    var second = store.Observe(id, VpnStoredObservation(tunnel: changed), changedAt)!;
+    Require(second.Id != first.Id, "A different native tunnel creates a new VPN interval.");
+    var completed = store.GetRecentSessions().Single(row => row.Id == first.Id);
+    Equal("TunnelChanged", completed.EndReason, "Tunnel identity transition reason");
+    Equal<DateTimeOffset?>(changedAt, completed.EndedAtUtc, "Old VPN interval ends at the transition");
+    Equal(changedAt, second.StartedAtUtc, "New VPN interval begins at the transition");
+    Equal(id, second.ConnectionSessionId, "Tunnel changes preserve the physical parent");
+    Equal(1, test.History.GetRecentSessions().Count, "Changing VPN identity creates no physical sessions");
+}
+
+static void VpnSessionRasIdentity()
+{
+    using var test = new SessionTestContext();
+    var id = StartVpnPhysicalParent(test);
+    var store = new VpnSessionStore(test.Usage);
+    var ras = new VpnInterfaceInfo(null, null, "Work VPN", "WAN Miniport (IKEv2)", null, null, null,
+        "Windows RAS confirms VPN connectivity without interface linkage");
+    var first = store.Observe(id, VpnStoredObservation(tunnel: ras), test.Clock.GetUtcNow())!;
+    Require(first.InterfaceGuid is null && first.InterfaceIndex is null, "RAS-only observations never invent native IDs.");
+    var at = ConfirmVpnPhysicalParent(test, id);
+    Equal(first.Id, new VpnSessionStore(test.DatabasePath).Observe(id, VpnStoredObservation(tunnel: ras), at)!.Id,
+        "An identical single RAS identity retains its persisted interval");
+    var changedAt = ConfirmVpnPhysicalParent(test, id);
+    var changed = store.Observe(id, VpnStoredObservation(tunnel: ras with { InterfaceName = "Other RAS VPN" }), changedAt)!;
+    Require(changed.Id != first.Id, "A different opaque RAS connection name starts another child interval.");
+    Equal(VpnRoutingMode.Unverified, changed.RoutingMode, "Unlinked RAS routing remains unverified");
+}
+
+static void VpnSessionObservationSafety()
+{
+    using var test = new SessionTestContext();
+    var id = StartVpnPhysicalParent(test);
+    var store = new VpnSessionStore(test.Usage);
+    var first = store.Observe(id, VpnStoredObservation(VpnRoutingMode.FullTunnel), test.Clock.GetUtcNow())!;
+    var confirmedAt = ConfirmVpnPhysicalParent(test, id, 10);
+    store.Observe(id, VpnStoredObservation(VpnRoutingMode.SplitTunnel), confirmedAt);
+    store.Observe(id, VpnStoredObservation(VpnRoutingMode.Unverified), first.StartedAtUtc);
+    store.Observe(id, VpnAbsentObservation(), first.StartedAtUtc);
+    var current = store.GetActiveSession()!;
+    Equal(first.Id, current.Id, "Older VPN observations cannot end or replace the interval");
+    Equal(confirmedAt, current.LastConfirmedAtUtc, "VPN confirmation never moves backward");
+    Equal(VpnRoutingMode.SplitTunnel, current.RoutingMode, "Old route results cannot overwrite the confirmed route mode");
+    var offsetAt = ConfirmVpnPhysicalParent(test, id).ToOffset(TimeSpan.FromHours(8));
+    var offsetRow = store.Observe(id, VpnStoredObservation(), offsetAt)!;
+    Equal(TimeSpan.Zero, offsetRow.LastConfirmedAtUtc.Offset, "VPN timestamps are returned as UTC");
+    Require(ReadText(test.DatabasePath, "SELECT LastConfirmedAtUtc FROM VpnSessions WHERE EndedAtUtc IS NULL;").EndsWith("+00:00", StringComparison.Ordinal), "VPN timestamps are persisted in UTC.");
+    store.Observe(id, VpnAbsentObservation(), offsetAt);
+    Require(store.Observe(id, VpnStoredObservation(), first.StartedAtUtc) is null, "A delayed on observation cannot reopen history before a newer confirmed VPN off boundary.");
+    Equal(1, store.GetRecentSessions().Count, "Older on callbacks after closure create no duplicate interval");
+    var freshAt = ConfirmVpnPhysicalParent(test, id);
+    Require(store.Observe(id, VpnStoredObservation(), freshAt) is not null, "A genuinely newer on observation can create a successor interval.");
+}
+
+static void VpnSessionPreservesPhysicalAccounting()
+{
+    using var test = new SessionTestContext();
+    var id = StartVpnPhysicalParent(test);
+    test.Usage.AddUsage(new DateOnly(2026, 1, 15), 4096, 512);
+    test.Clock.Advance(TimeSpan.FromSeconds(1));
+    Require(test.Tracker.RecordSample(id, Wifi().AdapterId, 1, test.Clock.GetUtcNow(), 2048, 256), "Existing physical sampler accepts its own delta.");
+    test.Tracker.Flush();
+    var before = SnapshotRows(test.DatabasePath, "ConnectionSessions");
+    var events = SnapshotPhysicalEvents(test.DatabasePath);
+    var usage = SnapshotRows(test.DatabasePath, "daily_usage");
+    var store = new VpnSessionStore(test.Usage);
+    var timestamp = test.Clock.GetUtcNow();
+    store.Observe(id, VpnStoredObservation(VpnRoutingMode.FullTunnel), timestamp);
+    store.Observe(id, VpnStoredObservation(VpnRoutingMode.SplitTunnel), timestamp);
+    store.Observe(id, VpnAbsentObservation(), timestamp);
+    Equal(before, SnapshotRows(test.DatabasePath, "ConnectionSessions"), "VPN lifecycle does not alter physical rows or byte accounting");
+    Equal(events, SnapshotPhysicalEvents(test.DatabasePath), "VPN lifecycle preserves every existing physical event field");
+    Equal(3, GetVpnEvents(test.History).Length, "VPN lifecycle records only its connected, route changed and disconnected events");
+    Equal(usage, SnapshotRows(test.DatabasePath, "daily_usage"), "VPN lifecycle does not alter daily usage");
+}
+
+static void VpnSessionParentValidation()
+{
+    using var test = new SessionTestContext();
+    var id = StartVpnPhysicalParent(test);
+    var store = new VpnSessionStore(test.Usage);
+    var futureAt = test.Clock.GetUtcNow().AddMinutes(1);
+    var unconfirmed = ExpectFailure(() => store.Observe(id, VpnStoredObservation(), futureAt), "VPN observation beyond physical confirmation");
+    Require(unconfirmed is InvalidOperationException, "Parent confirmation failures produce a useful state error.");
+    Equal(0, store.GetRecentSessions().Count, "An unconfirmed parent cannot publish a VPN interval");
+    test.Clock.Advance(TimeSpan.FromSeconds(5));
+    test.Tracker.ObserveConnection(Disconnected());
+    var closed = ExpectFailure(() => store.Observe(id, VpnStoredObservation(), test.Clock.GetUtcNow()), "VPN observation for a closed physical interval");
+    Require(closed is InvalidOperationException, "Closed physical parent cannot receive VPN observations.");
+    var nonexistent = ExpectFailure(() => store.Observe(999999, VpnStoredObservation(), test.Clock.GetUtcNow()), "VPN observation for a nonexistent physical interval");
+    Require(nonexistent is InvalidOperationException, "Nonexistent physical parent cannot receive VPN observations.");
+    Equal(0, store.GetRecentSessions().Count, "Invalid parent observations leave VPN history untouched");
+}
+
+static void VpnSessionHistoryQueries()
+{
+    using var test = new SessionTestContext();
+    var firstId = StartVpnPhysicalParent(test);
+    var store = new VpnSessionStore(test.Usage);
+    var first = store.Observe(firstId, VpnStoredObservation(), test.Clock.GetUtcNow())!;
+    var offAt = ConfirmVpnPhysicalParent(test, firstId);
+    store.Observe(firstId, VpnAbsentObservation(), offAt);
+    var secondAt = ConfirmVpnPhysicalParent(test, firstId);
+    var second = store.Observe(firstId, VpnStoredObservation(), secondAt)!;
+    test.Clock.Advance(TimeSpan.FromSeconds(1));
+    test.Tracker.ObserveConnection(Connected(Wifi("Another physical connection")));
+    var nextId = test.Tracker.Current!.Id;
+    test.Tracker.Flush();
+    var next = store.Observe(nextId, VpnStoredObservation(), test.Clock.GetUtcNow())!;
+    Require(store.GetSessionsByConnectionSession(firstId).Select(row => row.Id).SequenceEqual(new[] { second.Id, first.Id }), "Parent query returns its intervals in descending start order.");
+    Equal(next.Id, store.GetSessionsByConnectionSession(nextId).Single().Id, "Parent query excludes other physical connections");
+    Require(store.GetRecentSessions(2).Select(row => row.Id).SequenceEqual(new[] { next.Id, second.Id }), "Recent query applies deterministic newest-first limits.");
+    Equal(next.Id, store.GetActiveSession()!.Id, "Current child query returns the only active VPN interval");
+    ExpectFailure(() => store.GetRecentSessions(0), "Nonpositive recent VPN limit");
+    ExpectFailure(() => store.GetSessionsByConnectionSession(firstId, 0), "Nonpositive parent VPN limit");
+}
+
+static void VpnSessionMonitorObservations()
+{
+    using var test = new SessionTestContext();
+    var id = StartVpnPhysicalParent(test);
+    var store = new VpnSessionStore(test.Usage);
+    var source = new FakeVpnInterfaceSource { Inventory = VpnInventory(VpnInterface()) };
+    var verifier = new VpnRouteVerifier(new VpnDetectionService(source), new FakeVpnRouteSource());
+    using (var monitor = new VpnSessionMonitor(test.Tracker, store, verifier))
+    {
+        monitor.Start();
+        WaitUntil(() => store.GetActiveSession() is not null, "VPN monitor persists the detected tunnel");
+        var first = store.GetActiveSession()!;
+        Equal(id, first.ConnectionSessionId, "Monitoring uses the existing physical parent");
+        var priorReads = source.Reads;
+        monitor.Refresh();
+        WaitUntil(() => source.Reads > priorReads, "Explicit refresh obtains another native observation");
+        Equal(first.Id, store.GetActiveSession()!.Id, "Repeated monitor observations do not duplicate the interval");
+        source.Inventory = VpnInventory();
+        monitor.Refresh();
+        WaitUntil(() => store.GetActiveSession() is null, "VPN monitor persists the off transition");
+        Equal(1, store.GetRecentSessions().Count, "On and off observations create one completed child interval");
+        Equal(id, test.History.GetActiveSession()!.Id, "VPN monitoring leaves physical connectivity active");
+        Equal(1, test.History.GetRecentEvents().Count(item => !IsVpnEvent(item)), "VPN monitoring creates no physical events");
+        Equal(2, GetVpnEvents(test.History).Length, "VPN monitoring records only one connected and one disconnected event");
+    }
+    Equal(id, test.History.GetActiveSession()!.Id, "Disposing only the VPN monitor does not create or close physical intervals");
+    Equal(1, test.History.GetRecentSessions().Count, "The physical interval was never duplicated");
+    Equal(3, test.History.GetRecentEvents().Count, "VPN monitor disposal creates no additional events");
+
+    var missingProfile = new ConnectionProfile(999999, "Missing ISP", "Missing device", test.Clock.GetUtcNow(), test.Clock.GetUtcNow());
+    test.Clock.Advance(TimeSpan.FromSeconds(1));
+    ExpectFailure(() => test.Tracker.ObserveConnection(Connected(Wifi("Failed successor"), missingProfile)), "A failed physical transition pauses confirmation");
+    Require(test.Tracker.ConfirmedSession is null, "A failed physical transition does not expose its retained old interval as confirmed connectivity.");
+    Equal(id, test.Tracker.Current!.Id, "Rollback retains the original physical row for retry");
+    using var queried = new ManualResetEventSlim();
+    source.Inventory = VpnInventory(VpnInterface());
+    source.DetectionStarted = queried;
+    using var paused = new VpnSessionMonitor(test.Tracker, store, verifier);
+    paused.Start();
+    Require(!queried.Wait(TimeSpan.FromMilliseconds(500)), "VPN monitoring does not query or publish while physical attribution is paused.");
+    Require(store.GetActiveSession() is null, "Uncertain retained physical history cannot acquire a new VPN child.");
+    test.Clock.Advance(TimeSpan.FromSeconds(1));
+    test.Tracker.ObserveConnection(Connected(Wifi("Successful successor")));
+    test.Tracker.Flush();
+    paused.Refresh();
+    WaitUntil(() => store.GetActiveSession() is not null, "A successful physical retry accepts fresh VPN evidence");
+    Equal(test.Tracker.Current!.Id, store.GetActiveSession()!.ConnectionSessionId, "After retry the VPN child belongs only to the successfully persisted successor");
+}
+
+static void VpnSessionMonitorStaleParent()
+{
+    using var test = new SessionTestContext();
+    var firstId = StartVpnPhysicalParent(test);
+    var store = new VpnSessionStore(test.Usage);
+    using var queryStarted = new ManualResetEventSlim();
+    using var releaseQuery = new ManualResetEventSlim();
+    var source = new FakeVpnInterfaceSource
+    {
+        Inventory = VpnInventory(VpnInterface()),
+        DetectionStarted = queryStarted,
+        ReleaseDetection = releaseQuery
+    };
+    var verifier = new VpnRouteVerifier(new VpnDetectionService(source), new FakeVpnRouteSource());
+    var monitor = new VpnSessionMonitor(test.Tracker, store, verifier);
+    try
+    {
+        monitor.Start();
+        Require(queryStarted.Wait(TimeSpan.FromSeconds(5)), "The delayed native VPN query starts.");
+        test.Clock.Advance(TimeSpan.FromSeconds(5));
+        test.Tracker.ObserveConnection(Connected(Wifi("Successor Wi-Fi")));
+        test.Tracker.Flush();
+        Require(test.Tracker.Current!.Id != firstId, "The physical network changes while VPN detection is blocked.");
+        releaseQuery.Set();
+    }
+    finally
+    {
+        releaseQuery.Set();
+        monitor.Dispose();
+    }
+    Equal(0, store.GetRecentSessions().Count, "A completed stale query does not attach its tunnel to the successor parent");
+    source.DetectionStarted = null;
+    source.ReleaseDetection = null;
+    using var fresh = new VpnSessionMonitor(test.Tracker, store, verifier);
+    fresh.Start();
+    WaitUntil(() => store.GetActiveSession() is not null, "The successor accepts a fresh VPN observation");
+    Equal(test.Tracker.Current!.Id, store.GetActiveSession()!.ConnectionSessionId, "Fresh VPN evidence belongs to the successor physical interval");
+    Equal(2, test.History.GetRecentSessions().Count, "Only the genuine physical transition creates physical history");
+}
+
+static bool IsVpnEvent(ConnectionEvent item) =>
+    item.EventType is "VpnConnected" or "VpnDisconnected" or "VpnRouteChanged";
+
+static ConnectionEvent[] GetVpnEvents(ConnectionHistoryStore history) =>
+    history.GetRecentEvents().Where(IsVpnEvent).OrderBy(item => item.Id).ToArray();
+
+static string SnapshotPhysicalEvents(string path) => SnapshotRows(path, "ConnectionEvents",
+    "EventType NOT IN ('VpnConnected','VpnDisconnected','VpnRouteChanged')");
+
+static void VpnEventsConnected()
+{
+    using var test = new SessionTestContext();
+    var id = StartVpnPhysicalParent(test);
+    var store = new VpnSessionStore(test.Usage);
+    store.Observe(id, VpnAbsentObservation(), test.Clock.GetUtcNow());
+    Equal(0, GetVpnEvents(test.History).Length, "VPN off without an interval invents no event");
+    var at = ConfirmVpnPhysicalParent(test, id);
+    var tunnel = DetectedVpn().Interfaces.Single() with { InterfaceName = "Work's tunnel; 日本" };
+    store.Observe(id, VpnStoredObservation(VpnRoutingMode.FullTunnel, tunnel), at);
+
+    var item = GetVpnEvents(test.History).Single();
+    Equal("VpnConnected", item.EventType, "VPN start event type");
+    Equal<long?>(id, item.SessionId, "VPN event references its physical session");
+    Equal<long?>(null, item.ProfileId, "An unassigned physical network retains null profile context");
+    Equal(Wifi().NetworkType, item.NetworkType, "VPN event retains physical network type");
+    Equal(Wifi().NetworkIdentifier, item.NetworkIdentifier, "VPN event retains physical network identity");
+    Equal(at, item.OccurredAtUtc, "Connected event occurs at the VPN start boundary");
+    Require(item.Message.Contains(tunnel.InterfaceName, StringComparison.Ordinal), "Connected details preserve apostrophes, Unicode and the VPN name.");
+    Require(item.Message.Contains("FullTunnel", StringComparison.Ordinal), "Connected details include routing mode.");
+    Equal(1, test.History.GetRecentSessions().Count, "The VPN event creates no physical session");
+}
+
+static void VpnEventsRepeated()
+{
+    using var test = new SessionTestContext();
+    var id = StartVpnPhysicalParent(test);
+    var store = new VpnSessionStore(test.Usage);
+    var first = store.Observe(id, VpnStoredObservation(VpnRoutingMode.FullTunnel), test.Clock.GetUtcNow())!;
+    var events = SnapshotRows(test.DatabasePath, "ConnectionEvents");
+    for (var index = 0; index < 5; index++)
+    {
+        var at = ConfirmVpnPhysicalParent(test, id);
+        var usage = new UsageStore(test.Root);
+        store = new VpnSessionStore(usage);
+        Equal(first.Id, store.Observe(id, VpnStoredObservation(VpnRoutingMode.FullTunnel), at)!.Id,
+            "Repeated observations retain the same VPN interval after reopening");
+    }
+    Equal(events, SnapshotRows(test.DatabasePath, "ConnectionEvents"), "Liveness updates and reopening do not duplicate any events");
+    Equal(1, GetVpnEvents(test.History).Count(item => item.EventType == "VpnConnected"), "Exactly one connected event remains");
+    Equal(id, test.History.GetActiveSession()!.Id, "Repeated VPN observations retain the physical parent");
+}
+
+static void VpnEventsRouteChanged()
+{
+    using var test = new SessionTestContext();
+    var id = StartVpnPhysicalParent(test);
+    var store = new VpnSessionStore(test.Usage);
+    var tunnel = DetectedVpn().Interfaces.Single();
+    var first = store.Observe(id, VpnStoredObservation(VpnRoutingMode.FullTunnel, tunnel), test.Clock.GetUtcNow())!;
+    var changedAt = ConfirmVpnPhysicalParent(test, id);
+    var changed = store.Observe(id, VpnStoredObservation(VpnRoutingMode.SplitTunnel, tunnel), changedAt)!;
+    var item = GetVpnEvents(test.History).Single(item => item.EventType == "VpnRouteChanged");
+    Equal(changedAt, item.OccurredAtUtc, "Route event occurs at the actual changed observation");
+    Equal<long?>(id, item.SessionId, "Route event uses the same physical session");
+    Require(item.Message.Contains(tunnel.InterfaceName, StringComparison.Ordinal), "Route details include the VPN name.");
+    Require(item.Message.Contains("FullTunnel", StringComparison.Ordinal) && item.Message.Contains("SplitTunnel", StringComparison.Ordinal),
+        "Route details explain both the previous and new mode.");
+    for (var index = 0; index < 3; index++)
+    {
+        var at = ConfirmVpnPhysicalParent(test, id);
+        store.Observe(id, VpnStoredObservation(VpnRoutingMode.SplitTunnel, tunnel with { InterfaceName = "Renamed display alias" }), at);
+    }
+    Equal(1, GetVpnEvents(test.History).Count(item => item.EventType == "VpnRouteChanged"), "Unchanged mode and friendly name updates create no route events");
+    Equal(first.Id, changed.Id, "Route changes do not restart the VPN interval");
+    Equal(1, store.GetRecentSessions().Count, "Route changes do not duplicate VPN intervals");
+    Equal(id, test.History.GetActiveSession()!.Id, "Route changes do not restart the physical interval");
+}
+
+static void VpnEventsDisconnected()
+{
+    using var test = new SessionTestContext();
+    var id = StartVpnPhysicalParent(test);
+    var store = new VpnSessionStore(test.Usage);
+    var tunnel = DetectedVpn().Interfaces.Single();
+    store.Observe(id, VpnStoredObservation(VpnRoutingMode.FullTunnel, tunnel), test.Clock.GetUtcNow());
+    var endedAt = ConfirmVpnPhysicalParent(test, id, 5);
+    store.Observe(id, VpnAbsentObservation(), endedAt);
+    for (var index = 0; index < 3; index++)
+        new VpnSessionStore(test.DatabasePath).Observe(id, VpnAbsentObservation(), ConfirmVpnPhysicalParent(test, id));
+    var item = GetVpnEvents(test.History).Single(item => item.EventType == "VpnDisconnected");
+    Equal(endedAt, item.OccurredAtUtc, "Disconnect event uses the VPN end boundary");
+    Equal<long?>(id, item.SessionId, "Disconnect event retains the physical parent");
+    Require(item.Message.Contains(tunnel.InterfaceName, StringComparison.Ordinal) && item.Message.Contains("FullTunnel", StringComparison.Ordinal),
+        "Disconnect details include VPN name and final routing mode.");
+    Require(item.Message.Contains("VpnDisconnected", StringComparison.Ordinal), "Disconnect details explain the stored end reason.");
+    Equal(2, GetVpnEvents(test.History).Length, "Repeated off observations create no duplicate disconnect events");
+    Equal(id, test.History.GetActiveSession()!.Id, "VPN off leaves the physical connection active");
+}
+
+static void VpnEventsPhysicalContext()
+{
+    using var test = new SessionTestContext();
+    var id = StartVpnPhysicalParent(test);
+    var store = new VpnSessionStore(test.Usage);
+    store.Observe(id, VpnStoredObservation(VpnRoutingMode.FullTunnel), test.Clock.GetUtcNow());
+    var connected = GetVpnEvents(test.History).Single();
+    var profile = test.Profiles.CreateProfile("DITO", "Vivo Phone");
+    test.Clock.Advance(TimeSpan.FromSeconds(1));
+    test.Tracker.ObserveConnection(Connected(Wifi(), profile));
+    test.Tracker.Flush();
+    var at = ConfirmVpnPhysicalParent(test, id);
+    store.Observe(id, VpnStoredObservation(VpnRoutingMode.SplitTunnel), at);
+    store.Observe(id, VpnAbsentObservation(), at);
+    var events = GetVpnEvents(test.History);
+    Equal<long?>(null, events.Single(item => item.EventType == "VpnConnected").ProfileId, "Assigning the physical profile does not rewrite the old VPN event");
+    Equal(connected, events.Single(item => item.EventType == "VpnConnected"), "Existing connected event remains immutable historical context");
+    foreach (var item in events.Where(item => item.EventType != "VpnConnected"))
+    {
+        Equal<long?>(profile.Id, item.ProfileId, "New VPN events use the current physical profile");
+        Equal<long?>(id, item.SessionId, "Profile assignment retains the physical session ID");
+        Equal(Wifi().NetworkIdentifier, item.NetworkIdentifier, "New events retain the real physical network identity");
+    }
+    Equal(1, test.History.GetRecentSessions().Count, "Neither profile assignment nor VPN changes duplicate the physical interval");
+}
+
+static void VpnEventsParentClosure()
+{
+    foreach (var transition in new[] { "Disconnected", "NetworkChanged", "ApplicationExit" })
+    {
+        using var test = new SessionTestContext();
+        var id = StartVpnPhysicalParent(test);
+        var store = new VpnSessionStore(test.Usage);
+        store.Observe(id, VpnStoredObservation(VpnRoutingMode.SplitTunnel), test.Clock.GetUtcNow());
+        test.Clock.Advance(TimeSpan.FromSeconds(5));
+        if (transition == "Disconnected")
+        {
+            test.Tracker.ObserveConnection(Disconnected());
+            test.Tracker.ObserveConnection(Disconnected());
+        }
+        else if (transition == "NetworkChanged")
+        {
+            test.Tracker.ObserveConnection(Connected(Wifi("Successor physical Wi-Fi")));
+            test.Tracker.ObserveConnection(Connected(Wifi("Successor physical Wi-Fi")));
+        }
+        else
+        {
+            test.Tracker.Close();
+            test.Tracker.Close();
+        }
+        var disconnected = GetVpnEvents(test.History).Single(item => item.EventType == "VpnDisconnected");
+        var parent = test.History.GetRecentSessions().Single(item => item.Id == id);
+        Equal<long?>(id, disconnected.SessionId, $"{transition} disconnect references the original physical parent");
+        Equal<DateTimeOffset?>(parent.EndedAtUtc, disconnected.OccurredAtUtc, "VPN disconnect event uses the parent's closure boundary");
+        Require(disconnected.Message.Contains("PhysicalSessionEnded", StringComparison.Ordinal), "Details distinguish parent closure from a confirmed VPN off observation.");
+        Equal(2, GetVpnEvents(test.History).Length, "Repeated physical observations cannot duplicate VPN disconnect events");
+        var physical = test.History.GetRecentEvents().Where(item => !IsVpnEvent(item)).OrderBy(item => item.Id).ToArray();
+        Require(physical.Select(item => item.EventType).SequenceEqual(new[] { "Connected", transition }), "Existing physical transition event kinds remain unchanged.");
+        Equal(transition == "NetworkChanged" ? 2 : 1, test.History.GetRecentSessions().Count, "Only a real physical transition can create a successor physical interval");
+    }
+}
+
+static void VpnEventsAtomicFailure()
+{
+    foreach (var operation in new[] { "VpnConnected", "VpnRouteChanged", "VpnDisconnected", "PhysicalClosure" })
+    {
+        using var test = new SessionTestContext();
+        var id = StartVpnPhysicalParent(test);
+        var store = new VpnSessionStore(test.Usage);
+        if (operation != "VpnConnected")
+            store.Observe(id, VpnStoredObservation(VpnRoutingMode.FullTunnel), test.Clock.GetUtcNow());
+        var at = ConfirmVpnPhysicalParent(test, id);
+        var beforeVpn = SnapshotRows(test.DatabasePath, "VpnSessions");
+        var beforePhysical = SnapshotRows(test.DatabasePath, "ConnectionSessions");
+        var beforeEvents = SnapshotRows(test.DatabasePath, "ConnectionEvents");
+        var eventType = operation == "PhysicalClosure" ? "VpnDisconnected" : operation;
+        using (var connection = Open(test.DatabasePath))
+            Execute(connection, $"CREATE TRIGGER FailVpnEvent BEFORE INSERT ON ConnectionEvents WHEN NEW.EventType='{eventType}' BEGIN SELECT RAISE(ABORT,'simulate VPN event storage failure'); END;");
+        Action transition = () =>
+        {
+            if (operation == "PhysicalClosure")
+                test.History.Transition(id, at, "ApplicationExit", 0, 0, null, null, at, "ApplicationExit", "Test physical closure");
+            else if (operation == "VpnDisconnected") store.Observe(id, VpnAbsentObservation(), at);
+            else store.Observe(id, VpnStoredObservation(operation == "VpnRouteChanged" ? VpnRoutingMode.SplitTunnel : VpnRoutingMode.FullTunnel), at);
+        };
+        var failure = ExpectFailure(transition, $"Failed {operation} event insertion");
+        Require(failure is SqliteException { SqliteErrorCode: 19 }, "A failed event insert aborts the lifecycle transaction.");
+        Equal(beforeVpn, SnapshotRows(test.DatabasePath, "VpnSessions"), "Event failure rolls back every VPN interval field");
+        Equal(beforePhysical, SnapshotRows(test.DatabasePath, "ConnectionSessions"), "Event failure cannot partially close the physical parent");
+        Equal(beforeEvents, SnapshotRows(test.DatabasePath, "ConnectionEvents"), "Event failure leaves no partial event history");
+        using (var connection = Open(test.DatabasePath)) Execute(connection, "DROP TRIGGER FailVpnEvent;");
+        transition();
+        Equal(1, GetVpnEvents(test.History).Count(item => item.EventType == eventType), "Retry publishes exactly one corresponding VPN event");
+    }
+}
+
+static void VpnEventsExistingVersionFour()
+{
+    using var test = new SessionTestContext();
+    var id = StartVpnPhysicalParent(test);
+    var store = new VpnSessionStore(test.Usage);
+    store.Observe(id, VpnStoredObservation(VpnRoutingMode.FullTunnel), test.Clock.GetUtcNow());
+    store.Observe(id, VpnAbsentObservation(), ConfirmVpnPhysicalParent(test, id));
+    var activeAt = ConfirmVpnPhysicalParent(test, id);
+    var active = store.Observe(id, VpnStoredObservation(VpnRoutingMode.FullTunnel), activeAt)!;
+    var triggerNames = new[] { "TR_VpnSessions_ConnectedEvent", "TR_VpnSessions_DisconnectedEvent", "TR_VpnSessions_RouteChangedEvent" };
+    using (var connection = Open(test.DatabasePath))
+    {
+        foreach (var name in triggerNames) Execute(connection, $"DROP TRIGGER {name};");
+        Execute(connection, "DELETE FROM ConnectionEvents WHERE EventType IN ('VpnConnected','VpnDisconnected','VpnRouteChanged');");
+    }
+    var tables = new[] { "daily_usage", "ConnectionProfiles", "NetworkMappings", "ConnectionSessions", "ConnectionEvents", "VpnSessions" };
+    var before = tables.ToDictionary(table => table, table => (
+        Rows: SnapshotRows(test.DatabasePath, table),
+        Schema: ReadText(test.DatabasePath, $"SELECT sql FROM sqlite_schema WHERE name='{table}';"),
+        Root: ReadInteger(test.DatabasePath, $"SELECT rootpage FROM sqlite_schema WHERE name='{table}';")));
+    var upgraded = new UsageStore(test.Root);
+    Equal(4L, ReadInteger(test.DatabasePath, "PRAGMA user_version;"), "Installing VPN events does not change schema version four");
+    foreach (var table in tables)
+    {
+        Equal(before[table].Rows, SnapshotRows(test.DatabasePath, table), $"Existing {table} data is not rewritten or backfilled");
+        Equal(before[table].Schema, ReadText(test.DatabasePath, $"SELECT sql FROM sqlite_schema WHERE name='{table}';"), $"Existing {table} schema is preserved");
+        Equal(before[table].Root, ReadInteger(test.DatabasePath, $"SELECT rootpage FROM sqlite_schema WHERE name='{table}';"), $"Existing {table} B-tree is preserved");
+    }
+    foreach (var name in triggerNames)
+        Equal(1L, ReadInteger(test.DatabasePath, $"SELECT count(*) FROM sqlite_schema WHERE type='trigger' AND name='{name}';"), "An existing version-four database gains each VPN event trigger");
+    store = new VpnSessionStore(upgraded);
+    Equal(active.Id, store.Observe(id, VpnStoredObservation(VpnRoutingMode.FullTunnel), activeAt)!.Id, "Reopening retains an already active interval");
+    Equal(0, GetVpnEvents(test.History).Length, "Installation and identical observations invent no retroactive VPN connected event");
+    store.Observe(id, VpnStoredObservation(VpnRoutingMode.SplitTunnel), ConfirmVpnPhysicalParent(test, id));
+    Equal("VpnRouteChanged", GetVpnEvents(test.History).Single().EventType, "The next actual state change is recorded after trigger installation");
+
+    using var broken = new SessionTestContext();
+    var brokenId = StartVpnPhysicalParent(broken);
+    new VpnSessionStore(broken.Usage).Observe(brokenId, VpnStoredObservation(), broken.Clock.GetUtcNow());
+    using (var connection = Open(broken.DatabasePath))
+    {
+        foreach (var name in triggerNames) Execute(connection, $"DROP TRIGGER {name};");
+        Execute(connection, "CREATE TRIGGER TR_VpnSessions_RouteChangedEvent AFTER UPDATE OF RoutingMode ON VpnSessions BEGIN SELECT 1; END;");
+    }
+    var beforeSchema = SnapshotRows(broken.DatabasePath, "sqlite_schema");
+    var brokenVpn = SnapshotRows(broken.DatabasePath, "VpnSessions");
+    var brokenEvents = SnapshotRows(broken.DatabasePath, "ConnectionEvents");
+    ExpectStartupFailure(broken.Root);
+    Equal(beforeSchema, SnapshotRows(broken.DatabasePath, "sqlite_schema"), "A malformed existing event trigger rolls back all attempted missing-trigger installations");
+    Equal(brokenVpn, SnapshotRows(broken.DatabasePath, "VpnSessions"), "Failed event setup preserves existing VPN interval fields");
+    Equal(brokenEvents, SnapshotRows(broken.DatabasePath, "ConnectionEvents"), "Failed event setup preserves existing timeline rows");
+    Equal(4L, ReadInteger(broken.DatabasePath, "PRAGMA user_version;"), "Failed event setup preserves version four");
+}
+
+static void VpnEventsTunnelReplacement()
+{
+    using var test = new SessionTestContext();
+    var id = StartVpnPhysicalParent(test);
+    var store = new VpnSessionStore(test.Usage);
+    var original = DetectedVpn().Interfaces.Single();
+    store.Observe(id, VpnStoredObservation(VpnRoutingMode.FullTunnel, original), test.Clock.GetUtcNow());
+    var at = ConfirmVpnPhysicalParent(test, id);
+    var next = original with { InterfaceIndex = 43, InterfaceGuid = Guid.NewGuid(), InterfaceName = "Second tunnel" };
+    store.Observe(id, VpnStoredObservation(VpnRoutingMode.SplitTunnel, next), at);
+    store.Observe(id, VpnStoredObservation(VpnRoutingMode.SplitTunnel, next), at);
+    var events = GetVpnEvents(test.History);
+    Require(events.Select(item => item.EventType).SequenceEqual(new[] { "VpnConnected", "VpnDisconnected", "VpnConnected" }),
+        "Tunnel replacement records the prior disconnect before the successor connect, without a route-only event.");
+    Require(events.All(item => item.SessionId == id), "Both VPN intervals and all events belong to the same physical parent.");
+    Equal(at, events[1].OccurredAtUtc, "Replacement disconnect timestamp");
+    Equal(at, events[2].OccurredAtUtc, "Replacement connect timestamp");
+    Require(events[1].Message.Contains(original.InterfaceName, StringComparison.Ordinal) && events[1].Message.Contains("TunnelChanged", StringComparison.Ordinal),
+        "Replacement disconnect details identify the previous tunnel and its reason.");
+    Require(events[2].Message.Contains(next.InterfaceName, StringComparison.Ordinal), "Replacement connect identifies the new tunnel.");
+    Equal(1, test.History.GetRecentSessions().Count, "Tunnel replacement creates no physical session");
+}
+
 static int RunLeaseChild(string[] arguments)
 {
     if (arguments.Length != 3) throw new ArgumentException("Lease child requires a test root and mode.");
@@ -2746,12 +3641,17 @@ sealed class FakeVpnInterfaceSource : IVpnInterfaceSource
     public VpnInterfaceInventory Inventory { get; set; } = new(Array.Empty<VpnInterfaceEvidence>(), Array.Empty<VpnRasConnectionEvidence>());
     public Exception? Failure { get; set; }
     public int Reads { get; private set; }
+    public ManualResetEventSlim? DetectionStarted { get; set; }
+    public ManualResetEventSlim? ReleaseDetection { get; set; }
 
     public VpnInterfaceInventory Read()
     {
         Reads++;
+        var captured = Inventory;
+        DetectionStarted?.Set();
+        ReleaseDetection?.Wait();
         if (Failure is not null) throw Failure;
-        return Inventory;
+        return captured;
     }
 }
 

@@ -2,7 +2,7 @@
 
 Lightweight Windows network usage and diagnostics monitor.
 
-NetTrace V1.1 establishes the NetTrace identity and safely migrates local history from the previous Data Usage Monitor build (Task 001). Task 002 adds connection profiles and network mappings; Task 003 adds physical connection sessions and event history. Built with C#/.NET 8, WPF, and SQLite.
+NetTrace V1.1 establishes the NetTrace identity and safely migrates local history from the previous Data Usage Monitor build (Task 001). Task 002 adds connection profiles and network mappings; Task 003 adds physical connection sessions and event history. Task 004C persists VPN intervals under physical sessions; Task 004D records their transitions in the event timeline. Built with C#/.NET 8, WPF, and SQLite.
 
 ## Current features
 
@@ -64,7 +64,7 @@ On first launch, if the NetTrace database is absent and `%LOCALAPPDATA%\DataUsag
 
 The copy is validated and atomically placed at the new path without overwriting a database. Copy or validation failures stop startup with an error instead of starting with empty history. SQLite's read-only source connection does not change legacy history; its WAL coordination files may be accessed while the old app is running.
 
-The current schema uses `PRAGMA user_version = 3`. Compatible unversioned databases progress through version 1; version 1 databases gain `ConnectionProfiles` and `NetworkMappings`, and version 2 databases gain `ConnectionSessions` and `ConnectionEvents`. All upgrades run transactionally without rebuilding or changing existing usage history, profiles, or mappings. Version changes commit only after successful migration and validation. `Services\DatabaseMigrator.cs` is the single place for schema upgrades. Incompatible or newer schemas stop startup rather than being altered.
+The current schema uses `PRAGMA user_version = 4`. Compatible unversioned databases progress through version 1; version 1 databases gain `ConnectionProfiles` and `NetworkMappings`, version 2 databases gain `ConnectionSessions` and `ConnectionEvents`, and version 3 databases gain `VpnSessions`. All upgrades run transactionally without rebuilding or changing existing usage history, profiles, or mappings. Version changes commit only after successful migration and validation. `Services\DatabaseMigrator.cs` is the single place for schema upgrades. Incompatible or newer schemas stop startup rather than being altered.
 
 ## Connection profiles
 
@@ -98,7 +98,7 @@ NetTrace registers its window for Windows suspend/resume notifications, includin
 
 `VpnDetectionService.GetCurrentState()` provides an independent, on-demand snapshot: `NoVpn`, `TunnelDetected`, or `Indeterminate`. Windows native interface status and GUID-matched driver component/service IDs identify operational local tunnel candidates; connected Windows RAS VPNs provide separate native evidence. Adapter aliases, descriptions and process names do not establish a VPN. Dormant/disconnected interfaces, physical hardware, loopback, standard virtualization adapters and IPv6 transition mechanisms are excluded. Ambiguous status, incomplete API results and TAP's Always Connected setting produce uncertainty.
 
-This foundation is not connected to the dashboard, physical recognition, sampling or SQLite. `TunnelDetected` confirms local tunnel evidence, not routing, encryption or endpoint reachability. `NoVpn` means no supported active candidate was found; unrecognized or customized VPN drivers can be missed, and Wintun also supports non-VPN tunnels. RAS-only evidence retains connection/device names but leaves interface identifiers unavailable rather than inventing them. No network settings or permissions are changed.
+`TunnelDetected` confirms local tunnel evidence, not routing, encryption or endpoint reachability. `NoVpn` means no supported active candidate was found; unrecognized or customized VPN drivers can be missed, and Wintun also supports non-VPN tunnels. RAS-only evidence retains connection/device names but leaves interface identifiers unavailable rather than inventing them. No network settings or permissions are changed.
 
 ## VPN routing verification (Task 004B)
 
@@ -106,9 +106,25 @@ This foundation is not connected to the dashboard, physical recognition, samplin
 
 `FullTunnel` requires the detected interface to win effective general routing through a default route or paired `/1` routes, with no effective public bypass. Selection uses longest matching prefix before combined route/interface metrics. All prefix boundaries are evaluated, rather than testing a few destinations. Private/LAN, loopback, link-local and multicast ranges do not defeat general-internet coverage. `SplitTunnel` requires effective VPN forwarding prefixes plus confirmed general routing through another interface. Installed, losing, expired, loopback or inactive routes alone cannot verify routing.
 
-Missing metadata, equal-cost VPN/non-VPN alternatives, failed family queries, incomplete general coverage and public bypasses that could be VPN peer exceptions stay `Unverified`. RAS-only candidates without an interface identity also remain unverified. Source/interface-bound traffic and routing changes after the snapshot can differ from this global-table assessment. This remains a service foundation with no dashboard, database, event, session or byte-accounting integration.
+Missing metadata, equal-cost VPN/non-VPN alternatives, failed family queries, incomplete general coverage and public bypasses that could be VPN peer exceptions stay `Unverified`. RAS-only candidates without an interface identity also remain unverified. Source/interface-bound traffic and routing changes after the snapshot can differ from this global-table assessment.
 
 Task 004B.1 separates each family's availability (`Usable`, `Unavailable`, `Unknown`) from its routing decision. A complete, valid snapshot with no usable non-loopback interfaces is unavailable for routing; this does not claim the Windows protocol stack is disabled. Local-only or physical-only family routes still establish usability, so missing VPN/default routes remain unverified. Failed or incomplete queries stay unknown. Combination ignores only confirmed unavailable families: all remaining families must verify Full for `FullTunnel`; a verified Split family yields `SplitTunnel`; any remaining unknown/unverified family, or both unavailable families, yields `Unverified`.
+
+## VPN interval storage (Task 004C)
+
+`VpnSessions` stores a physical `ConnectionSessionId`, available interface GUID/index, interface name/description, latest routing mode and UTC start/confirmation/end timestamps with an explicit end reason. There are no VPN byte counters. A restricted foreign key protects the parent relation; indexes cover physical-parent/recent queries, and a partial unique index enforces one unfinished VPN interval globally.
+
+`VpnSessionMonitor` reuses native detection and routing verification off the UI thread, on Windows network-change callbacks and at a separate 30-second interval. Starting/stopping a VPN never creates or closes a physical session. Repeated identities keep the same VPN row; route-mode and display-name changes update it. A changed GUID/index starts a new interval. A sole RAS candidate without interface IDs uses its exact connection/device names as a limited identity; renamed RAS entries split intervals. Multiple candidates are not guessed into a primary VPN. Uncertain detection ends at the last VPN confirmation with an uncertainty reason; confirmed `NoVpn` ends with `VpnDisconnected`.
+
+The observer captures the physical parent before querying, rejects stale work after a parent change and persists the existing physical tracker's confirmed progress before saving a VPN row. VPN timestamps are bounded by that parent confirmation, without changing byte totals or manufacturing physical liveness. Parent closure ends its active VPN interval in the same SQLite transaction. Shutdown stops and joins the observer before closing the parent and releasing database ownership. Completed intervals and captured identity are immutable.
+
+VPN storage adds no VPN UI, standalone sleep/crash recovery, health checks or traffic accounting. Existing physical lifecycle closure also enforces the child relationship; it does not establish continuous VPN connectivity across sleep or an application restart. Intervals describe observed state: rapid changes between callbacks/polls may be missed, timestamps follow available physical confirmation, and only the latest routing mode is retained within an interval.
+
+## VPN events (Task 004D)
+
+The existing `ConnectionEvents` timeline records `VpnConnected` when an interval starts, `VpnDisconnected` when it ends, and `VpnRouteChanged` only when its active routing mode changes. Events retain the physical session/profile/network context and include the VPN name, routing mode and, for closure, the end reason. An uncertainty or physical-session closure ends an observed interval without claiming that Windows positively detected VPN OFF.
+
+SQLite triggers write events in the same transaction as VPN transitions, including physical-parent closure. Repeated confirmations, alias-only edits and unchanged routing produce no events; a failed event write rolls back its interval transition. Existing schema-v4 databases gain these triggers transactionally on startup without rewriting history or backfilling events. Physical event behavior, dashboard layout and bandwidth accounting remain unchanged.
 
 ## Migration verification
 

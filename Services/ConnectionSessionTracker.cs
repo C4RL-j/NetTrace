@@ -35,6 +35,13 @@ public sealed class ConnectionSessionTracker
         get { lock (_gate) return _current; }
     }
 
+    // A failed physical transition can retain Current for a safe persistence retry.
+    // Dependent histories must not attach new observations to that uncertain parent.
+    public ConnectionSession? ConfirmedSession
+    {
+        get { lock (_gate) return _closed || _sleeping || _attributionPaused ? null : _current; }
+    }
+
     public bool IsSleeping
     {
         get { lock (_gate) return _sleeping; }

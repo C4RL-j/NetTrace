@@ -4,7 +4,7 @@ namespace NetTrace.Services;
 
 internal static class DatabaseMigrator
 {
-    internal const int CurrentSchemaVersion = 3;
+    internal const int CurrentSchemaVersion = 4;
 
     internal static void Initialize(SqliteConnection connection, bool createSchema)
     {
@@ -53,6 +53,12 @@ internal static class DatabaseMigrator
                     CreateHistorySchema(command);
                     ValidateHistorySchema(command);
                     break;
+                case 3:
+                    ValidateProfileSchema(command);
+                    ValidateHistorySchema(command);
+                    CreateVpnSessionSchema(command);
+                    ValidateVpnSessionSchema(command);
+                    break;
                 default:
                     throw new InvalidOperationException($"No migration is available from schema version {version}.");
             }
@@ -65,11 +71,13 @@ internal static class DatabaseMigrator
         ValidateProfileSchema(command);
         ValidateHistorySchema(command);
         EnsureHistoryRelationshipIndexes(command);
+        ValidateVpnSessionSchema(command);
+        EnsureVpnEventTriggers(command);
         command.CommandText = "PRAGMA foreign_key_check;";
         using (var reader = command.ExecuteReader())
         {
             if (reader.Read())
-                throw new InvalidOperationException("The connection database contains an invalid history or profile relationship. Keep the database for recovery.");
+                throw new InvalidOperationException("The connection database contains an invalid history, VPN session or profile relationship. Keep the database for recovery.");
         }
 
         transaction.Commit();
@@ -139,6 +147,243 @@ internal static class DatabaseMigrator
             """;
         command.ExecuteNonQuery();
     }
+
+    private const string VpnSessionTableSql = """
+        CREATE TABLE VpnSessions (
+            Id INTEGER PRIMARY KEY,
+            ConnectionSessionId INTEGER NOT NULL REFERENCES ConnectionSessions(Id) ON DELETE RESTRICT,
+            InterfaceIndex INTEGER CHECK(InterfaceIndex IS NULL OR InterfaceIndex > 0),
+            InterfaceGuid TEXT,
+            InterfaceName TEXT NOT NULL,
+            Description TEXT NOT NULL,
+            RoutingMode TEXT NOT NULL CHECK(RoutingMode IN ('Unverified', 'FullTunnel', 'SplitTunnel')),
+            StartedAtUtc TEXT NOT NULL,
+            LastConfirmedAtUtc TEXT NOT NULL,
+            EndedAtUtc TEXT,
+            EndReason TEXT,
+            CHECK(LastConfirmedAtUtc >= StartedAtUtc),
+            CHECK(EndedAtUtc IS NULL OR EndedAtUtc >= LastConfirmedAtUtc),
+            CHECK((EndedAtUtc IS NULL AND EndReason IS NULL) OR
+                  (EndedAtUtc IS NOT NULL AND EndReason IS NOT NULL))
+        );
+        """;
+
+    private static readonly (string Name, string Sql)[] VpnSessionIndexes =
+    [
+        ("UX_VpnSessions_Active", "CREATE UNIQUE INDEX UX_VpnSessions_Active ON VpnSessions((1)) WHERE EndedAtUtc IS NULL;"),
+        ("IX_VpnSessions_ConnectionSessionId", "CREATE INDEX IX_VpnSessions_ConnectionSessionId ON VpnSessions(ConnectionSessionId, StartedAtUtc DESC);"),
+        ("IX_VpnSessions_StartedAtUtc", "CREATE INDEX IX_VpnSessions_StartedAtUtc ON VpnSessions(StartedAtUtc DESC, Id DESC);")
+    ];
+
+    private static readonly (string Name, string Table, string Sql)[] VpnSessionTriggers =
+    [
+        ("TR_VpnSessions_InsertGuard", "VpnSessions", """
+            CREATE TRIGGER TR_VpnSessions_InsertGuard
+            BEFORE INSERT ON VpnSessions
+            WHEN NOT EXISTS (
+                SELECT 1 FROM ConnectionSessions p
+                WHERE p.Id = NEW.ConnectionSessionId
+                  AND NEW.StartedAtUtc >= p.StartedAtUtc
+                  AND NEW.LastConfirmedAtUtc <= p.LastConfirmedAtUtc
+                  AND ((NEW.EndedAtUtc IS NULL AND p.EndedAtUtc IS NULL) OR
+                       (NEW.EndedAtUtc IS NOT NULL AND NEW.EndedAtUtc <= COALESCE(p.EndedAtUtc, p.LastConfirmedAtUtc)))
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'VPN session must belong to its physical connection interval.');
+            END;
+            """),
+        ("TR_VpnSessions_UpdateGuard", "VpnSessions", """
+            CREATE TRIGGER TR_VpnSessions_UpdateGuard
+            BEFORE UPDATE ON VpnSessions
+            WHEN OLD.EndedAtUtc IS NOT NULL
+              OR NEW.Id IS NOT OLD.Id
+              OR NEW.ConnectionSessionId IS NOT OLD.ConnectionSessionId
+              OR NEW.InterfaceIndex IS NOT OLD.InterfaceIndex
+              OR NEW.InterfaceGuid IS NOT OLD.InterfaceGuid
+              OR NEW.StartedAtUtc IS NOT OLD.StartedAtUtc
+              OR (NEW.EndedAtUtc IS NULL AND NEW.LastConfirmedAtUtc < OLD.LastConfirmedAtUtc)
+              OR NOT EXISTS (
+                SELECT 1 FROM ConnectionSessions p
+                WHERE p.Id = NEW.ConnectionSessionId
+                  AND NEW.StartedAtUtc >= p.StartedAtUtc
+                  AND NEW.LastConfirmedAtUtc <= p.LastConfirmedAtUtc
+                  AND ((NEW.EndedAtUtc IS NULL AND p.EndedAtUtc IS NULL) OR
+                       (NEW.EndedAtUtc IS NOT NULL AND NEW.EndedAtUtc <= COALESCE(p.EndedAtUtc, p.LastConfirmedAtUtc)))
+              )
+            BEGIN
+                SELECT RAISE(ABORT, 'VPN session identity and completed history are immutable; progress must stay within its physical interval.');
+            END;
+            """),
+        ("TR_ConnectionSessions_VpnProgressGuard", "ConnectionSessions", """
+            CREATE TRIGGER TR_ConnectionSessions_VpnProgressGuard
+            BEFORE UPDATE ON ConnectionSessions
+            WHEN OLD.EndedAtUtc IS NULL AND NEW.EndedAtUtc IS NULL AND EXISTS (
+                SELECT 1 FROM VpnSessions v
+                WHERE v.ConnectionSessionId = OLD.Id AND v.EndedAtUtc IS NULL
+                  AND (v.StartedAtUtc < NEW.StartedAtUtc OR v.LastConfirmedAtUtc > NEW.LastConfirmedAtUtc)
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'Physical progress cannot exclude an active VPN session.');
+            END;
+            """),
+        ("TR_ConnectionSessions_CloseVpnSession", "ConnectionSessions", """
+            CREATE TRIGGER TR_ConnectionSessions_CloseVpnSession
+            AFTER UPDATE OF EndedAtUtc ON ConnectionSessions
+            WHEN OLD.EndedAtUtc IS NULL AND NEW.EndedAtUtc IS NOT NULL
+            BEGIN
+                SELECT RAISE(ABORT, 'Physical connection cannot end before its VPN session starts.')
+                WHERE EXISTS (
+                    SELECT 1 FROM VpnSessions v
+                    WHERE v.ConnectionSessionId = NEW.Id AND v.EndedAtUtc IS NULL
+                      AND v.StartedAtUtc > NEW.EndedAtUtc
+                );
+                UPDATE VpnSessions
+                SET LastConfirmedAtUtc = min(LastConfirmedAtUtc, NEW.EndedAtUtc),
+                    EndedAtUtc = NEW.EndedAtUtc,
+                    EndReason = 'PhysicalSessionEnded'
+                WHERE ConnectionSessionId = NEW.Id AND EndedAtUtc IS NULL;
+            END;
+            """)
+    ];
+
+    private static void CreateVpnSessionSchema(SqliteCommand command)
+    {
+        // Additive only. The initialization transaction also advances user_version, so a failed
+        // schema/relationship validation rolls back the entire version-3 to version-4 upgrade.
+        command.CommandText = VpnSessionTableSql
+            + string.Concat(VpnSessionIndexes.Select(index => index.Sql))
+            + string.Concat(VpnSessionTriggers.Select(trigger => trigger.Sql));
+        command.ExecuteNonQuery();
+    }
+
+    private static readonly (string Name, string Sql)[] VpnEventTriggers =
+    [
+        ("TR_VpnSessions_ConnectedEvent", """
+            CREATE TRIGGER TR_VpnSessions_ConnectedEvent
+            AFTER INSERT ON VpnSessions
+            WHEN NEW.EndedAtUtc IS NULL
+            BEGIN
+                INSERT INTO ConnectionEvents(OccurredAtUtc, EventType, SessionId, ProfileId,
+                    NetworkType, NetworkIdentifier, Message)
+                SELECT NEW.StartedAtUtc, 'VpnConnected', p.Id, p.ProfileId,
+                    p.NetworkType, p.NetworkIdentifier,
+                    'VPN connected: ' || COALESCE(NULLIF(NEW.InterfaceName, ''), NULLIF(NEW.Description, ''), 'Unnamed VPN')
+                    || ' (routing: ' || NEW.RoutingMode || ').'
+                FROM ConnectionSessions p WHERE p.Id = NEW.ConnectionSessionId;
+            END;
+            """),
+        ("TR_VpnSessions_DisconnectedEvent", """
+            CREATE TRIGGER TR_VpnSessions_DisconnectedEvent
+            AFTER UPDATE OF EndedAtUtc ON VpnSessions
+            WHEN OLD.EndedAtUtc IS NULL AND NEW.EndedAtUtc IS NOT NULL
+            BEGIN
+                INSERT INTO ConnectionEvents(OccurredAtUtc, EventType, SessionId, ProfileId,
+                    NetworkType, NetworkIdentifier, Message)
+                SELECT NEW.EndedAtUtc, 'VpnDisconnected', p.Id, p.ProfileId,
+                    p.NetworkType, p.NetworkIdentifier,
+                    'VPN interval ended: ' || COALESCE(NULLIF(NEW.InterfaceName, ''), NULLIF(NEW.Description, ''), 'Unnamed VPN')
+                    || ' (routing: ' || NEW.RoutingMode || '; reason: ' || NEW.EndReason || ').'
+                FROM ConnectionSessions p WHERE p.Id = NEW.ConnectionSessionId;
+            END;
+            """),
+        ("TR_VpnSessions_RouteChangedEvent", """
+            CREATE TRIGGER TR_VpnSessions_RouteChangedEvent
+            AFTER UPDATE OF RoutingMode ON VpnSessions
+            WHEN OLD.EndedAtUtc IS NULL AND NEW.EndedAtUtc IS NULL
+              AND NEW.RoutingMode IS NOT OLD.RoutingMode
+            BEGIN
+                INSERT INTO ConnectionEvents(OccurredAtUtc, EventType, SessionId, ProfileId,
+                    NetworkType, NetworkIdentifier, Message)
+                SELECT NEW.LastConfirmedAtUtc, 'VpnRouteChanged', p.Id, p.ProfileId,
+                    p.NetworkType, p.NetworkIdentifier,
+                    'VPN routing changed: ' || COALESCE(NULLIF(NEW.InterfaceName, ''), NULLIF(NEW.Description, ''), 'Unnamed VPN')
+                    || ' (' || OLD.RoutingMode || ' → ' || NEW.RoutingMode || ').'
+                FROM ConnectionSessions p WHERE p.Id = NEW.ConnectionSessionId;
+            END;
+            """)
+    ];
+
+    private static void EnsureVpnEventTriggers(SqliteCommand command)
+    {
+        // Existing v4 databases gain event recording without rewriting past intervals/events
+        // or changing table layouts. Trigger installation and validation share initialization's
+        // transaction; event writes then share each interval transition's transaction.
+        foreach (var trigger in VpnEventTriggers)
+        {
+            command.CommandText = "SELECT 1 FROM sqlite_schema WHERE type='trigger' AND name=$name;";
+            command.Parameters.AddWithValue("$name", trigger.Name);
+            var exists = command.ExecuteScalar() is not null;
+            command.Parameters.Clear();
+            if (!exists)
+            {
+                command.CommandText = trigger.Sql;
+                command.ExecuteNonQuery();
+            }
+            ValidateVpnSchemaObject(command, "trigger", trigger.Name, "VpnSessions", trigger.Sql);
+        }
+    }
+
+    private static void ValidateVpnSessionSchema(SqliteCommand command)
+    {
+        ValidateColumns(command, "VpnSessions", new[]
+        {
+            ("Id", "INTEGER", false, 1L),
+            ("ConnectionSessionId", "INTEGER", true, 0L),
+            ("InterfaceIndex", "INTEGER", false, 0L),
+            ("InterfaceGuid", "TEXT", false, 0L),
+            ("InterfaceName", "TEXT", true, 0L),
+            ("Description", "TEXT", true, 0L),
+            ("RoutingMode", "TEXT", true, 0L),
+            ("StartedAtUtc", "TEXT", true, 0L),
+            ("LastConfirmedAtUtc", "TEXT", true, 0L),
+            ("EndedAtUtc", "TEXT", false, 0L),
+            ("EndReason", "TEXT", false, 0L)
+        });
+        ValidateHistoryRelationships(command, "VpnSessions", [("ConnectionSessionId", "ConnectionSessions")]);
+        ValidateVpnSchemaObject(command, "table", "VpnSessions", "VpnSessions", VpnSessionTableSql);
+        foreach (var index in VpnSessionIndexes)
+            ValidateVpnSchemaObject(command, "index", index.Name, "VpnSessions", index.Sql);
+        ValidateHistoryIndex(command, "IX_VpnSessions_ConnectionSessionId", "VpnSessions",
+            [("ConnectionSessionId", false), ("StartedAtUtc", true)]);
+        ValidateHistoryIndex(command, "IX_VpnSessions_StartedAtUtc", "VpnSessions",
+            [("StartedAtUtc", true), ("Id", true)]);
+        foreach (var trigger in VpnSessionTriggers)
+            ValidateVpnSchemaObject(command, "trigger", trigger.Name, trigger.Table, trigger.Sql);
+
+        // Reject already-corrupt version-4 history rather than silently adjusting timestamps or
+        // deleting rows. Completed VPN intervals must remain inside their historical parent.
+        command.CommandText = """
+            SELECT 1 FROM VpnSessions v LEFT JOIN ConnectionSessions p ON p.Id = v.ConnectionSessionId
+            WHERE p.Id IS NULL OR v.StartedAtUtc < p.StartedAtUtc
+              OR v.LastConfirmedAtUtc > p.LastConfirmedAtUtc
+              OR (v.EndedAtUtc IS NULL AND p.EndedAtUtc IS NOT NULL)
+              OR (v.EndedAtUtc IS NOT NULL AND v.EndedAtUtc > COALESCE(p.EndedAtUtc, p.LastConfirmedAtUtc))
+            LIMIT 1;
+            """;
+        if (command.ExecuteScalar() is not null)
+            throw InvalidVpnSessionSchema("A VPN session lies outside its physical connection interval.");
+    }
+
+    private static void ValidateVpnSchemaObject(
+        SqliteCommand command, string type, string name, string table, string expectedSql)
+    {
+        command.CommandText = "SELECT sql FROM sqlite_schema WHERE type=$type AND name=$name AND tbl_name=$table;";
+        command.Parameters.Clear();
+        command.Parameters.AddWithValue("$type", type);
+        command.Parameters.AddWithValue("$name", name);
+        command.Parameters.AddWithValue("$table", table);
+        var actualSql = command.ExecuteScalar()?.ToString();
+        command.Parameters.Clear();
+        if (actualSql is null || !NormalizeSchemaSql(actualSql).Equals(
+            NormalizeSchemaSql(expectedSql), StringComparison.OrdinalIgnoreCase))
+            throw InvalidVpnSessionSchema($"The expected {name} {type} is missing or incompatible.");
+    }
+
+    private static string NormalizeSchemaSql(string sql) =>
+        string.Concat(sql.Where(character => !char.IsWhiteSpace(character))).TrimEnd(';');
+
+    private static InvalidOperationException InvalidVpnSessionSchema(string detail) => new(
+        $"The VPN session schema is incompatible. {detail} Its data and schema version have not been changed.");
 
     private static void EnsureHistoryRelationshipIndexes(SqliteCommand command)
     {
@@ -373,8 +618,12 @@ internal static class DatabaseMigrator
             throw InvalidTableSchema(table, $"The {table} columns do not match the supported schema.");
     }
 
-    private static InvalidOperationException InvalidTableSchema(string table, string detail) =>
-        table is "ConnectionSessions" or "ConnectionEvents" ? InvalidHistorySchema(detail) : InvalidProfileSchema(detail);
+    private static InvalidOperationException InvalidTableSchema(string table, string detail) => table switch
+    {
+        "ConnectionSessions" or "ConnectionEvents" => InvalidHistorySchema(detail),
+        "VpnSessions" => InvalidVpnSessionSchema(detail),
+        _ => InvalidProfileSchema(detail)
+    };
 
     private static InvalidOperationException InvalidProfileSchema(string detail) => new(
         $"The connection profile schema is incompatible. {detail} Its data and schema version have not been changed.");

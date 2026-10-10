@@ -18,6 +18,7 @@ public partial class MainWindow : Window
     private readonly ConnectionProfileMonitor _profileMonitor;
     private readonly ConnectionHistoryStore _history;
     private readonly ConnectionSessionTracker _sessions;
+    private readonly VpnSessionMonitor? _vpnSessions;
     private readonly DatabaseRunLease _runLease;
     private readonly WindowsPowerLifecycle _powerLifecycle;
     private volatile bool _closing;
@@ -79,7 +80,8 @@ public partial class MainWindow : Window
         }
     }
 
-    public MainWindow(UsageStore store, INetworkIdentityService identityService, DatabaseRunLease? runLease = null)
+    public MainWindow(UsageStore store, INetworkIdentityService identityService, DatabaseRunLease? runLease = null,
+        VpnRouteVerifier? vpnVerifier = null)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(identityService);
@@ -90,6 +92,7 @@ public partial class MainWindow : Window
             _runLease.EnsureOwns(store.DatabasePath);
             _history = new ConnectionHistoryStore(store);
             _sessions = new ConnectionSessionTracker(_history);
+            _vpnSessions = new VpnSessionMonitor(_sessions, new VpnSessionStore(store), vpnVerifier);
             _profiles = new ProfileStore(store);
             _profileMonitor = new ConnectionProfileMonitor(identityService, new ProfileResolver(_profiles));
             InitializeComponent();
@@ -108,11 +111,13 @@ public partial class MainWindow : Window
             RefreshTotals();
             _profileMonitor.ObservationReceived += ProfileMonitor_OnObservationReceived;
             _profileMonitor.Start();
+            _vpnSessions.Start();
             _timer.Start();
             Closed += (_, _) => CompleteRun();
         }
         catch
         {
+            _vpnSessions?.Dispose();
             _timer?.Stop();
             try { _powerLifecycle?.Dispose(); }
             finally
@@ -148,6 +153,7 @@ public partial class MainWindow : Window
                     _persistNextObservation = false;
                 }
             });
+            _vpnSessions?.Refresh();
             if (state.Network != _lastPhysicalNetwork || state.Message != _lastDetectionMessage
                 || state.Status != _lastConnectionStatus || _selectedAdapter is null)
             {
@@ -262,6 +268,7 @@ public partial class MainWindow : Window
         if (_closing) return;
         _closing = true;
         _timer.Stop();
+        _vpnSessions?.Dispose();
         try { FlushPendingForLifecycle(); }
         finally
         {
