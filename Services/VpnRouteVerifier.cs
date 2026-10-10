@@ -26,6 +26,24 @@ public sealed class VpnRouteVerifier
         return Verify(detection, Read(AddressFamily.InterNetwork), Read(AddressFamily.InterNetworkV6));
     }
 
+    public VpnRouteObservation GetCurrentObservation(DateTimeOffset checkedAtUtc)
+    {
+        VpnInterfaceInventory inventory;
+        try { inventory = _detection.ReadInventory(); }
+        catch (Exception exception)
+        {
+            inventory = new(Array.Empty<VpnInterfaceEvidence>(), Array.Empty<VpnRasConnectionEvidence>(),
+                false, $"Windows could not determine VPN/tunnel state: {exception.Message}");
+        }
+        var detection = VpnDetectionService.Classify(inventory);
+        // Current route awareness also needs physical default-route proof when no VPN is detected.
+        // The existing GetCurrentState/Verify history API deliberately retains its old semantics.
+        var ipv4 = Read(AddressFamily.InterNetwork);
+        var ipv6 = Read(AddressFamily.InterNetworkV6);
+        return new(Verify(detection, ipv4, ipv6),
+            VpnRouteClassifier.Classify(inventory, ipv4, ipv6, checkedAtUtc));
+    }
+
     private VpnRouteInventory Read(AddressFamily family)
     {
         try { return _source.Read(family); }

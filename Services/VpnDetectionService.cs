@@ -22,6 +22,8 @@ public sealed class VpnDetectionService
     public VpnDetectionService(IVpnInterfaceSource? source = null) =>
         _source = source ?? new WindowsVpnNative();
 
+    internal VpnInterfaceInventory ReadInventory() => _source.Read();
+
     public VpnState GetCurrentState()
     {
         try { return Classify(_source.Read()); }

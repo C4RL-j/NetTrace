@@ -18,6 +18,7 @@ public sealed record MonitoringSnapshot(
     string? PersistenceMessage)
 {
     public NetworkAdapterDetails? SelectedAdapterDetails { get; init; }
+    public VpnRouteSnapshot VpnRoute { get; init; } = VpnRouteSnapshot.Unknown;
     public DateOnly PeakDay { get; init; }
     public double PeakDownloadBytesPerSecond { get; init; }
     public double PeakUploadBytesPerSecond { get; init; }

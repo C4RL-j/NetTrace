@@ -129,4 +129,18 @@ recognition refresh rejects stale profile state without replacing the current
 physical session or counter baseline. Existing schema and matching rules remain
 unchanged.
 
+Connections 003 adds 44 groups in `RouteAwarenessTests.cs`, bringing the console
+suite to 450 groups. Local interface/route fixtures cover physical defaults, active
+VPN defaults and paired `/1` routes, metrics/ties, multiple candidates, inactive and
+internal virtual devices, correlated RAS PPP, conservative fallback/unknown cases,
+independent IPv4/IPv6 VPN, Direct, Unavailable and Unknown values, mixed IP families
+and fully shadowed VPN routes. A known peer route remains intact when the other family
+is unknown. Expired or disabled-default routes retain known family usability and
+cannot silently become Unavailable. Public forwarding ranges are checked
+across prefix boundaries so local/private prefix bases cannot hide public VPN routing
+or identify an unused broad-route tunnel. The shared observation retains legacy VPN
+history classification. Controlled monitoring covers background transitions, unchanged
+adapter/session/counter baseline, identity-unavailable routing, cached reads without
+discovery, stale sleep observations, fresh resume and late disposal rejection.
+
 Both harnesses use owned temporary databases and injected network/VPN/ICMP evidence. They do not open real application data or change Windows network settings.

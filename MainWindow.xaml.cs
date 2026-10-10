@@ -137,20 +137,19 @@ public partial class MainWindow : Window
     private void RefreshHealth(bool refreshChart = false)
     {
         if (_closed || !IsVisible || WindowState == WindowState.Minimized || !HealthContent.IsVisible) return;
+        var snapshot = _monitoring.GetSnapshot();
+        var route = VpnRoutePresentation.Create(snapshot.VpnRoute, snapshot.Connection.Network, snapshot.Adapters);
+        HealthVpnStatusText.Text = route.VpnStatus;
+        HealthVpnStatusText.ToolTip = route.DetailToolTip;
+        HealthVpnStatusText.Foreground = StatusBrush(StatusPresentation.ForVpn(snapshot.VpnRoute.Status));
         var reachability = _monitoring.LatestInternetReachability;
+        var reachabilityStatus = reachability?.Status ?? InternetReachabilityStatus.Checking;
         if (!ReferenceEquals(reachability, _lastReachabilityMeasurement))
         {
-            var status = reachability?.Status ?? InternetReachabilityStatus.Checking;
-            InternetReachabilityText.Text = status.ToString();
-            InternetReachabilityText.Foreground = (Brush)FindResource(status switch
-            {
-                InternetReachabilityStatus.Available => "PositiveBrush",
-                InternetReachabilityStatus.Limited => "CautionBrush",
-                InternetReachabilityStatus.Unavailable => "WarningBrush",
-                _ => "SubtleBrush"
-            });
+            InternetReachabilityText.Text = reachabilityStatus.ToString();
             _lastReachabilityMeasurement = reachability;
         }
+        InternetReachabilityText.Foreground = StatusBrush(StatusPresentation.ForReachability(reachabilityStatus));
         // Read the application-owned worker's last completed cycle. Opening this
         // page never starts or restarts probes; the existing view timer refreshes it.
         var result = _monitoring.LatestIcmpMeasurement;
@@ -171,6 +170,9 @@ public partial class MainWindow : Window
                 IcmpPacketLossChart.InvalidateVisual();
             }
         }
+        var quality = _qualitySummary?.Quality ?? IcmpQuality.Measuring;
+        IcmpQualityText.Foreground = StatusBrush(StatusPresentation.ForIcmpQuality(quality));
+        HealthDisclaimerText.Text = StatusPresentation.HealthExplanation(snapshot.VpnRoute.Status, reachabilityStatus, quality);
         HealthWaitingText.Visibility = result is null ? Visibility.Visible : Visibility.Collapsed;
         if (result is null)
         {
@@ -231,8 +233,9 @@ public partial class MainWindow : Window
         DownloadSessionText.Text = $"App session ↓ {ByteFormatter.Format(snapshot.SessionDownloaded)}";
         UploadSessionText.Text = $"App session ↑ {ByteFormatter.Format(snapshot.SessionUploaded)}";
         StatusText.Text = snapshot.Status;
-        StatusDot.Fill = new SolidColorBrush(snapshot.Status == "Monitoring"
-            ? Color.FromRgb(34, 197, 94) : Color.FromRgb(239, 68, 68));
+        var monitoringBrush = StatusBrush(StatusPresentation.ForMonitoring(snapshot));
+        StatusDot.Fill = monitoringBrush;
+        StatusText.Foreground = monitoringBrush;
         var state = snapshot.Connection;
         CurrentProfileText.Text = state.Status switch
         {
@@ -329,6 +332,17 @@ public partial class MainWindow : Window
     private void RefreshConnections(MonitoringSnapshot snapshot)
     {
         if (_closed || !IsVisible || WindowState == WindowState.Minimized || !ConnectionsContent.IsVisible) return;
+        var route = VpnRoutePresentation.Create(snapshot.VpnRoute, snapshot.Connection.Network, snapshot.Adapters);
+        ConnectionsVpnStatusText.Text = route.VpnStatus;
+        ConnectionsVpnStatusText.ToolTip = route.DetailToolTip;
+        ConnectionsVpnStatusText.Foreground = StatusBrush(StatusPresentation.ForVpn(snapshot.VpnRoute.Status));
+        IPv4RouteText.Text = route.IPv4Route;
+        IPv4RouteText.ToolTip = route.DetailToolTip;
+        IPv4RouteText.Foreground = StatusBrush(StatusPresentation.ForRoute(snapshot.VpnRoute.IPv4RouteKind));
+        IPv6RouteText.Text = route.IPv6Route;
+        IPv6RouteText.ToolTip = route.DetailToolTip;
+        IPv6RouteText.Foreground = StatusBrush(StatusPresentation.ForRoute(snapshot.VpnRoute.IPv6RouteKind));
+        SetDetail(PhysicalAdapterText, route.PhysicalAdapter);
         _loadingAdapters = true;
         try
         {
@@ -340,6 +354,7 @@ public partial class MainWindow : Window
         var details = AdapterDetailsPresentation.Create(snapshot.SelectedAdapter, snapshot.SelectedAdapterDetails, snapshot.Connection);
         SetDetail(AdapterNameText, details.Adapter);
         SetDetail(AdapterStatusText, details.Status);
+        AdapterStatusText.Foreground = StatusBrush(StatusPresentation.ForAdapter(details.Status));
         SetDetail(AdapterNetworkText, details.Network);
         SetDetail(AdapterProfileText, details.Profile);
         SetDetail(AdapterTypeText, details.Type);
@@ -358,6 +373,8 @@ public partial class MainWindow : Window
         control.Text = value;
         control.ToolTip = value;
     }
+
+    private Brush StatusBrush(string resourceKey) => (Brush)FindResource(resourceKey);
 
     private static void UpdateUsageCard(TextBlock total, TextBlock breakdown, long downloaded, long uploaded)
     {

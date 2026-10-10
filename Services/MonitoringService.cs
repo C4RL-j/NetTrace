@@ -120,7 +120,9 @@ public sealed class MonitoringService : IDisposable
             _profiles = new ProfileStore(store);
             _profileMonitor = new ConnectionProfileMonitor(identityService, new ProfileResolver(_profiles), _timeProvider);
             _connection = _profileMonitor.Current;
-            _vpnSessions = new VpnSessionMonitor(_sessions, new VpnSessionStore(store), vpnVerifier, _timeProvider);
+            _vpnSessions = new VpnSessionMonitor(_sessions, new VpnSessionStore(store), vpnVerifier, _timeProvider,
+                observeRoutesWithoutPhysicalSession: true);
+            _vpnSessions.Changed += VpnSessions_OnChanged;
             _timer = new Timer(_ => SampleNow(), null, Timeout.Infinite, Timeout.Infinite);
             RefreshAdapters();
         }
@@ -178,6 +180,7 @@ public sealed class MonitoringService : IDisposable
                 _historyPersistenceMessage ?? _trafficPeaksPersistenceMessage ?? _usagePersistenceMessage)
             {
                 SelectedAdapterDetails = _selectedAdapterDetails,
+                VpnRoute = _vpnSessions.LatestRouteSnapshot,
                 PeakDay = today,
                 PeakDownloadBytesPerSecond = peaks.DownloadBytesPerSecond,
                 PeakUploadBytesPerSecond = peaks.UploadBytesPerSecond
@@ -232,6 +235,8 @@ public sealed class MonitoringService : IDisposable
             _lastHandledObservationSequence = Math.Max(_lastHandledObservationSequence, cutoff);
         }
     }
+
+    private void VpnSessions_OnChanged(object? sender, EventArgs args) => RaiseChanged();
 
     private void ProfileMonitor_OnObservationReceived(object? sender, ConnectionObservationEventArgs observation)
     {
@@ -516,6 +521,7 @@ public sealed class MonitoringService : IDisposable
                 _stopping = true;
                 _timer.Dispose();
                 _profileMonitor.ObservationReceived -= ProfileMonitor_OnObservationReceived;
+                _vpnSessions.Changed -= VpnSessions_OnChanged;
             }
             // No application lock is held while joining native recognition/VPN workers.
             try

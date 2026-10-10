@@ -427,6 +427,79 @@ retains the connection session. Health transports are fakes, and it never opens
 the user's real profile database or changes network configuration. An unavailable
 native identity skips that live-only check with its reason instead of guessing.
 
+## Connections 003 — VPN / Tunnel & Route Awareness
+
+Connections adds compact **VPN / tunnel**, **IPv4 route**, **IPv6 route** and
+**Physical adapter** rows inside the existing current-connection card. Health adds
+VPN context between internet reachability and ICMP quality. Physical identity, the
+monitored traffic adapter, effective routing, DNS/HTTPS reachability and ICMP quality
+remain separate.
+VPN transitions do not switch the selected adapter, restart monitoring or split the
+physical connection session.
+
+Awareness uses the existing local Windows interface and IPv4/IPv6 route sources.
+Installed, disconnected and non-routed tunnel devices do not establish an active
+internet VPN. Loopback and ordinary internal virtualization interfaces are excluded.
+Native encapsulation types and recognized tunnel-driver metadata provide candidates.
+A PPP route participant also needs an unambiguous matching connected RAS VPN; modem
+or direct dial-up evidence is insufficient. A virtual Ethernet name is a fallback
+signal only when operational native state and effective route ownership agree.
+TAP Always Connected and unsupported or ambiguous forwarding owners remain Unknown.
+Effective general routing considers default routes and paired `/1` routes, interface
+usability and combined route/interface metrics. Ambiguous ownership, incomplete
+native evidence and unknown routing remain **Unknown**. No provider lookup, public-IP
+comparison, interface binding, route change or VPN control is introduced.
+
+A proven VPN general-route participant in either usable IP family makes VPN / tunnel
+**Active**. Each route row independently displays **VPN**, **Direct**, **Unavailable**
+(the family is not usable/configured), or **Unknown** (ambiguous or incomplete evidence).
+For example, IPv4 through the tunnel and IPv6 over Wi-Fi display **IPv4 route: VPN**
+and **IPv6 route: Direct**. Direct IPv6 is a routing observation without a leak or
+security verdict. A known result stays visible even when the other family is Unknown.
+These values do not claim that every destination uses a VPN or prove encryption. The
+existing stricter FullTunnel/SplitTunnel verification and VPN history rules remain
+independent of these compact awareness values.
+
+The existing background VPN observer publishes a cached route snapshot on network
+changes and its established 30-second cadence. UI reads do not query native routes.
+Sleep invalidates pending observations; resume obtains fresh evidence. Tray monitoring
+continues without rendering hidden views or creating another timer/worker.
+Physical identity permission failures do not prevent independently proven route
+awareness; existing VPN history writes still require a confirmed physical parent.
+
+When reachability is Available, VPN is Active and ICMP quality is Unavailable, Health
+explains that ICMP **may be blocked or filtered** by the active VPN while internet
+reachability remains available. Other combinations retain the general distinction
+between ICMP replies and independently checked DNS/HTTPS reachability. Probe targets,
+packet-loss history, quality evaluation and charts are unchanged.
+
+Shared semantic resources provide secondary color cues alongside readable status text:
+
+| Resource | Uses |
+| --- | --- |
+| `StatusPositiveBrush` | Available reachability, Excellent/Good ICMP, Connected adapter, Monitoring |
+| `StatusCautionBrush` | Limited reachability, Fair ICMP |
+| `StatusNegativeBrush` | Unavailable reachability, Poor ICMP, Disconnected adapter |
+| `StatusInfoBrush` | Active VPN, either family route marked VPN, Measuring ICMP |
+| `StatusNeutralBrush` | Unknown/Inactive VPN, Direct/Unknown/Unavailable family routes, Unavailable ICMP, Checking reachability |
+
+Address, DNS, gateway, adapter name and other informational rows retain normal text.
+The existing cards, charts and minimum-window scrolling remain in place.
+
+An explicit passive validation is available from the WPF harness:
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests/NetTrace.WpfTests.csproj -- --passive-vpn-validation --render-health
+```
+
+It reports IPv4 and IPv6 route values from local native tunnel/route evidence without
+changing the user's VPN or network configuration. The optional render checks the
+captured family values and semantic colors on Connections, then combines that routing with clearly
+labelled simulated reachability/ICMP evidence in an owned database. It sends no probes
+and never opens the real NetTrace database. This validates presentation; it does not
+measure live DNS/HTTPS reachability or packet loss. Automated suites use injected
+interfaces, routes, counters and health sources and require no real VPN.
+
 ## Verification
 
 Run the isolated migration checks without touching your application data:

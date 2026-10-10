@@ -23,6 +23,8 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args.Length > 0 && args[0] == "--passive-vpn-validation")
+            return PassiveVpnValidation.Run(args.Skip(1).ToArray());
         if (args.Length > 0 && args[0] == "--profiles-live-validation")
             return LiveProfileValidation.Run();
         if (args.Length == 3 && args[0] == "--background-exit-child")
@@ -282,6 +284,7 @@ internal static class Program
             InternetReachabilityChecks.Run(ownedRoot, adapter.Id, Check);
             ConnectionDetailsChecks.Run(ownedRoot, Check);
             ProfileManagementChecks.Run(ownedRoot, Check);
+            VpnRouteAwarenessChecks.Run(ownedRoot, Check);
             Console.WriteLine($"{_passed}/{_passed} WPF integration checks passed. Isolated data: {ownedRoot}");
             return 0;
         }

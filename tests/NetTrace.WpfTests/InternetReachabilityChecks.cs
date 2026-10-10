@@ -77,7 +77,7 @@ internal static class InternetReachabilityChecks
             FindText(cards[0]).Any(text => text == "Internet reachability"),
             "Internet reachability is one compact row above ICMP quality in the existing upper card and two-card layout");
         check(!FindText(cards[0]).Any(text => text is "Online" or "Offline") &&
-            ((SolidColorBrush)reachabilityText.Foreground).Color == ((SolidColorBrush)window.FindResource("SubtleBrush")).Color,
+            ReferenceEquals(reachabilityText.Foreground, window.FindResource("StatusNeutralBrush")),
             "The initial reachability state uses readable Checking text and the existing neutral theme instead of Online or Offline");
         SavePreview(window, root, "checking");
 

@@ -1,6 +1,6 @@
 # NetTrace WPF integration tests
 
-The 370 Windows-only STA integration checks use isolated temporary databases and injected
+The 412 Windows-only STA integration checks use isolated temporary databases and injected
 physical/VPN identities. They exercise the existing dashboard, persistence,
 profile, power, recovery and ownership behavior together with Task 005A tray and
 background lifecycle behavior. They retain the previous 77 WPF lifecycle checks,
@@ -116,6 +116,37 @@ verifies the main Connections presentation, removes the temporary mapping and de
 the temporary profile while retaining its physical session. It never opens or edits
 the user's real profile database, changes network settings or sends health probes.
 It reports an unavailable identity as a skip and never runs in the automated suite.
+
+Connections 003 adds 42 checks in `VpnRouteAwarenessChecks.cs`. Controlled local
+interface/route inventories cover Direct, active VPN, installed inactive tunnels,
+internal virtual devices, Unknown routing and multiple candidates. Separate IPv4/IPv6
+rows independently cover VPN/Direct, VPN/VPN, Direct/Direct, VPN/Unavailable,
+Direct/VPN, Direct/Unknown and VPN/Unknown; VPN uses the informational resource and
+all other family values use the neutral resource. Current route and Health context
+update without another observer/timer,
+native UI query, adapter change, session reset or ICMP-history recalculation.
+Cases A–D retain independent reachability/VPN/ICMP text; all status checks use shared
+semantic resource identity rather than screenshot pixels. Visibility, restoration,
+tray recreation, sleep/resume, unavailable physical identity and exit retain the
+existing monitoring lifecycle. Eighteen PNGs under `vpn-route-awareness-previews`
+cover the requested states and all three pages at 760×600.
+
+An explicit passive validation can be run separately with:
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests/NetTrace.WpfTests.csproj -- --passive-vpn-validation --render-health
+```
+
+It captures real local Windows interface and route evidence, reports independent
+IPv4 and IPv6 VPN/Direct/Unknown/Unavailable values, and leaves the user's VPN/network
+configuration unchanged. The optional render verifies both Connections family values
+and their semantic resources in `captured-vpn-family-routes.png`. Physical identity,
+profile and bandwidth in this owned preview are validation placeholders.
+The `captured-vpn-simulated-health.png` preview uses captured real routing with
+explicitly labelled simulated Available reachability and Unavailable ICMP in an owned database. It sends
+no health probes and never opens real NetTrace data. It is presentation validation,
+not a live reachability or packet-loss measurement. Without a conclusively active
+VPN, it reports live VPN validation unavailable and leaves the network unchanged.
 
 Legacy sampler/lifecycle fixtures now use owned adapter inventory and counters,
 including child processes. The complete suite requires no real adapter or network
