@@ -90,10 +90,11 @@ internal static class NavigationChecks
         check(OnPage(tabs[4], Control<CheckBox>(window, "StartWithWindowsCheckBox")) &&
             OnPage(tabs[4], Control<TextBlock>(window, "DatabasePathText")),
             "Settings contains startup registration and the existing local database path");
-        check(OnPage(tabs[1], Control<TextBlock>(window, "HealthPlaceholderText")) &&
-            Text(window, "HealthPlaceholderText") == "Health dashboard coming later" &&
+        check(OnPage(tabs[1], Control<StackPanel>(window, "HealthContent")) &&
+            new[] { "IcmpTargetText", "IcmpLatencyText", "IcmpPacketLossText", "IcmpRepliesText", "IcmpLastSampleText" }
+                .All(name => OnPage(tabs[1], Control<TextBlock>(window, name))) &&
             !LogicalDescendants((DependencyObject)tabs[1].Content).OfType<Button>().Any(),
-            "Health remains a placeholder without adding probe controls or health classifications");
+            "Health presents the latest raw ICMP values without adding probe action buttons");
 
         monitoring.SampleNow();
         clock.Advance(TimeSpan.FromSeconds(1));

@@ -18,6 +18,7 @@ internal static class IcmpHealthTests
         ("Per-attempt ICMP timeouts complete safely without a bogus latency", Run(AttemptTimeouts)),
         ("ICMP results carry the configured target and UTC observation timestamp", Run(ResultMetadata)),
         ("Stopping a pending ICMP cycle cancels it promptly without publishing partial results", Run(CancelPendingCycle)),
+        ("ICMP shutdown delivers source cancellation callbacks without blocking the caller", Run(CancellationCallbackCleanup)),
         ("A non-cooperative ICMP source cannot overlap probes or delay shutdown", Run(NonCooperativeShutdown)),
         ("Repeated ICMP Start calls and interval ticks cannot overlap probe cycles", Run(NoOverlappingCycles)),
         ("ICMP suspension cancels and discards a partial cycle until explicitly resumed", Run(SuspendAndResume)),
@@ -210,6 +211,34 @@ internal static class IcmpHealthTests
         {
             pending.TrySetResult(new(IPStatus.TimedOut));
             await WaitUntilAsync(() => source.ActiveCalls == 0, "the owned fake operation to finish");
+        }
+    }
+
+    private static async Task CancellationCallbackCleanup()
+    {
+        var source = new CallbackGatedPingSource();
+        using var monitor = new IcmpMonitor(source, timeout: TimeSpan.FromMinutes(5));
+        try
+        {
+            monitor.Start();
+            await source.ProbeEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            var elapsed = Stopwatch.StartNew();
+            monitor.Stop();
+            monitor.Stop();
+            Check(elapsed.Elapsed < TimeSpan.FromSeconds(1), "Stop must return without synchronously joining a held cancellation callback.");
+            await source.CallbackEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            Check(!source.SourceReleased.Task.IsCompleted, "The gated callback must still own the pending source operation.");
+            source.ReleaseCallback();
+            await source.SourceReleased.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            await monitor.Completion.WaitAsync(TimeSpan.FromSeconds(1));
+            Equal(1, source.CancellationCallbacks, "source cancellation callback delivery");
+            Check(source.CallerTokenWasCancelled, "The source must receive cancellation through its supplied token.");
+            Check(monitor.LatestResult is null, "Shutdown must not publish an incomplete burst as an ICMP measurement.");
+        }
+        finally
+        {
+            source.ReleaseCallback();
+            source.CancelOwnedTask();
         }
     }
 
@@ -413,6 +442,39 @@ internal static class IcmpHealthTests
             LastTarget = target;
             LastTimeout = timeout;
             return Task.FromResult(Success(8));
+        }
+    }
+
+    private sealed class CallbackGatedPingSource : IPingSource
+    {
+        private readonly TaskCompletionSource _releaseCallback = NewSignal();
+        private readonly TaskCompletionSource<IcmpPingReply> _reply = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _callbacks;
+        public TaskCompletionSource ProbeEntered { get; } = NewSignal();
+        public TaskCompletionSource CallbackEntered { get; } = NewSignal();
+        public TaskCompletionSource SourceReleased { get; } = NewSignal();
+        public int CancellationCallbacks => Volatile.Read(ref _callbacks);
+        public bool CallerTokenWasCancelled { get; private set; }
+        public void ReleaseCallback() => _releaseCallback.TrySetResult();
+        public void CancelOwnedTask() => _reply.TrySetCanceled();
+
+        public async Task<IcmpPingReply> SendAsync(IPAddress target, TimeSpan timeout, CancellationToken cancellationToken)
+        {
+            var registration = cancellationToken.Register(() =>
+            {
+                Interlocked.Increment(ref _callbacks);
+                CallbackEntered.TrySetResult();
+                _releaseCallback.Task.GetAwaiter().GetResult();
+                CallerTokenWasCancelled = cancellationToken.IsCancellationRequested;
+                _reply.TrySetCanceled(cancellationToken);
+            });
+            ProbeEntered.TrySetResult();
+            try { return await _reply.Task.ConfigureAwait(false); }
+            finally
+            {
+                registration.Dispose();
+                SourceReleased.TrySetResult();
+            }
         }
     }
 

@@ -30,7 +30,7 @@ NetTrace V1.1 establishes the NetTrace identity and safely migrates local histor
 
 **Peak today** is the highest sampled download/upload traffic NetTrace observed across monitored adapters during the local calendar day. Peaks are saved about every 30 seconds and on normal exit, survive restarts, and begin at zero on a new day. They are observations while NetTrace runs, not guaranteed maximum internet throughput. Earlier usage totals cannot reconstruct old traffic peaks, so peak recording begins with this build. A sudden termination can lose the most recent unsaved peak.
 
-**Wi-Fi link rate** describes the local PC-to-router/hotspot link; Ethernet and other adapters are labeled accordingly. It is not measured internet speed. The status indicator describes monitoring activity. Raw ICMP measurements run in the background; the Health page remains a placeholder. Active internet speed tests remain future work.
+**Wi-Fi link rate** describes the local PC-to-router/hotspot link; Ethernet and other adapters are labeled accordingly. It is not measured internet speed. The status indicator describes monitoring activity. Raw ICMP measurements run in the background and the Health page shows the latest completed cycle. Active internet speed tests remain future work.
 
 ## Important limitation
 
@@ -168,7 +168,7 @@ an underline on the active page:
 | Page | Contents |
 | --- | --- |
 | Dashboard | Live traffic, daily peaks, data usage and a compact current connection/session summary |
-| Health | Placeholder only; no health measurements or graphs |
+| Health | Latest raw ICMP latency, packet loss, reply count, target and local sample time |
 | Connections | Current connection, monitored adapter/details, Profiles and Assign profile |
 | History | Opens the existing recent sessions/events history window |
 | Settings | Start NetTrace with Windows and the local database location |
@@ -194,7 +194,15 @@ reply counts, average successful-reply round-trip time and failed-attempt percen
 All failures produce 100% loss and a null latency. Filtering, timeouts and local ping
 errors can all prevent replies; these measurements never declare the internet offline
 or change physical/VPN sessions. The latest result is available in memory through
-`MonitoringService.LatestIcmpMeasurement`; there is no health UI or database storage.
+`MonitoringService.LatestIcmpMeasurement`; measurements are not stored in the database.
+
+UI Foundation 001.1 displays that latest completed result on **Health**. It shows
+**Waiting for first measurement...** until a cycle completes, then displays the target,
+average successful-reply latency, packet loss, successful replies and local sample time.
+All-failed cycles show **Unavailable** latency and **100%** loss. The existing window
+refresh timer reads the result within one second of completion; returning to Health
+reads it immediately. Page navigation never starts, stops or restarts probes, and the
+application-owned worker continues in tray-only mode.
 
 The existing application lifecycle starts, pauses for sleep, resumes and cancels the
 single ICMP worker. Incomplete or canceled bursts are discarded, bursts cannot overlap,

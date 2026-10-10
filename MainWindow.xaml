@@ -228,14 +228,47 @@
 
             <TabItem x:Name="HealthTab" Header="Health">
                 <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                    <Border Style="{StaticResource CardStyle}" VerticalAlignment="Top">
-                        <StackPanel>
-                            <TextBlock Text="HEALTH" Style="{StaticResource MutedText}"/>
-                            <TextBlock x:Name="HealthPlaceholderText" Text="Health dashboard coming later" FontSize="18" FontWeight="SemiBold" Margin="0,8,0,0"/>
-                            <TextBlock Text="This page is reserved for future health measurements."
-                                       Style="{StaticResource MutedText}" TextWrapping="Wrap" Margin="0,8,0,0"/>
-                        </StackPanel>
-                    </Border>
+                    <StackPanel x:Name="HealthContent">
+                        <Border Style="{StaticResource CardStyle}">
+                            <StackPanel>
+                                <TextBlock Text="ICMP LATENCY" Style="{StaticResource MutedText}"/>
+                                <TextBlock x:Name="HealthWaitingText" Text="Waiting for first measurement..."
+                                           Style="{StaticResource MutedText}" TextWrapping="Wrap" Margin="0,8,0,0"/>
+
+                                <Grid Margin="0,14,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="150"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Text="Target" Style="{StaticResource MutedText}"/>
+                                    <TextBlock x:Name="IcmpTargetText" Grid.Column="1" Text="—" TextWrapping="Wrap"/>
+
+                                    <TextBlock Grid.Row="1" Text="Average latency" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+                                    <TextBlock x:Name="IcmpLatencyText" Grid.Row="1" Grid.Column="1" Text="—" TextWrapping="Wrap" Margin="0,8,0,0"/>
+
+                                    <TextBlock Grid.Row="2" Text="Packet loss" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+                                    <TextBlock x:Name="IcmpPacketLossText" Grid.Row="2" Grid.Column="1" Text="—" TextWrapping="Wrap" Margin="0,8,0,0"/>
+
+                                    <TextBlock Grid.Row="3" Text="Successful replies" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+                                    <TextBlock x:Name="IcmpRepliesText" Grid.Row="3" Grid.Column="1" Text="—" TextWrapping="Wrap" Margin="0,8,0,0"/>
+
+                                    <TextBlock Grid.Row="4" Text="Last sample" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+                                    <TextBlock x:Name="IcmpLastSampleText" Grid.Row="4" Grid.Column="1" Text="—" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                                </Grid>
+
+                                <TextBlock Text="ICMP replies can be blocked. These measurements alone do not determine internet availability."
+                                           Style="{StaticResource MutedText}" TextWrapping="Wrap" Margin="0,16,0,0"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
                 </ScrollViewer>
             </TabItem>
 

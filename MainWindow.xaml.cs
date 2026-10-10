@@ -31,6 +31,7 @@ public partial class MainWindow : Window
         Closed += OnClosed;
         IsVisibleChanged += OnVisibilityChanged;
         DashboardContent.IsVisibleChanged += DashboardContent_OnVisibilityChanged;
+        HealthContent.IsVisibleChanged += HealthContent_OnVisibilityChanged;
         SettingsContent.IsVisibleChanged += SettingsContent_OnVisibilityChanged;
         RefreshDashboard();
         _monitoring.Changed += Monitoring_OnChanged;
@@ -99,6 +100,35 @@ public partial class MainWindow : Window
         if (!_closed && SettingsContent.IsVisible) RefreshStartupSetting();
     }
 
+    private void HealthContent_OnVisibilityChanged(object sender, DependencyPropertyChangedEventArgs args)
+    {
+        if (!_closed && HealthContent.IsVisible) RefreshHealth();
+    }
+
+    private void RefreshHealth()
+    {
+        // Read the application-owned worker's last completed cycle. Opening this
+        // page never starts or restarts probes; the existing view timer refreshes it.
+        var result = _monitoring.LatestIcmpMeasurement;
+        HealthWaitingText.Visibility = result is null ? Visibility.Visible : Visibility.Collapsed;
+        if (result is null)
+        {
+            IcmpTargetText.Text = "—";
+            IcmpLatencyText.Text = "—";
+            IcmpPacketLossText.Text = "—";
+            IcmpRepliesText.Text = "—";
+            IcmpLastSampleText.Text = "—";
+            return;
+        }
+
+        IcmpTargetText.Text = result.Target;
+        IcmpLatencyText.Text = result.SuccessfulReplies > 0 && result.AverageLatencyMs is { } latency
+            ? $"{latency:0.##} ms" : "Unavailable";
+        IcmpPacketLossText.Text = $"{result.PacketLossPercent:0.##}%";
+        IcmpRepliesText.Text = $"{result.SuccessfulReplies} / {result.SuccessfulReplies + result.FailedReplies}";
+        IcmpLastSampleText.Text = result.TimestampUtc.ToLocalTime().ToString("G");
+    }
+
     private void OnClosed(object? sender, EventArgs args)
     {
         _closed = true;
@@ -107,6 +137,7 @@ public partial class MainWindow : Window
         _monitoring.Changed -= Monitoring_OnChanged;
         IsVisibleChanged -= OnVisibilityChanged;
         DashboardContent.IsVisibleChanged -= DashboardContent_OnVisibilityChanged;
+        HealthContent.IsVisibleChanged -= HealthContent_OnVisibilityChanged;
         SettingsContent.IsVisibleChanged -= SettingsContent_OnVisibilityChanged;
         Closed -= OnClosed;
     }
@@ -125,6 +156,7 @@ public partial class MainWindow : Window
     public void RefreshDashboard()
     {
         if (_closed) return;
+        if (HealthTab.IsSelected) RefreshHealth();
         var snapshot = _monitoring.GetSnapshot();
         _loadingAdapters = true;
         try

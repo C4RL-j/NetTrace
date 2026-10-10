@@ -48,4 +48,10 @@ sleep/resume and incomplete-cycle discard. The native source is checked with an
 already-canceled token so it sends no packets. Existing monitoring fixtures also
 inject fake ICMP sources; no test pings the public internet.
 
+UI Foundation 001.1 adds a cancellation-cleanup regression, bringing the console
+suite to 217 groups. A controlled source holds its cancellation callback while
+verifying that Stop returns promptly, then releases it and verifies exactly one
+source cleanup with no partial measurement. This covers the shutdown race found
+by the Health-page integration checks.
+
 Both harnesses use owned temporary databases and injected network/VPN/ICMP evidence. They do not open real application data or change Windows network settings.

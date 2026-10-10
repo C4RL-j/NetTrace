@@ -219,7 +219,10 @@ public sealed class IcmpMonitor : IDisposable
         }
         finally
         {
-            RequestCancellation(attemptCancellation);
+            // Finish cancellation callbacks before the using scope disposes their
+            // source. Otherwise queued cancellation can miss the pending ping.
+            // This awaits worker cleanup; Stop itself remains nonblocking.
+            await CancelAndObserveAsync(attemptCancellation).ConfigureAwait(false);
             if (pending is not null)
             {
                 // Observe faults even if shutdown abandons a non-cooperative source, or a

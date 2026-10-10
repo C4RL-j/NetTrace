@@ -1,6 +1,6 @@
 # NetTrace WPF integration tests
 
-The 174 Windows-only STA integration checks use isolated temporary databases and injected
+The 194 Windows-only STA integration checks use isolated temporary databases and injected
 physical/VPN identities. They exercise the existing dashboard, persistence,
 profile, power, recovery and ownership behavior together with Task 005A tray and
 background lifecycle behavior. They retain the previous 77 WPF lifecycle checks,
@@ -31,6 +31,12 @@ registration and the existing Profiles, Assign Profile and History dialogs. They
 also exercise dashboard closure, tray restoration and clean exit through the new
 shell. The harness renders each page at the normal and minimum window sizes into
 `navigation-previews` beneath its isolated data directory for layout review.
+
+UI Foundation 001.1 adds 20 checks for the latest completed ICMP result on Health, the initial
+waiting message, all-failed latency, local sample time and updates through the
+existing window refresh timer. Controlled ping replies also verify immediate
+refresh on returning to Health, unchanged probe ownership across navigation,
+continued tray-only monitoring and the latest result after dashboard recreation.
 
 ```powershell
 dotnet run --project tests/NetTrace.WpfTests/NetTrace.WpfTests.csproj

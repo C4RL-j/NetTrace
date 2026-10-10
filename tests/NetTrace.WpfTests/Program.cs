@@ -273,6 +273,7 @@ internal static class Program
             CheckActualLaunchProcess(ownedRoot, adapter.Id, background: true);
             CheckIcmpBackgroundLifecycle(ownedRoot, adapter.Id);
             NavigationChecks.Run(ownedRoot, adapter.Id, Check);
+            IcmpPresentationChecks.Run(ownedRoot, adapter.Id, Check);
             Console.WriteLine($"{_passed}/{_passed} WPF integration checks passed. Isolated data: {ownedRoot}");
             return 0;
         }
