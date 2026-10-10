@@ -215,7 +215,8 @@ var tests = new (string Name, Action Run)[]
     ("Invalid or missing startup executable paths cannot create a registration", StartupRegistrationInvalidPaths),
     ("Unicode and apostrophes in an executable path remain one quoted startup argument", StartupRegistrationUnicodePath),
     ("Equivalent absolute executable paths produce the same canonical registration", StartupRegistrationCanonicalPath)
-}.Concat(IcmpHealthTests.Cases).ToArray();
+}.Concat(IcmpHealthTests.Cases).Concat(IcmpRollingTests.Cases)
+    .Concat(IcmpStabilityChartTests.Cases).Concat(IcmpPacketLossChartTests.Cases).ToArray();
 
 var failed = 0;
 foreach (var (name, run) in tests)

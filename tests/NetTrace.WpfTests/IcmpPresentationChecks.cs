@@ -15,7 +15,7 @@ internal static class IcmpPresentationChecks
 {
     private const BindingFlags PrivateInstance = BindingFlags.Instance | BindingFlags.NonPublic;
     private static readonly string[] MetricNames =
-        ["IcmpTargetText", "IcmpLatencyText", "IcmpPacketLossText", "IcmpRepliesText", "IcmpLastSampleText"];
+        ["IcmpTargetText", "IcmpLatencyText", "IcmpJitterText", "IcmpPacketLossText", "IcmpRepliesText", "IcmpLastSampleText"];
 
     public static void Run(string root, string adapterId, Action<bool, string> check)
     {
@@ -68,6 +68,8 @@ internal static class IcmpPresentationChecks
         check(Text(window, "IcmpTargetText") == "9.9.9.9" && Text(window, "IcmpPacketLossText") == "0%" &&
             Text(window, "IcmpLatencyText") == Latency(12.5),
             "The existing view timer displays the configured target, successful average latency and zero loss");
+        check(Text(window, "IcmpJitterText") == Latency(35d / 3),
+            "Health displays the mean absolute difference between successive successful reply latencies");
         check(Control<TextBlock>(window, "HealthWaitingText").Visibility == Visibility.Collapsed,
             "The waiting message disappears after a completed four-reply ICMP cycle");
         check(Text(window, "IcmpLastSampleText") == LocalTimestamp(clock.GetUtcNow()),
@@ -79,6 +81,8 @@ internal static class IcmpPresentationChecks
         Wait(() => Text(window, "IcmpRepliesText") == "3 / 4" && Text(window, "IcmpLastSampleText") == LocalTimestamp(partialTime));
         check(Text(window, "IcmpLatencyText") == Latency(61d / 3) && Text(window, "IcmpPacketLossText") == "25%",
             "Health displays partial packet loss and rounds successful-reply average latency to two decimals");
+        check(Text(window, "IcmpJitterText") == Latency(10.5),
+            "Health excludes failed replies from jitter and updates the value after the next completed cycle");
         check(ReferenceEquals(viewTimer, ViewTimer(window)) && ReferenceEquals(worker, icmp.Completion),
             "New ICMP measurements update automatically without creating a timer or restarting probes");
 
@@ -86,9 +90,10 @@ internal static class IcmpPresentationChecks
         var failureTime = clock.GetUtcNow();
         source.Queue(Failure(), Failure(), Failure(), Failure());
         Wait(() => Text(window, "IcmpRepliesText") == "0 / 4" && Text(window, "IcmpLastSampleText") == LocalTimestamp(failureTime));
-        check(Text(window, "IcmpLatencyText") == "Unavailable" && Text(window, "IcmpPacketLossText") == "100%" &&
+        check(Text(window, "IcmpLatencyText") == "Unavailable" && Text(window, "IcmpJitterText") == "Unavailable" &&
+            Text(window, "IcmpPacketLossText") == "100%" &&
             Control<TextBlock>(window, "HealthWaitingText").Visibility == Visibility.Collapsed,
-            "A completed all-failed cycle displays 100 percent loss and unavailable latency rather than a fabricated value");
+            "A completed all-failed cycle displays 100 percent loss and unavailable latency and jitter");
         check(monitoring.GetSnapshot().Status == "Monitoring" && history.GetActiveSession()!.Id == physicalId &&
             !Descendants(healthContent).OfType<TextBlock>().Any(text => text.Text is "Healthy" or "Degraded" or "Internet Offline"),
             "ICMP failure does not introduce a health classification or change physical monitoring state");
@@ -96,8 +101,8 @@ internal static class IcmpPresentationChecks
         clock.Advance(TimeSpan.FromSeconds(15));
         source.Queue(Success(0), Success(0), Success(0), Success(0));
         Wait(() => Text(window, "IcmpLatencyText") == Latency(0) && Text(window, "IcmpRepliesText") == "4 / 4");
-        check(Text(window, "IcmpPacketLossText") == "0%",
-            "Successful zero-millisecond replies remain a real zero latency measurement");
+        check(Text(window, "IcmpPacketLossText") == "0%" && Text(window, "IcmpJitterText") == Latency(0),
+            "Successful zero-millisecond replies remain real zero latency and zero jitter measurements");
         WaitWithoutUi(() => source.Calls == 17 && source.Active == 1);
         var callsBeforeNavigation = source.Calls;
         var latestBeforeNavigation = monitoring.LatestIcmpMeasurement;
@@ -111,7 +116,8 @@ internal static class IcmpPresentationChecks
             }
         }
         check(source.Calls == callsBeforeNavigation && source.MaximumConcurrent == 1 &&
-            ReferenceEquals(worker, icmp.Completion) && ReferenceEquals(latestBeforeNavigation, monitoring.LatestIcmpMeasurement),
+            ReferenceEquals(worker, icmp.Completion) && ReferenceEquals(latestBeforeNavigation, monitoring.LatestIcmpMeasurement) &&
+            Text(window, "IcmpJitterText") == Latency(0),
             "Repeated navigation reuses the running ICMP worker and never starts another blocked probe");
 
         navigation.SelectedItem = Control<TabItem>(window, "DashboardTab");
@@ -119,23 +125,29 @@ internal static class IcmpPresentationChecks
         viewTimer.Stop(); // Prove page visibility refresh works even before another timer tick.
         clock.Advance(TimeSpan.FromSeconds(15));
         var returnTime = clock.GetUtcNow();
-        source.Queue(Success(50), Success(50), Success(50), Success(50));
+        source.Queue(Success(50), Success(60), Success(50), Success(40));
         WaitWithoutUi(() => monitoring.LatestIcmpMeasurement?.TimestampUtc == returnTime && source.Calls == 21);
-        check(Text(window, "IcmpLatencyText") == Latency(0),
+        check(Text(window, "IcmpLatencyText") == Latency(0) && Text(window, "IcmpJitterText") == Latency(0),
             "An inactive Health page retains its view until it is selected again");
         navigation.SelectedItem = health;
         window.UpdateLayout();
         Pump();
-        check(Text(window, "IcmpLatencyText") == Latency(50) && Text(window, "IcmpLastSampleText") == LocalTimestamp(returnTime) &&
+        check(Text(window, "IcmpLatencyText") == Latency(50) && Text(window, "IcmpJitterText") == Latency(10) &&
+            Text(window, "IcmpLastSampleText") == LocalTimestamp(returnTime) &&
             !viewTimer.IsEnabled,
-            "Returning to Health immediately displays the latest measurement without waiting for a timer tick");
+            "Returning to Health immediately displays the latest latency and jitter without waiting for a timer tick");
         viewTimer.Start();
 
+        var completedBeforePartial = monitoring.RollingIcmpSamples;
         source.Queue(Success(100), Success(100));
         WaitWithoutUi(() => source.Calls == 23 && source.Active == 1);
         Pump();
-        check(Text(window, "IcmpLatencyText") == Latency(50) && monitoring.LatestIcmpMeasurement?.TimestampUtc == returnTime,
+        check(Text(window, "IcmpLatencyText") == Latency(50) && Text(window, "IcmpJitterText") == Latency(10) &&
+            monitoring.LatestIcmpMeasurement?.TimestampUtc == returnTime,
             "An incomplete new burst cannot replace the last completed ICMP measurement");
+        check(completedBeforePartial.Count == 5 && monitoring.RollingIcmpSamples.SequenceEqual(completedBeforePartial) &&
+            ReferenceEquals(completedBeforePartial[^1], monitoring.LatestIcmpMeasurement),
+            "An unfinished burst does not enter rolling history or replace its last completed sample");
         window.Close();
         check(context.Dashboard is null && !viewTimer.IsEnabled && monitoring.GetSnapshot().IsRunning,
             "Closing the Health dashboard stops its view timer while background monitoring continues");
@@ -143,18 +155,40 @@ internal static class IcmpPresentationChecks
         var backgroundTime = clock.GetUtcNow();
         source.Queue(Failure(), Failure());
         WaitWithoutUi(() => monitoring.LatestIcmpMeasurement?.TimestampUtc == backgroundTime && source.Calls == 25);
-        check(monitoring.LatestIcmpMeasurement is { SuccessfulReplies: 2, FailedReplies: 2, AverageLatencyMs: 100, PacketLossPercent: 50 } &&
+        check(monitoring.LatestIcmpMeasurement is
+            { SuccessfulReplies: 2, FailedReplies: 2, AverageLatencyMs: 100, PacketLossPercent: 50, JitterMs: 0 } &&
             history.GetActiveSession()!.Id == physicalId && ReferenceEquals(worker, icmp.Completion),
             "The same ICMP worker completes fresh measurements while the dashboard is closed");
+        var backgroundSamples = monitoring.RollingIcmpSamples;
+        check(backgroundSamples.Count == 6 && ReferenceEquals(backgroundSamples[^1], monitoring.LatestIcmpMeasurement) &&
+            backgroundSamples.Select(sample => sample.TimestampUtc)
+                .SequenceEqual(backgroundSamples.Select(sample => sample.TimestampUtc).Order()),
+            "Completed ICMP samples keep accumulating in chronological order while NetTrace runs tray-only");
         context.ShowDashboard();
         var recreated = context.Dashboard!;
         Control<TabControl>(recreated, "MainNavigation").SelectedItem = Control<TabItem>(recreated, "HealthTab");
         recreated.UpdateLayout();
         Pump();
         check(created == 2 && !ReferenceEquals(window, recreated) && Text(recreated, "IcmpTargetText") == "9.9.9.9" &&
-            Text(recreated, "IcmpLatencyText") == Latency(100) && Text(recreated, "IcmpPacketLossText") == "50%" &&
+            Text(recreated, "IcmpLatencyText") == Latency(100) && Text(recreated, "IcmpJitterText") == Latency(0) &&
+            Text(recreated, "IcmpPacketLossText") == "50%" &&
             Text(recreated, "IcmpRepliesText") == "2 / 4" && Text(recreated, "IcmpLastSampleText") == LocalTimestamp(backgroundTime),
-            "Tray Open recreates Health with the freshest background result and local sample time");
+            "Tray Open recreates Health with the freshest background latency, jitter and local sample time");
+
+        clock.Advance(TimeSpan.FromSeconds(15));
+        var insufficientTime = clock.GetUtcNow();
+        source.Queue(Failure(), Success(42), Failure(), Failure());
+        Wait(() => Text(recreated, "IcmpRepliesText") == "1 / 4" &&
+            Text(recreated, "IcmpLastSampleText") == LocalTimestamp(insufficientTime));
+        check(Text(recreated, "IcmpLatencyText") == Latency(42) && Text(recreated, "IcmpPacketLossText") == "75%" &&
+            Text(recreated, "IcmpJitterText") == "Unavailable",
+            "One successful reply preserves its valid latency but cannot produce a jitter value");
+        check(completedBeforePartial.Count == 5 && completedBeforePartial[^1].TimestampUtc == returnTime &&
+            backgroundSamples.Count == 6 && backgroundSamples[^1].TimestampUtc == backgroundTime &&
+            monitoring.RollingIcmpSamples.Count == 7 &&
+            ReferenceEquals(monitoring.RollingIcmpSamples[^1], monitoring.LatestIcmpMeasurement),
+            "Previously obtained rolling-history snapshots stay stable as the background worker appends completed samples");
+        WaitWithoutUi(() => source.Calls == 29 && source.Active == 1);
 
         var stopTime = Stopwatch.StartNew();
         context.Exit();

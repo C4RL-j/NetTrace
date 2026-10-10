@@ -168,7 +168,7 @@ an underline on the active page:
 | Page | Contents |
 | --- | --- |
 | Dashboard | Live traffic, daily peaks, data usage and a compact current connection/session summary |
-| Health | Latest raw ICMP latency, packet loss, reply count, target and local sample time |
+| Health | Latest raw ICMP measurements, latency/jitter chart and packet-loss history |
 | Connections | Current connection, monitored adapter/details, Profiles and Assign profile |
 | History | Opens the existing recent sessions/events history window |
 | Settings | Start NetTrace with Windows and the local database location |
@@ -203,6 +203,50 @@ All-failed cycles show **Unavailable** latency and **100%** loss. The existing w
 refresh timer reads the result within one second of completion; returning to Health
 reads it immediately. Page navigation never starts, stops or restarts probes, and the
 application-owned worker continues in tray-only mode.
+
+Network Health 002 adds **Jitter** to the same Health card. Within each completed
+burst, jitter is the mean absolute difference between consecutive successful RTTs
+in attempt order: `sum(abs(RTT[i] - RTT[i-1])) / (successful replies - 1)`.
+For example, 10, 20, 5 and 15 ms yield 11.67 ms jitter. Failed replies are skipped,
+never substituted with zero; fewer than two successes show **Unavailable**. Each
+burst starts a fresh calculation, including after resume.
+
+`MonitoringService.LatestIcmpMeasurement` exposes latency, loss and `JitterMs`.
+`MonitoringService.RollingIcmpSamples` returns a read-only snapshot of the newest
+60 completed bursts, oldest first (about 15 minutes at the default interval).
+Oldest entries are evicted automatically. Completed samples remain across sleep,
+but unfinished bursts are discarded; history is in memory and resets on app exit.
+No extra worker, graph or database storage is added. This measures short-burst RTT
+variation, rather than long-term jitter or one-way media timing.
+
+Network Health 003 adds a **Connection Stability** chart below the Health statistics.
+Native WPF drawing plots average latency in blue and jitter in amber, on a shared
+millisecond scale. It projects the existing read-only rolling history, up to 60
+completed cycles, oldest to newest with the newest at the right. Missing values
+break the relevant line; a real zero remains a valid point. A single valid cycle
+is shown as a dot. Sparse local-time labels identify the first and last samples;
+horizontal spacing represents completed cycles, rather than elapsed time.
+
+The existing window refresh updates chart data only when a new cycle completes;
+entering Health, showing the window or restoring it displays the current history
+immediately. Unchanged snapshots reuse the current presentation. Hidden, inactive
+or minimized views do not update the chart, and minimizing pauses the existing
+window refresh timer. The application-owned worker continues unchanged, including
+in tray mode. No chart dependency, additional timer or health persistence is added.
+
+Network Health 004 adds a compact **Packet Loss** strip inside Connection Stability,
+below the latency/jitter chart. Both controls share the exact same immutable
+presentation snapshot and completed-cycle positions. Purple bar height is the
+cycle's packet-loss percentage on a fixed 0–100% scale: zero is baseline-only,
+25% is quarter height, and 100% is full height, including when latency/jitter are
+unavailable. Arbitrary finite percentages are supported and clamped for display;
+nonfinite inputs leave no bar rather than inventing a measurement. Empty history
+shows **Waiting for packet loss samples...**.
+
+The strip uses native WPF drawing and the same visible-page update/restore lifecycle.
+It creates no worker, timer or separate history source. These bars describe ICMP
+loss only; blocked ICMP replies cannot establish internet availability. History
+remains in memory and is cleared when NetTrace exits.
 
 The existing application lifecycle starts, pauses for sleep, resumes and cancels the
 single ICMP worker. Incomplete or canceled bursts are discarded, bursts cannot overlap,

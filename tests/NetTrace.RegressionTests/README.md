@@ -54,4 +54,24 @@ verifying that Stop returns promptly, then releases it and verifies exactly one
 source cleanup with no partial measurement. This covers the shutdown race found
 by the Health-page integration checks.
 
+Network Health 002 adds 13 groups in `IcmpRollingTests.cs`, bringing the console
+suite to 230 groups. Injected bursts cover stable and varying jitter, insufficient
+successful replies, failure/invalid-RTT exclusion, and per-burst calculation reset.
+Controlled clocks and replies verify newest-60 eviction, completion order,
+read-only stable snapshots, completed all-failed samples, partial-cycle discard
+on sleep and exit, fresh post-resume jitter, and a single probe worker.
+
+Network Health 003 adds 16 chart-presentation groups in `IcmpStabilityChartTests.cs`,
+bringing the console suite to 246 groups. They cover empty/single/partial/full
+history, newest-60 rollover and observation order, independent missing-value gaps,
+valid zero measurements, insufficient jitter data, shared positions and finite
+scaling, and immutable presentation snapshots. Existing monitor/lifecycle checks
+remain in the same suite.
+
+Network Health 004 adds 13 groups in `IcmpPacketLossChartTests.cs`, bringing the
+console suite to 259 groups. They cover standard and arbitrary percentages,
+safe presentation bounds, unavailable malformed inputs, 60-cycle rollover and
+observation order, immutable shared positions, and independent percent/ms scales.
+A completed 100%-loss cycle retains its loss point while latency/jitter have gaps.
+
 Both harnesses use owned temporary databases and injected network/VPN/ICMP evidence. They do not open real application data or change Windows network settings.

@@ -9,6 +9,7 @@ namespace NetTrace.Services;
 public sealed class IcmpMonitor : IDisposable
 {
     public const int AttemptsPerCycle = 4;
+    public const int HistoryCapacity = 60;
     public static TimeSpan DefaultInterval => TimeSpan.FromSeconds(15);
     public static TimeSpan DefaultTimeout => TimeSpan.FromSeconds(1);
 
@@ -17,6 +18,7 @@ public sealed class IcmpMonitor : IDisposable
     private readonly TimeProvider _timeProvider;
     private readonly CancellationTokenSource _stopCancellation = new();
     private readonly SemaphoreSlim _resumeSignal = new(0, 1);
+    private readonly Queue<IcmpProbeResult> _rollingSamples = new();
     private CancellationTokenSource? _cycleCancellation;
     private Task _completion = Task.CompletedTask;
     private IcmpProbeResult? _latestResult;
@@ -30,6 +32,11 @@ public sealed class IcmpMonitor : IDisposable
     public TimeSpan Interval { get; }
     public TimeSpan Timeout { get; }
     public IcmpProbeResult? LatestResult { get { lock (_gate) return _latestResult; } }
+    // Snapshot in completion order (oldest first); callers cannot mutate worker state.
+    public IReadOnlyList<IcmpProbeResult> RollingSamples
+    {
+        get { lock (_gate) return Array.AsReadOnly(_rollingSamples.ToArray()); }
+    }
     public Task Completion { get { lock (_gate) return _completion; } }
 
     public IcmpMonitor(IPingSource? pingSource = null, IPAddress? target = null,
@@ -141,7 +148,11 @@ public sealed class IcmpMonitor : IDisposable
                     lock (_gate)
                     {
                         if (!_stopped && !_suspended && generation == _generation)
+                        {
                             _latestResult = result;
+                            _rollingSamples.Enqueue(result);
+                            if (_rollingSamples.Count > HistoryCapacity) _rollingSamples.Dequeue();
+                        }
                     }
 
                     // Cadence is measured between starts. A slow cycle is never overlapped.
@@ -181,6 +192,8 @@ public sealed class IcmpMonitor : IDisposable
     {
         var successful = 0;
         double latencyTotal = 0;
+        double jitterTotal = 0;
+        double? previousSuccessfulLatency = null;
         for (var attempt = 0; attempt < AttemptsPerCycle; attempt++)
         {
             cycleToken.ThrowIfCancellationRequested();
@@ -190,13 +203,19 @@ public sealed class IcmpMonitor : IDisposable
             {
                 successful++;
                 latencyTotal += reply.RoundtripTimeMs;
+                if (previousSuccessfulLatency is { } previous)
+                    jitterTotal += Math.Abs(reply.RoundtripTimeMs - previous);
+                previousSuccessfulLatency = reply.RoundtripTimeMs;
             }
         }
 
         cycleToken.ThrowIfCancellationRequested();
         var failed = AttemptsPerCycle - successful;
+        // Per-burst jitter: mean absolute difference between consecutive successful
+        // RTTs, in attempt order. Failures are skipped; no RTT carries into another burst.
         return new IcmpProbeResult(_timeProvider.GetUtcNow(), Target.ToString(), successful, failed,
-            successful == 0 ? null : latencyTotal / successful, failed * 100.0 / AttemptsPerCycle);
+            successful == 0 ? null : latencyTotal / successful, failed * 100.0 / AttemptsPerCycle,
+            successful < 2 ? null : jitterTotal / (successful - 1));
     }
 
     private async Task<IcmpPingReply?> SendAttemptAsync(CancellationToken cycleToken,

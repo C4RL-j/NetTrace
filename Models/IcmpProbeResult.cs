@@ -7,4 +7,5 @@ public sealed record IcmpProbeResult(
     int SuccessfulReplies,
     int FailedReplies,
     double? AverageLatencyMs,
-    double PacketLossPercent);
+    double PacketLossPercent,
+    double? JitterMs = null);

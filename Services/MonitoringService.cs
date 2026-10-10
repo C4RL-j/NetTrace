@@ -55,6 +55,7 @@ public sealed class MonitoringService : IDisposable
     public ConnectionHistoryStore History => _history;
     public string DatabasePath => _store.DatabasePath;
     public IcmpProbeResult? LatestIcmpMeasurement => _icmpMonitor.LatestResult;
+    public IReadOnlyList<IcmpProbeResult> RollingIcmpSamples => _icmpMonitor.RollingSamples;
 
     public static MonitoringService CreateForDataRoot(string localApplicationDataDirectory,
         INetworkIdentityService? identityService = null, VpnRouteVerifier? vpnVerifier = null,

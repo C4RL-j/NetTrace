@@ -17,6 +17,8 @@ public partial class MainWindow : Window
     private IWindowsStartupRegistration? _startupRegistration;
     private volatile bool _closed;
     private bool _loadingAdapters = true;
+    private bool _chartInitialized;
+    private IcmpProbeResult? _lastChartMeasurement;
 
     public MainWindow(MonitoringService monitoring, IWindowsStartupRegistration? startupRegistration = null)
     {
@@ -41,6 +43,23 @@ public partial class MainWindow : Window
     {
         base.OnActivated(args);
         if (!_closed) RefreshStartupSetting();
+    }
+
+    protected override void OnStateChanged(EventArgs args)
+    {
+        base.OnStateChanged(args);
+        if (_closed || _timer is null) return;
+        if (WindowState == WindowState.Minimized) _timer.Stop();
+        else if (IsVisible)
+        {
+            RefreshDashboard();
+            if (HealthContent.IsVisible)
+            {
+                IcmpStabilityChart.InvalidateVisual();
+                IcmpPacketLossChart.InvalidateVisual();
+            }
+            _timer.Start();
+        }
     }
 
     private IWindowsStartupRegistration StartupRegistration =>
@@ -82,7 +101,7 @@ public partial class MainWindow : Window
     private void OnVisibilityChanged(object sender, DependencyPropertyChangedEventArgs args)
     {
         if (_closed) return;
-        if (IsVisible)
+        if (IsVisible && WindowState != WindowState.Minimized)
         {
             RefreshDashboard();
             _timer.Start();
@@ -102,19 +121,36 @@ public partial class MainWindow : Window
 
     private void HealthContent_OnVisibilityChanged(object sender, DependencyPropertyChangedEventArgs args)
     {
-        if (!_closed && HealthContent.IsVisible) RefreshHealth();
+        if (!_closed && HealthContent.IsVisible) RefreshHealth(refreshChart: true);
     }
 
-    private void RefreshHealth()
+    private void RefreshHealth(bool refreshChart = false)
     {
+        if (_closed || !IsVisible || WindowState == WindowState.Minimized || !HealthContent.IsVisible) return;
         // Read the application-owned worker's last completed cycle. Opening this
         // page never starts or restarts probes; the existing view timer refreshes it.
         var result = _monitoring.LatestIcmpMeasurement;
+        if (refreshChart || !_chartInitialized || !ReferenceEquals(result, _lastChartMeasurement))
+        {
+            var samples = _monitoring.RollingIcmpSamples;
+            IcmpStabilityChart.UpdateSamples(samples);
+            IcmpPacketLossChart.UpdateData(IcmpStabilityChart.Data);
+            _lastChartMeasurement = samples.Count == 0 ? null : samples[^1];
+            _chartInitialized = true;
+            // Visibility may have suppressed an earlier render, even when the
+            // retained samples have not changed since the page was last shown.
+            if (refreshChart)
+            {
+                IcmpStabilityChart.InvalidateVisual();
+                IcmpPacketLossChart.InvalidateVisual();
+            }
+        }
         HealthWaitingText.Visibility = result is null ? Visibility.Visible : Visibility.Collapsed;
         if (result is null)
         {
             IcmpTargetText.Text = "—";
             IcmpLatencyText.Text = "—";
+            IcmpJitterText.Text = "—";
             IcmpPacketLossText.Text = "—";
             IcmpRepliesText.Text = "—";
             IcmpLastSampleText.Text = "—";
@@ -124,6 +160,8 @@ public partial class MainWindow : Window
         IcmpTargetText.Text = result.Target;
         IcmpLatencyText.Text = result.SuccessfulReplies > 0 && result.AverageLatencyMs is { } latency
             ? $"{latency:0.##} ms" : "Unavailable";
+        IcmpJitterText.Text = result.SuccessfulReplies >= 2 && result.JitterMs is { } jitter
+            ? $"{jitter:0.##} ms" : "Unavailable";
         IcmpPacketLossText.Text = $"{result.PacketLossPercent:0.##}%";
         IcmpRepliesText.Text = $"{result.SuccessfulReplies} / {result.SuccessfulReplies + result.FailedReplies}";
         IcmpLastSampleText.Text = result.TimestampUtc.ToLocalTime().ToString("G");
@@ -147,7 +185,7 @@ public partial class MainWindow : Window
         if (_closed || Dispatcher.HasShutdownStarted) return;
         Dispatcher.BeginInvoke(new Action(() =>
         {
-            if (!_closed && IsVisible) RefreshDashboard();
+            if (!_closed && IsVisible && WindowState != WindowState.Minimized) RefreshDashboard();
         }));
     }
 

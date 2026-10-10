@@ -10,6 +10,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using NetTrace;
+using NetTrace.Controls;
 using NetTrace.Models;
 using NetTrace.Services;
 
@@ -91,10 +92,12 @@ internal static class NavigationChecks
             OnPage(tabs[4], Control<TextBlock>(window, "DatabasePathText")),
             "Settings contains startup registration and the existing local database path");
         check(OnPage(tabs[1], Control<StackPanel>(window, "HealthContent")) &&
-            new[] { "IcmpTargetText", "IcmpLatencyText", "IcmpPacketLossText", "IcmpRepliesText", "IcmpLastSampleText" }
+            new[] { "IcmpTargetText", "IcmpLatencyText", "IcmpJitterText", "IcmpPacketLossText", "IcmpRepliesText", "IcmpLastSampleText" }
                 .All(name => OnPage(tabs[1], Control<TextBlock>(window, name))) &&
+            OnPage(tabs[1], Control<IcmpStabilityChart>(window, "IcmpStabilityChart")) &&
+            OnPage(tabs[1], Control<IcmpPacketLossChart>(window, "IcmpPacketLossChart")) &&
             !LogicalDescendants((DependencyObject)tabs[1].Content).OfType<Button>().Any(),
-            "Health presents the latest raw ICMP values without adding probe action buttons");
+            "Health presents the latest raw ICMP values, stability chart and packet-loss strip without adding probe action buttons");
 
         monitoring.SampleNow();
         clock.Advance(TimeSpan.FromSeconds(1));

@@ -1,6 +1,6 @@
 # NetTrace WPF integration tests
 
-The 194 Windows-only STA integration checks use isolated temporary databases and injected
+The 247 Windows-only STA integration checks use isolated temporary databases and injected
 physical/VPN identities. They exercise the existing dashboard, persistence,
 profile, power, recovery and ownership behavior together with Task 005A tray and
 background lifecycle behavior. They retain the previous 77 WPF lifecycle checks,
@@ -37,6 +37,30 @@ waiting message, all-failed latency, local sample time and updates through the
 existing window refresh timer. Controlled ping replies also verify immediate
 refresh on returning to Health, unchanged probe ownership across navigation,
 continued tray-only monitoring and the latest result after dashboard recreation.
+
+Network Health 002 adds six checks and extends existing assertions for the latest
+jitter value. Controlled bursts verify the formula, failed-reply exclusion, real
+zero jitter, and unavailable jitter with fewer than two successes. The same worker
+updates Health across navigation and dashboard recreation, accumulates ordered
+completed samples in tray-only mode, and preserves previously obtained snapshots.
+Unfinished bursts never enter rolling history.
+
+Network Health 003 adds 21 checks in `IcmpStabilityChartChecks.cs` for the native
+Connection Stability chart. They verify immediate existing-history display,
+missing-value gaps and singleton points, unchanged-data reuse, new-cycle updates,
+page/hide/minimize guards, immediate restore and tray recreation, and stable
+bandwidth/session/worker state. A 60-cycle native pixel render checks both series
+and saves `stability-chart-previews/60-cycles-with-gaps.png` beneath the isolated
+test root. No chart timer or extra ping worker is introduced.
+
+Network Health 004 adds 26 checks in `IcmpPacketLossChartChecks.cs` for the shared
+packet-loss strip. They cover 100%-loss bars beside unavailable latency/jitter,
+immediate synchronized snapshots, navigation/hide/minimize/restore/tray lifecycle,
+61-cycle rollover, and unchanged timer/worker/bandwidth/session state. Six native
+pixel fixtures verify zero, partial, single full loss, all-failed, empty and mixed
+60-cycle renders; a minimum-window preview verifies compact placement and no
+horizontal scrolling. PNGs are saved under `packet-loss-chart-previews` in the
+owned test directory.
 
 ```powershell
 dotnet run --project tests/NetTrace.WpfTests/NetTrace.WpfTests.csproj
