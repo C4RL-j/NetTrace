@@ -168,7 +168,7 @@ an underline on the active page:
 | Page | Contents |
 | --- | --- |
 | Dashboard | Live traffic, daily peaks, data usage and a compact current connection/session summary |
-| Health | Latest raw ICMP measurements, latency/jitter chart and packet-loss history |
+| Health | Latest raw ICMP measurements, recent ICMP quality, latency/jitter chart and packet-loss history |
 | Connections | Current connection, monitored adapter/details, Profiles and Assign profile |
 | History | Opens the existing recent sessions/events history window |
 | Settings | Start NetTrace with Windows and the local database location |
@@ -247,6 +247,30 @@ The strip uses native WPF drawing and the same visible-page update/restore lifec
 It creates no worker, timer or separate history source. These bars describe ICMP
 loss only; blocked ICMP replies cannot establish internet availability. History
 remains in memory and is cleared when NetTrace exits.
+
+Network Health 005 adds **ICMP quality** to the upper ICMP LATENCY card. It evaluates
+only the newest 12 completed cycles from the existing history, in completion order,
+without another buffer or worker. Fewer than three completed cycles show **Measuring**.
+Once three exist, no valid successful latency measurements means **Unavailable**,
+not **Poor**: the target or network may block ICMP.
+
+Recent loss is the mean of the selected cycles' loss percentages, including all-failed
+cycles. Recent latency and jitter are unweighted means of valid per-cycle measurements;
+missing values are excluded rather than replaced with zero. Quality is the worst
+classification among the available metrics:
+
+| Metric | Excellent | Good | Fair | Poor |
+| --- | --- | --- | --- | --- |
+| Latency | ≤ 50 ms | > 50 and ≤ 100 ms | > 100 and ≤ 200 ms | > 200 ms |
+| Jitter | ≤ 10 ms | > 10 and ≤ 20 ms | > 20 and ≤ 40 ms | > 40 ms |
+| Packet loss | 0% | > 0 and ≤ 1% | > 1 and ≤ 5% | > 5% |
+
+The field updates with completed history and immediately on Health entry/restore.
+Hidden, minimized and inactive views skip evaluation. The single-target ICMP result
+does not determine internet availability or rate an ISP. With four probes per cycle,
+the smallest nonzero 12-cycle mean loss is about 2.08%, so loss alone moves directly
+from Excellent to Fair; Good can still reflect latency or jitter. No quality history
+is persisted, and there are no notifications or additional probes.
 
 The existing application lifecycle starts, pauses for sleep, resumes and cancels the
 single ICMP worker. Incomplete or canceled bursts are discarded, bursts cannot overlap,

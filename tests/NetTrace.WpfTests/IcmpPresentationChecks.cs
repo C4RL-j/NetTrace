@@ -96,7 +96,7 @@ internal static class IcmpPresentationChecks
             "A completed all-failed cycle displays 100 percent loss and unavailable latency and jitter");
         check(monitoring.GetSnapshot().Status == "Monitoring" && history.GetActiveSession()!.Id == physicalId &&
             !Descendants(healthContent).OfType<TextBlock>().Any(text => text.Text is "Healthy" or "Degraded" or "Internet Offline"),
-            "ICMP failure does not introduce a health classification or change physical monitoring state");
+            "ICMP failure does not infer internet availability or change physical monitoring state");
 
         clock.Advance(TimeSpan.FromSeconds(15));
         source.Queue(Success(0), Success(0), Success(0), Success(0));

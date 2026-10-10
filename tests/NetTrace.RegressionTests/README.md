@@ -74,4 +74,11 @@ safe presentation bounds, unavailable malformed inputs, 60-cycle rollover and
 observation order, immutable shared positions, and independent percent/ms scales.
 A completed 100%-loss cycle retains its loss point while latency/jitter have gaps.
 
+Network Health 005 adds 45 groups in `IcmpQualityTests.cs`, bringing the console
+suite to 304 groups. They cover all six states, independent and worst-metric
+severity, exact and immediately-above thresholds, three-cycle minimum, unavailable
+and mixed ICMP, missing/invalid measurements, unweighted per-cycle averages,
+newest-12 selection and rollover, observation order, unchanged source history,
+deterministic immutable summaries and finite extreme averages.
+
 Both harnesses use owned temporary databases and injected network/VPN/ICMP evidence. They do not open real application data or change Windows network settings.

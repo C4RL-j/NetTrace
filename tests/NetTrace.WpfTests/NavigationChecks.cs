@@ -92,7 +92,7 @@ internal static class NavigationChecks
             OnPage(tabs[4], Control<TextBlock>(window, "DatabasePathText")),
             "Settings contains startup registration and the existing local database path");
         check(OnPage(tabs[1], Control<StackPanel>(window, "HealthContent")) &&
-            new[] { "IcmpTargetText", "IcmpLatencyText", "IcmpJitterText", "IcmpPacketLossText", "IcmpRepliesText", "IcmpLastSampleText" }
+            new[] { "IcmpQualityText", "IcmpTargetText", "IcmpLatencyText", "IcmpJitterText", "IcmpPacketLossText", "IcmpRepliesText", "IcmpLastSampleText" }
                 .All(name => OnPage(tabs[1], Control<TextBlock>(window, name))) &&
             OnPage(tabs[1], Control<IcmpStabilityChart>(window, "IcmpStabilityChart")) &&
             OnPage(tabs[1], Control<IcmpPacketLossChart>(window, "IcmpPacketLossChart")) &&

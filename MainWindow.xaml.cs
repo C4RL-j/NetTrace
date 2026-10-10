@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
 using NetTrace.Models;
+using NetTrace.Presentation;
 using NetTrace.Services;
 using NetTrace.Utils;
 
@@ -19,6 +20,7 @@ public partial class MainWindow : Window
     private bool _loadingAdapters = true;
     private bool _chartInitialized;
     private IcmpProbeResult? _lastChartMeasurement;
+    private IcmpQualitySummary? _qualitySummary;
 
     public MainWindow(MonitoringService monitoring, IWindowsStartupRegistration? startupRegistration = null)
     {
@@ -135,6 +137,8 @@ public partial class MainWindow : Window
             var samples = _monitoring.RollingIcmpSamples;
             IcmpStabilityChart.UpdateSamples(samples);
             IcmpPacketLossChart.UpdateData(IcmpStabilityChart.Data);
+            _qualitySummary = IcmpQualityEvaluator.Evaluate(IcmpStabilityChart.Data.Samples);
+            IcmpQualityText.Text = _qualitySummary.Quality.ToString();
             _lastChartMeasurement = samples.Count == 0 ? null : samples[^1];
             _chartInitialized = true;
             // Visibility may have suppressed an earlier render, even when the

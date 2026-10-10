@@ -276,6 +276,7 @@ internal static class Program
             IcmpPresentationChecks.Run(ownedRoot, adapter.Id, Check);
             IcmpStabilityChartChecks.Run(ownedRoot, adapter.Id, Check);
             IcmpPacketLossChartChecks.Run(ownedRoot, adapter.Id, Check);
+            IcmpQualityChecks.Run(ownedRoot, adapter.Id, Check);
             Console.WriteLine($"{_passed}/{_passed} WPF integration checks passed. Isolated data: {ownedRoot}");
             return 0;
         }
