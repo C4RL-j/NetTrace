@@ -29,7 +29,11 @@ internal static class VpnTransportChecks
         Select(window, "Connections");
         var grid = Control<Grid>(window, "ConnectionRouteGrid");
         check(Control<StackPanel>(window, "ConnectionsContent").Children.OfType<Border>().Count() == 2 &&
-            grid.RowDefinitions.Count == 5 && grid.Children.OfType<TextBlock>().Any(text => text.Text == "VPN transport") &&
+            grid.RowDefinitions.Count == 5 && grid.Children.OfType<FrameworkElement>()
+                .Where(cell => Grid.GetColumn(cell) == 0 && Grid.GetRow(cell) == 1)
+                .Select(cell => cell is TextBlock label ? label.Text :
+                    (cell as Panel)?.Children.OfType<TextBlock>().SingleOrDefault()?.Text)
+                .SingleOrDefault() == "VPN transport" &&
             new[] { "ConnectionsVpnStatusText", "VpnTransportText", "IPv4RouteText", "IPv6RouteText", "PhysicalAdapterText" }
                 .Select(name => Grid.GetRow(Control<TextBlock>(window, name))).SequenceEqual(new[] { 0, 1, 2, 3, 4 }),
             "VPN transport occupies one compact row between tunnel status and the independent family routes inside the existing card");

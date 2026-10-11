@@ -32,6 +32,7 @@
             <Setter Property="FontSize" Value="13"/>
         </Style>
 
+
         <Style TargetType="ComboBox">
             <Setter Property="MinHeight" Value="34"/>
             <Setter Property="Padding" Value="10,4"/>
@@ -318,6 +319,22 @@
             <TabItem x:Name="ConnectionsTab" Header="Connections">
                 <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                     <StackPanel x:Name="ConnectionsContent">
+                        <StackPanel.Resources>
+                            <Style TargetType="ToolTip">
+                                <Setter Property="MaxWidth" Value="322"/>
+                                <Setter Property="Padding" Value="10"/>
+                                <Setter Property="Background" Value="#172036"/>
+                                <Setter Property="Foreground" Value="#F8FAFC"/>
+                                <Setter Property="BorderBrush" Value="#2B3957"/>
+                                <Setter Property="ContentTemplate">
+                                    <Setter.Value>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding}" TextWrapping="Wrap" MaxWidth="300"/>
+                                        </DataTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </StackPanel.Resources>
                         <Border Style="{StaticResource CardStyle}">
                             <StackPanel>
                                 <DockPanel>
@@ -347,7 +364,11 @@
                                     <TextBlock Text="VPN / tunnel" Style="{StaticResource MutedText}"/>
                                     <TextBlock x:Name="ConnectionsVpnStatusText" Grid.Column="1" Text="Unknown" FontWeight="SemiBold"
                                                Foreground="{StaticResource StatusNeutralBrush}"/>
-                                    <TextBlock Grid.Row="1" Text="VPN transport" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+                                    <StackPanel x:Name="VpnTransportLabelPanel" Grid.Row="1" Orientation="Horizontal"
+                                                HorizontalAlignment="Left" Margin="0,8,0,0">
+                                        <TextBlock Text="VPN transport" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                                        <controls:NetworkHelpButton x:Name="VpnTransportHelp" Term="VPN transport" Margin="6,0,0,0"/>
+                                    </StackPanel>
                                     <TextBlock x:Name="VpnTransportText" Grid.Row="1" Grid.Column="1" Text="Unknown" FontWeight="SemiBold" Margin="0,8,0,0"
                                                Foreground="{StaticResource StatusNeutralBrush}"/>
                                     <TextBlock Grid.Row="2" Text="IPv4 route" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
@@ -407,19 +428,113 @@
                                     <TextBlock x:Name="AdapterProfileText" Grid.Row="3" Grid.Column="1" Text="Unassigned" Style="{StaticResource AdapterDetailValue}" Margin="0,8,0,0"/>
                                     <TextBlock Grid.Row="4" Text="Type" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
                                     <TextBlock x:Name="AdapterTypeText" Grid.Row="4" Grid.Column="1" Style="{StaticResource AdapterDetailValue}" Margin="0,8,0,0"/>
-                                    <TextBlock Grid.Row="5" Text="IPv4" Style="{StaticResource MutedText}" Margin="0,18,0,0"/>
+                                    <StackPanel x:Name="Ipv4LabelPanel" Grid.Row="5" Orientation="Horizontal"
+                                                HorizontalAlignment="Left" Margin="0,18,0,0">
+                                        <TextBlock Text="IPv4" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                                        <controls:NetworkHelpButton x:Name="Ipv4Help" Term="IPv4" Margin="6,0,0,0"/>
+                                    </StackPanel>
                                     <TextBlock x:Name="Ipv4Text" Grid.Row="5" Grid.Column="1" Style="{StaticResource AdapterDetailValue}" Margin="0,18,0,0"/>
-                                    <TextBlock Grid.Row="6" Text="IPv6" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+                                    <StackPanel x:Name="Ipv6LabelPanel" Grid.Row="6" Orientation="Horizontal"
+                                                HorizontalAlignment="Left" Margin="0,8,0,0">
+                                        <TextBlock Text="IPv6" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                                        <controls:NetworkHelpButton x:Name="Ipv6Help" Term="IPv6" Margin="6,0,0,0"/>
+                                    </StackPanel>
                                     <TextBlock x:Name="Ipv6Text" Grid.Row="6" Grid.Column="1" Style="{StaticResource AdapterDetailValue}" Margin="0,8,0,0"
                                                ToolTip="A usable global or unique-local IPv6 address. Link-local-only IPv6 is shown as Unavailable."/>
-                                    <TextBlock Grid.Row="7" Text="Default gateway" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+                                    <StackPanel x:Name="DefaultGatewayLabelPanel" Grid.Row="7" Orientation="Horizontal"
+                                                HorizontalAlignment="Left" Margin="0,8,0,0">
+                                        <TextBlock Text="Default gateway" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                                        <controls:NetworkHelpButton x:Name="DefaultGatewayHelp" Term="Default gateway" Margin="6,0,0,0"/>
+                                    </StackPanel>
                                     <TextBlock x:Name="DefaultGatewayText" Grid.Row="7" Grid.Column="1" Style="{StaticResource AdapterDetailValue}" Margin="0,8,0,0"/>
-                                    <TextBlock Grid.Row="8" Text="DNS" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+                                    <StackPanel x:Name="DnsLabelPanel" Grid.Row="8" Orientation="Horizontal"
+                                                HorizontalAlignment="Left" Margin="0,8,0,0">
+                                        <TextBlock Text="DNS" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                                        <controls:NetworkHelpButton x:Name="DnsHelp" Term="DNS" Margin="6,0,0,0"/>
+                                    </StackPanel>
                                     <TextBlock x:Name="DnsText" Grid.Row="8" Grid.Column="1" Style="{StaticResource AdapterDetailValue}" Margin="0,8,0,0"/>
-                                    <TextBlock x:Name="LinkRateLabel" Grid.Row="9" Text="Adapter link rate" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+                                    <StackPanel x:Name="LinkRateLabelPanel" Grid.Row="9" Orientation="Horizontal"
+                                                HorizontalAlignment="Left" Margin="0,8,0,0">
+                                        <TextBlock x:Name="LinkRateLabel" Text="Adapter link rate" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                                        <controls:NetworkHelpButton x:Name="LinkRateHelp" Term="Link rate" Margin="6,0,0,0"/>
+                                    </StackPanel>
                                     <TextBlock x:Name="LinkSpeedText" Grid.Row="9" Grid.Column="1" Style="{StaticResource AdapterDetailValue}" Margin="0,8,0,0"
                                                ToolTip="The local rate reported by the monitored adapter. This is not measured internet speed."/>
                                 </Grid>
+                                <StackPanel x:Name="WifiRadioSection" Visibility="Collapsed" Margin="0,16,0,0">
+                                    <TextBlock Text="WI-FI RADIO" Style="{StaticResource MutedText}" Margin="0,0,0,4"/>
+                                    <Grid x:Name="WifiRadioGrid">
+                                        <Grid.Resources>
+                                            <Style x:Key="WifiRadioValue" TargetType="TextBlock">
+                                                <Setter Property="Text" Value="Unavailable"/>
+                                                <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+                                                <Setter Property="VerticalAlignment" Value="Center"/>
+                                            </Style>
+                                        </Grid.Resources>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="150"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+                                        <StackPanel x:Name="WifiSignalQualityLabelPanel" Grid.Row="0" Orientation="Horizontal"
+                                                    HorizontalAlignment="Left" Margin="0,8,0,0">
+                                            <TextBlock Text="Signal quality" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                                            <controls:NetworkHelpButton x:Name="WifiSignalQualityHelp" Term="Signal quality" Margin="6,0,0,0"/>
+                                        </StackPanel>
+                                        <TextBlock x:Name="WifiSignalQualityText" Grid.Row="0" Grid.Column="1" Style="{StaticResource WifiRadioValue}" Margin="0,8,0,0"/>
+                                        <StackPanel x:Name="WifiRssiLabelPanel" Grid.Row="1" Orientation="Horizontal"
+                                                    HorizontalAlignment="Left" Margin="0,8,0,0">
+                                            <TextBlock Text="RSSI" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                                            <controls:NetworkHelpButton x:Name="WifiRssiHelp" Term="RSSI" Margin="6,0,0,0"/>
+                                        </StackPanel>
+                                        <TextBlock x:Name="WifiRssiText" Grid.Row="1" Grid.Column="1" Style="{StaticResource WifiRadioValue}" Margin="0,8,0,0"/>
+                                        <StackPanel x:Name="WifiChannelLabelPanel" Grid.Row="2" Orientation="Horizontal"
+                                                    HorizontalAlignment="Left" Margin="0,8,0,0">
+                                            <TextBlock Text="Channel" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                                            <controls:NetworkHelpButton x:Name="WifiChannelHelp" Term="Channel" Margin="6,0,0,0"/>
+                                        </StackPanel>
+                                        <TextBlock x:Name="WifiChannelText" Grid.Row="2" Grid.Column="1" Style="{StaticResource WifiRadioValue}" Margin="0,8,0,0"/>
+                                        <StackPanel x:Name="WifiBandFrequencyLabelPanel" Grid.Row="3" Orientation="Horizontal"
+                                                    HorizontalAlignment="Left" Margin="0,8,0,0">
+                                            <TextBlock Text="Band / Frequency" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                                            <controls:NetworkHelpButton x:Name="WifiBandFrequencyHelp" Term="Band / Frequency" Margin="6,0,0,0"/>
+                                        </StackPanel>
+                                        <TextBlock x:Name="WifiBandFrequencyText" Grid.Row="3" Grid.Column="1" Style="{StaticResource WifiRadioValue}" Margin="0,8,0,0"/>
+                                        <StackPanel x:Name="WifiBssidLabelPanel" Grid.Row="4" Orientation="Horizontal"
+                                                    HorizontalAlignment="Left" Margin="0,8,0,0">
+                                            <TextBlock Text="BSSID" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                                            <controls:NetworkHelpButton x:Name="WifiBssidHelp" Term="BSSID" Margin="6,0,0,0"/>
+                                        </StackPanel>
+                                        <TextBlock x:Name="WifiBssidText" Grid.Row="4" Grid.Column="1" Style="{StaticResource WifiRadioValue}" Margin="0,8,0,0"/>
+                                        <StackPanel x:Name="WifiPhyLabelPanel" Grid.Row="5" Orientation="Horizontal"
+                                                    HorizontalAlignment="Left" Margin="0,8,0,0">
+                                            <TextBlock Text="PHY / radio type" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                                            <controls:NetworkHelpButton x:Name="WifiPhyHelp" Term="PHY / radio type" Margin="6,0,0,0"/>
+                                        </StackPanel>
+                                        <TextBlock x:Name="WifiPhyText" Grid.Row="5" Grid.Column="1" Style="{StaticResource WifiRadioValue}" Margin="0,8,0,0"/>
+                                        <StackPanel x:Name="WifiReceiveLinkRateLabelPanel" Grid.Row="6" Orientation="Horizontal"
+                                                    HorizontalAlignment="Left" Margin="0,8,0,0">
+                                            <TextBlock Text="Receive link rate" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                                            <controls:NetworkHelpButton x:Name="WifiReceiveLinkRateHelp" Term="Receive link rate" Margin="6,0,0,0"/>
+                                        </StackPanel>
+                                        <TextBlock x:Name="WifiReceiveLinkRateText" Grid.Row="6" Grid.Column="1" Style="{StaticResource WifiRadioValue}" Margin="0,8,0,0"/>
+                                        <StackPanel x:Name="WifiTransmitLinkRateLabelPanel" Grid.Row="7" Orientation="Horizontal"
+                                                    HorizontalAlignment="Left" Margin="0,8,0,0">
+                                            <TextBlock Text="Transmit link rate" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                                            <controls:NetworkHelpButton x:Name="WifiTransmitLinkRateHelp" Term="Transmit link rate" Margin="6,0,0,0"/>
+                                        </StackPanel>
+                                        <TextBlock x:Name="WifiTransmitLinkRateText" Grid.Row="7" Grid.Column="1" Style="{StaticResource WifiRadioValue}" Margin="0,8,0,0"/>
+                                    </Grid>
+                                </StackPanel>
                             </StackPanel>
                         </Border>
                     </StackPanel>

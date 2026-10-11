@@ -23,6 +23,10 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args.Length > 0 && args[0] is "--wifi-radio-color-check" or "--wifi-radio-checks")
+            return RunWifiRadioTarget(args[0] == "--wifi-radio-color-check");
+        if (args.Length > 0 && args[0] == "--passive-wifi-validation")
+            return PassiveWifiValidation.Run();
         if (args.Length > 0 && args[0] == "--passive-vpn-validation")
             return PassiveVpnValidation.Run(args.Skip(1).ToArray());
         if (args.Length > 0 && args[0] == "--profiles-live-validation")
@@ -286,6 +290,7 @@ internal static class Program
             ProfileManagementChecks.Run(ownedRoot, Check);
             VpnRouteAwarenessChecks.Run(ownedRoot, Check);
             VpnTransportChecks.Run(ownedRoot, Check);
+            WifiRadioChecks.Run(ownedRoot, Check);
             Console.WriteLine($"{_passed}/{_passed} WPF integration checks passed. Isolated data: {ownedRoot}");
             return 0;
         }
@@ -295,6 +300,26 @@ internal static class Program
             try { if (window is not null) CloseRun(window); } catch { }
             return 1;
         }
+    }
+
+    private static int RunWifiRadioTarget(bool colorOnly)
+    {
+        var ownedRoot = System.IO.Path.Combine(AppContext.BaseDirectory,
+            "owned-wifi-target-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            _ = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+            if (colorOnly) WifiRadioChecks.RunColorDiagnostic(ownedRoot, Check);
+            else WifiRadioChecks.Run(ownedRoot, Check);
+            Console.WriteLine($"{_passed}/{_passed} targeted Wi-Fi WPF checks passed. Isolated data: {ownedRoot}");
+            return 0;
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"FAIL after {_passed} targeted Wi-Fi checks: {exception}");
+            return 1;
+        }
+        finally { Application.Current?.Shutdown(); }
     }
 
     private static void CheckLeaseFailurePaths(string ownedRoot, string adapterId)

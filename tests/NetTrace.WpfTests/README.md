@@ -1,6 +1,6 @@
 # NetTrace WPF integration tests
 
-The 451 Windows-only STA integration checks use isolated temporary databases and injected
+The 537 Windows-only STA integration checks use isolated temporary databases and injected
 physical/VPN identities. They exercise the existing dashboard, persistence,
 profile, power, recovery and ownership behavior together with Task 005A tray and
 background lifecycle behavior. They retain the previous 77 WPF lifecycle checks,
@@ -170,3 +170,54 @@ connection. It never modifies Windows VPN settings, machine power
 state, or the real NetTrace database. Test power notifications are sent only
 to its own hidden lifecycle HWND. Test data is created beneath the test output
 directory.
+
+Connections 005 adds 87 checks in `WifiRadioChecks.cs`. Injected per-interface
+radio snapshots cover complete connected Wi-Fi, missing RSSI and other metadata,
+signal boundaries, 2.4/5/6 GHz, friendly PHY names, differing negotiated rates,
+general-link-rate fallback, disconnect, Ethernet and two Wi-Fi adapters. Windows-reported
+current-association ac remains visible alongside 2.4 GHz metadata, with the driver
+reporting caveat in its wrapped help. The
+existing Connections cards, VPN rows and adapter fields stay intact. Checks
+exercise centralized explanations for all required labels plus general link rate,
+finite wrapped tooltip widths, keyboard focus, click and Escape dismissal, and
+the 760×600 layout without horizontal scrolling. Every information cue is measured
+beside its associated label in the fixed left column, with no label/value overlap.
+Raw radio and address/configuration values retain the established opaque normal
+text color and readable contrast, independently from semantic status brushes.
+Hidden-page, hidden-window and
+minimized-window cases invalidate radio data and avoid WLAN polling while the
+application-owned monitor continues. Suspend/resume clears old measurements and
+obtains fresh association data. Native discovery is injected and runs off
+the UI thread; these checks need no Wi-Fi hardware or WLAN service.
+Suspension invalidates cached measurements before dispatcher work. Existing value
+tooltip strings retain their content through a shared finite wrapped template.
+
+Synthetic radio values only are saved under `wifi-radio-previews` in the owned
+test directory. Page and radio views cover complete data, missing RSSI, long
+IPv6 with existing VPN rows, disconnect, Ethernet and the minimum window. RSSI
+and BSSID tooltip previews show the same wrapped hover content at both sizes.
+Real Wi-Fi values are never saved as history, logs or screenshots.
+
+An explicit passive one-shot live validation can be run separately:
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests/NetTrace.WpfTests.csproj -- --passive-wifi-validation
+```
+
+It prints the current connected interface's native radio values to the console
+only. It never starts a nearby-network scan, changes Wi-Fi configuration,
+requests internet data, opens the real NetTrace database or writes radio data
+to disk. Windows permission or unsupported driver metadata remains unavailable.
+
+Scoped Wi-Fi WPF checks can be run separately while developing this section:
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests/NetTrace.WpfTests.csproj -- --wifi-radio-color-check
+dotnet run --project tests/NetTrace.WpfTests/NetTrace.WpfTests.csproj -- --wifi-radio-checks
+```
+
+The first runs only the radio/configuration color assertion and prints synthetic
+ARGB, inherited-value-source and brush-identity diagnostics. The second runs the
+87 Wi-Fi checks, including label/cue layout and the owned previews, without the
+other integration groups. Both reuse the same injected fixture, owned database
+and shutdown behavior as the full suite; neither performs native WLAN discovery.

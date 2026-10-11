@@ -15,6 +15,7 @@ public partial class MainWindow : Window
 {
     private readonly MonitoringService _monitoring;
     private readonly DispatcherTimer _timer;
+    private readonly WifiRadioService _wifiRadio;
     private IWindowsStartupRegistration? _startupRegistration;
     private volatile bool _closed;
     private bool _loadingAdapters = true;
@@ -23,10 +24,12 @@ public partial class MainWindow : Window
     private IcmpQualitySummary? _qualitySummary;
     private InternetReachabilityResult? _lastReachabilityMeasurement;
 
-    public MainWindow(MonitoringService monitoring, IWindowsStartupRegistration? startupRegistration = null)
+    public MainWindow(MonitoringService monitoring, IWindowsStartupRegistration? startupRegistration = null,
+        WifiRadioService? wifiRadio = null)
     {
         ArgumentNullException.ThrowIfNull(monitoring);
         _monitoring = monitoring;
+        _wifiRadio = wifiRadio ?? new WifiRadioService();
         _startupRegistration = startupRegistration;
         InitializeComponent();
         _loadingAdapters = false;
@@ -54,7 +57,11 @@ public partial class MainWindow : Window
     {
         base.OnStateChanged(args);
         if (_closed || _timer is null) return;
-        if (WindowState == WindowState.Minimized) _timer.Stop();
+        if (WindowState == WindowState.Minimized)
+        {
+            _timer.Stop();
+            InvalidateWifiRadio();
+        }
         else if (IsVisible)
         {
             RefreshDashboard();
@@ -111,7 +118,11 @@ public partial class MainWindow : Window
             RefreshDashboard();
             _timer.Start();
         }
-        else _timer.Stop();
+        else
+        {
+            _timer.Stop();
+            InvalidateWifiRadio();
+        }
     }
 
     private void DashboardContent_OnVisibilityChanged(object sender, DependencyPropertyChangedEventArgs args)
@@ -132,6 +143,7 @@ public partial class MainWindow : Window
     private void ConnectionsContent_OnVisibilityChanged(object sender, DependencyPropertyChangedEventArgs args)
     {
         if (!_closed && ConnectionsContent.IsVisible) RefreshDashboard();
+        else InvalidateWifiRadio();
     }
 
     private void RefreshHealth(bool refreshChart = false)
@@ -201,6 +213,7 @@ public partial class MainWindow : Window
         _timer.Stop();
         _timer.Tick -= Timer_OnTick;
         _monitoring.Changed -= Monitoring_OnChanged;
+        _wifiRadio.Dispose();
         IsVisibleChanged -= OnVisibilityChanged;
         DashboardContent.IsVisibleChanged -= DashboardContent_OnVisibilityChanged;
         HealthContent.IsVisibleChanged -= HealthContent_OnVisibilityChanged;
@@ -212,6 +225,9 @@ public partial class MainWindow : Window
     private void Monitoring_OnChanged(object? sender, EventArgs args)
     {
         if (_closed || Dispatcher.HasShutdownStarted) return;
+        // Discard a pre-sleep association before any deferred UI work. This is
+        // thread-safe and does not query WLAN or access a WPF control.
+        if (_monitoring.GetSnapshot().IsSuspended) _wifiRadio.Invalidate();
         Dispatcher.BeginInvoke(new Action(() =>
         {
             if (!_closed && IsVisible && WindowState != WindowState.Minimized) RefreshDashboard();
@@ -369,6 +385,35 @@ public partial class MainWindow : Window
         LinkRateLabel.Text = details.LinkRateLabel;
         LinkSpeedText.Text = details.LinkRate;
         LinkSpeedText.ToolTip = details.LinkRateToolTip;
+        RefreshWifiRadio(snapshot);
+    }
+
+    private void RefreshWifiRadio(MonitoringSnapshot snapshot)
+    {
+        WifiRadioSnapshot? radio = null;
+        if (snapshot.IsSuspended) _wifiRadio.Invalidate();
+        else radio = _wifiRadio.RequestSnapshot(snapshot.SelectedAdapter, snapshot.SelectedAdapterDetails);
+        var presentation = WifiRadioPresentation.Create(snapshot.SelectedAdapter, snapshot.SelectedAdapterDetails, radio);
+        WifiRadioSection.Visibility = presentation.Show ? Visibility.Visible : Visibility.Collapsed;
+        SetDetail(WifiSignalQualityText, presentation.SignalQuality);
+        SetDetail(WifiRssiText, presentation.Rssi);
+        SetDetail(WifiChannelText, presentation.Channel);
+        SetDetail(WifiBandFrequencyText, presentation.BandFrequency);
+        SetDetail(WifiBssidText, presentation.Bssid);
+        SetDetail(WifiPhyText, presentation.Phy);
+        SetDetail(WifiReceiveLinkRateText, presentation.ReceiveLinkRate);
+        SetDetail(WifiTransmitLinkRateText, presentation.TransmitLinkRate);
+        var generalRate = presentation.Show && presentation.HasSeparateLinkRates ? Visibility.Collapsed : Visibility.Visible;
+        LinkRateLabelPanel.Visibility = generalRate;
+        LinkRateLabel.Visibility = generalRate;
+        LinkRateHelp.Visibility = generalRate;
+        LinkSpeedText.Visibility = generalRate;
+    }
+
+    private void InvalidateWifiRadio()
+    {
+        _wifiRadio.Invalidate();
+        WifiRadioSection.Visibility = Visibility.Collapsed;
     }
 
     private static void SetDetail(TextBlock control, string value)

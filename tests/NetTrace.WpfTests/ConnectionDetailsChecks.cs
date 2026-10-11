@@ -78,8 +78,9 @@ internal static class ConnectionDetailsChecks
         var content = Control<StackPanel>(window, "ConnectionsContent");
         var grid = Control<Grid>(window, "AdapterDetailsGrid");
         check(content.Children.OfType<Border>().Count() == 2 &&
-            grid.Children.OfType<TextBlock>().Where(block => Grid.GetColumn(block) == 0).OrderBy(Grid.GetRow)
-                .Select(block => block.Text).SequenceEqual(new[]
+            grid.Children.OfType<FrameworkElement>().Where(cell => Grid.GetColumn(cell) == 0).OrderBy(Grid.GetRow)
+                .Select(cell => cell is TextBlock label ? label.Text :
+                    (cell as Panel)?.Children.OfType<TextBlock>().SingleOrDefault()?.Text).SequenceEqual(new[]
                 { "Adapter", "Status", "Network", "Profile", "Type", "IPv4", "IPv6", "Default gateway", "DNS", "Wi-Fi link rate" }) &&
             ValueNames.Select(name => Control<TextBlock>(window, name)).Select(Grid.GetRow).SequenceEqual(Enumerable.Range(0, 10)),
             "Connections preserves its two cards and aligns the ten monitored-adapter fields in the requested order");

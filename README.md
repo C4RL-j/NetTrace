@@ -554,6 +554,60 @@ never connects, disconnects or reconfigures a VPN. Automated transport tests use
 owned evidence and counters; their rendered examples are simulated presentation
 checks, rather than claims about the user's VPN.
 
+## Connections 005 — Wi-Fi radio details and help
+
+The MONITORED ADAPTER card shows a compact **WI-FI RADIO** subsection for the
+selected, connected Wi-Fi interface when Windows supplies useful measurements:
+signal quality, actual RSSI, channel, band/frequency, connected access-point BSSID,
+Windows-reported current-association PHY type, and separate receive/transmit link rates. Missing fields display
+**Unavailable**; disconnected and non-Wi-Fi interfaces have no radio block. The
+existing general link rate remains the fallback when either separate rate is
+missing. Link rates describe the local wireless link, rather than internet speed.
+
+`WindowsWifiRadioSource` queries the selected interface GUID with native
+`WlanQueryInterface`. RSSI is the driver's dBm measurement, never a conversion from
+signal quality. Frequency comes only from a fresh, exact current-association match
+in the existing Windows WLAN BSS cache. An available native channel must agree;
+when that query is unsupported, the tested helper derives the channel from the
+measured frequency after the same freshness and association checks.
+Unknown, old or inconsistent cache evidence leaves frequency unavailable. The
+shared tested frequency helper maps supported 2.4, 5 and 6 GHz channel centers.
+See Microsoft's [WLAN association attributes](https://learn.microsoft.com/en-us/windows/win32/api/wlanapi/ns-wlanapi-wlan_association_attributes)
+and [WLAN BSS entry](https://learn.microsoft.com/en-us/windows/win32/api/wlanapi/ns-wlanapi-wlan_bss_entry)
+documentation. No scan is initiated, nearby access points are not displayed, and
+permission/driver failures do not interrupt monitoring.
+
+PHY describes the current association reported by Windows, rather than the
+adapter's supported capabilities. Some drivers may report a PHY that differs
+from the reported band or frequency; NetTrace preserves those native values.
+
+The view-owned `WifiRadioService` uses the existing visible Connections refresh
+with a five-second throttle and a single asynchronous native read. It adds no
+timer or background polling loop. Hiding/minimizing the view, leaving Connections,
+changing adapters, disconnecting and suspension invalidate cached measurements;
+late results cannot restore them. Resume and reopening obtain fresh measurements.
+Radio values stay in memory and are never added to history or written to disk.
+Adapter selection, traffic accounting, VPN routing and Health remain unchanged.
+
+Small **ⓘ** cues directly beside their labels provide centralized plain-language
+definitions for unfamiliar radio/address/DNS/gateway/link-rate/VPN-transport terms. Hover shows a wrapped,
+width-limited tooltip; focus and click open the same explanation, with Escape or
+focus loss dismissing it. Technical values retain the normal text color without
+signal judgments or alerts. The existing cards and vertical scrolling support the
+760×600 minimum window without horizontal expansion.
+
+Deterministic regression and WPF checks use owned Wi-Fi evidence, including
+multiple interfaces, unavailable fields, native decoding, stale-result rejection,
+sleep/resume, hidden views and wrapped help. The explicit command below performs
+a passive local observation and prints current values to the console only:
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests/NetTrace.WpfTests.csproj -- --passive-wifi-validation
+```
+
+It does not change Wi-Fi configuration, initiate scans, issue internet requests or
+open the real NetTrace database.
+
 ## Verification
 
 Run the isolated migration checks without touching your application data:

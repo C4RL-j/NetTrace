@@ -159,4 +159,32 @@ physical adapter/session/byte baseline, cached reads, one serialized existing
 worker, stale suspend/disposal rejection, fresh resume and metadata-failure recovery.
 No DNS, socket discovery, network probes or new monitor workers are used by these tests.
 
+Connections 005 adds 60 groups in `WifiRadioTests.cs`, bringing the console suite
+to 553 groups. Injected selected-interface observations cover complete radio data,
+quality boundaries/clamping, actual versus missing RSSI, standard 2.4/5/6 GHz
+frequency/channel conversion, invalid centers, BSSID normalization, negotiated PHY,
+independent RX/TX units and missing-rate fallback. Disconnected, non-Wi-Fi, absent
+and wrong-interface observations cannot retain radio values. Controlled source gates
+verify immediate cached reads, a lightweight refresh interval, single-flight queries,
+adapter switching, hide/sleep invalidation, stale-result rejection, safe disposal,
+permission-failure recovery and the absence of timer or persistence dependencies.
+Native fixtures check WLAN struct sizes/offsets, kbit/s and kHz units, actual signed
+RSSI, connected-state gating, association rechecks and exact fresh SSID/BSSID cache
+matches. Nearby, old, future, conflicting and malformed cached entries cannot supply
+current frequency. Cached frequency must agree with an available native channel;
+if that scalar is unsupported, a fresh exact match supplies the tested derived
+channel and band without weakening the cache or association guards.
+Current-association PHY fixtures distinguish the native type from its separate
+index and adapter capability descriptions. Native n/ac/ax, missing/unknown types,
+and Windows-reported ac with a 2.4 GHz frequency retain their defined presentation.
+All required help definitions are centrally associated, concise and immutable; BSSID,
+link-rate direction/internet-speed differences and independent VPN transport meanings
+are checked explicitly. No Wi-Fi hardware, scans or internet access are required.
+
+Run only these deterministic Connections 005 groups with:
+
+```powershell
+dotnet run --project tests/NetTrace.RegressionTests/NetTrace.RegressionTests.csproj -- --wifi-radio-checks
+```
+
 Both harnesses use owned temporary databases and injected network/VPN/ICMP evidence. They do not open real application data or change Windows network settings.
