@@ -187,4 +187,23 @@ Run only these deterministic Connections 005 groups with:
 dotnet run --project tests/NetTrace.RegressionTests/NetTrace.RegressionTests.csproj -- --wifi-radio-checks
 ```
 
+History 001 adds 25 deterministic groups in `HistoryOverviewTests.cs`, bringing the
+console suite to 578 groups. They cover empty, completed, old, active-only and mixed
+history, distinct-ID/live-progress replacement, half-open local-day bounds,
+midnight-crossing intervals, compact durations, existing byte formatting, retained
+network context after profile deletion, immediate rename/deletion presentation,
+newest-four ordering and 23/25-hour daylight-saving days. Connected time is clipped
+to local midnight and now; an unfinished persisted row without confirmed live state
+stops at its last confirmation. Since session totals have no per-day breakdown,
+both completed and active bytes belong to the local day the session started; recent
+rows still show their full actual totals. Temporary-store fixtures verify unchanged
+schema/data, bounded reads, cache-only live ticks, explicit refresh and invalidation
+on active identity, local date or timezone changes.
+
+Run only these deterministic History 001 groups with:
+
+```powershell
+dotnet run --project tests/NetTrace.RegressionTests/NetTrace.RegressionTests.csproj -- --history-overview-checks
+```
+
 Both harnesses use owned temporary databases and injected network/VPN/ICMP evidence. They do not open real application data or change Windows network settings.

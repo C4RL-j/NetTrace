@@ -636,15 +636,59 @@
 
             <TabItem x:Name="HistoryTab" Header="History">
                 <ScrollViewer Style="{StaticResource PageScrollViewerStyle}">
-                    <Border Style="{StaticResource CardStyle}" VerticalAlignment="Top">
-                        <StackPanel>
-                            <TextBlock Text="CONNECTION HISTORY" Style="{StaticResource MutedText}"/>
-                            <TextBlock Text="Review recent connection sessions and events."
-                                       Style="{StaticResource MutedText}" TextWrapping="Wrap" Margin="0,8,0,0"/>
-                            <Button x:Name="ViewHistoryButton" Content="View history" Click="ViewHistory_OnClick"
-                                    HorizontalAlignment="Left" Padding="12,6" Margin="0,14,0,0"/>
-                        </StackPanel>
-                    </Border>
+                    <StackPanel x:Name="HistoryContent">
+                        <Border Style="{StaticResource CardStyle}">
+                            <StackPanel>
+                                <TextBlock Text="CONNECTION HISTORY" Style="{StaticResource MutedText}"/>
+                                <StackPanel x:Name="HistoryTodayPanel" Margin="0,16,0,0">
+                                    <TextBlock Text="TODAY" Style="{StaticResource MutedText}"/>
+                                    <UniformGrid Columns="4" Margin="0,8,0,0">
+                                        <StackPanel Margin="0,0,12,0">
+                                            <TextBlock Text="Sessions" Style="{StaticResource MutedText}"/>
+                                            <TextBlock x:Name="HistoryTodaySessionsText" Text="0" FontSize="20" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                        </StackPanel>
+                                        <StackPanel Margin="0,0,12,0">
+                                            <TextBlock Text="Connected time" Style="{StaticResource MutedText}" TextWrapping="Wrap"/>
+                                            <TextBlock x:Name="HistoryTodayConnectedTimeText" Text="0s" FontSize="20" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                        </StackPanel>
+                                        <StackPanel Margin="0,0,12,0">
+                                            <TextBlock Text="Download" Style="{StaticResource MutedText}"/>
+                                            <TextBlock x:Name="HistoryTodayDownloadText" Text="0 B" FontSize="20" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                        </StackPanel>
+                                        <StackPanel>
+                                            <TextBlock Text="Upload" Style="{StaticResource MutedText}"/>
+                                            <TextBlock x:Name="HistoryTodayUploadText" Text="0 B" FontSize="20" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                        </StackPanel>
+                                    </UniformGrid>
+                                </StackPanel>
+                                <TextBlock x:Name="HistoryMessageText" Text="" Foreground="#FBBF24" FontSize="11" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                                <TextBlock Text="RECENT SESSIONS" Style="{StaticResource MutedText}" Margin="0,16,0,0"/>
+                                <StackPanel x:Name="HistoryEmptyState" Margin="0,12,0,0">
+                                    <TextBlock Text="No connection history yet." FontWeight="SemiBold"/>
+                                    <TextBlock Text="NetTrace will show completed connection sessions here." Style="{StaticResource MutedText}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                </StackPanel>
+                                <ItemsControl x:Name="HistoryRecentSessions" Margin="0,4,0,0">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Padding="0,10">
+                                                <StackPanel>
+                                                    <TextBlock Text="{Binding ProfileName}" ToolTip="{Binding ProfileName}" FontSize="15" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                                                    <TextBlock Text="{Binding NetworkName}" ToolTip="{Binding NetworkName}" Style="{StaticResource MutedText}" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
+                                                    <TextBlock Text="{Binding TimeRange}" Style="{StaticResource MutedText}" TextWrapping="Wrap" Margin="0,2,0,0"/>
+                                                    <WrapPanel Margin="0,4,0,0">
+                                                        <TextBlock Margin="0,0,16,0"><Run Text="↓ "/><Run Text="{Binding DownloadText}"/></TextBlock>
+                                                        <TextBlock><Run Text="↑ "/><Run Text="{Binding UploadText}"/></TextBlock>
+                                                    </WrapPanel>
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <Button x:Name="ViewHistoryButton" Content="View full history" Click="ViewHistory_OnClick"
+                                        HorizontalAlignment="Left" Padding="12,6" Margin="0,14,0,0"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
                 </ScrollViewer>
             </TabItem>
 

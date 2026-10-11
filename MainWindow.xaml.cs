@@ -42,6 +42,7 @@ public partial class MainWindow : Window
         DashboardContent.IsVisibleChanged += DashboardContent_OnVisibilityChanged;
         HealthContent.IsVisibleChanged += HealthContent_OnVisibilityChanged;
         ConnectionsContent.IsVisibleChanged += ConnectionsContent_OnVisibilityChanged;
+        HistoryContent.IsVisibleChanged += HistoryContent_OnVisibilityChanged;
         SettingsContent.IsVisibleChanged += SettingsContent_OnVisibilityChanged;
         RefreshDashboard();
         _monitoring.Changed += Monitoring_OnChanged;
@@ -65,6 +66,7 @@ public partial class MainWindow : Window
         else if (IsVisible)
         {
             RefreshDashboard();
+            RefreshHistoryOverview();
             if (HealthContent.IsVisible)
             {
                 IcmpStabilityChart.InvalidateVisual();
@@ -116,6 +118,7 @@ public partial class MainWindow : Window
         if (IsVisible && WindowState != WindowState.Minimized)
         {
             RefreshDashboard();
+            RefreshHistoryOverview();
             _timer.Start();
         }
         else
@@ -144,6 +147,38 @@ public partial class MainWindow : Window
     {
         if (!_closed && ConnectionsContent.IsVisible) RefreshDashboard();
         else InvalidateWifiRadio();
+    }
+
+    private void HistoryContent_OnVisibilityChanged(object sender, DependencyPropertyChangedEventArgs args)
+    {
+        if (!_closed && HistoryContent.IsVisible) RefreshHistoryOverview();
+    }
+
+    private void RefreshHistoryOverview(bool refresh = true)
+    {
+        if (_closed || !IsVisible || WindowState == WindowState.Minimized || !HistoryContent.IsVisible) return;
+        try
+        {
+            ApplyHistoryOverview(_monitoring.GetHistoryOverview(refresh));
+            HistoryMessageText.Text = "";
+        }
+        catch (Exception exception)
+        {
+            HistoryMessageText.Text = $"Connection history could not be loaded: {exception.Message}";
+        }
+    }
+
+    private void ApplyHistoryOverview(HistoryOverview overview)
+    {
+        HistoryTodaySessionsText.Text = overview.TodaySessionCount.ToString();
+        HistoryTodayConnectedTimeText.Text = overview.TodayConnectedTimeText;
+        HistoryTodayDownloadText.Text = overview.TodayDownloadText;
+        HistoryTodayUploadText.Text = overview.TodayUploadText;
+        HistoryRecentSessions.ItemsSource = overview.RecentSessions;
+        var hasSessions = overview.RecentSessions.Count > 0;
+        HistoryTodayPanel.Visibility = hasSessions ? Visibility.Visible : Visibility.Collapsed;
+        HistoryEmptyState.Visibility = hasSessions ? Visibility.Collapsed : Visibility.Visible;
+        HistoryRecentSessions.Visibility = hasSessions ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void RefreshHealth(bool refreshChart = false)
@@ -218,6 +253,7 @@ public partial class MainWindow : Window
         DashboardContent.IsVisibleChanged -= DashboardContent_OnVisibilityChanged;
         HealthContent.IsVisibleChanged -= HealthContent_OnVisibilityChanged;
         ConnectionsContent.IsVisibleChanged -= ConnectionsContent_OnVisibilityChanged;
+        HistoryContent.IsVisibleChanged -= HistoryContent_OnVisibilityChanged;
         SettingsContent.IsVisibleChanged -= SettingsContent_OnVisibilityChanged;
         Closed -= OnClosed;
     }
@@ -230,7 +266,11 @@ public partial class MainWindow : Window
         if (_monitoring.GetSnapshot().IsSuspended) _wifiRadio.Invalidate();
         Dispatcher.BeginInvoke(new Action(() =>
         {
-            if (!_closed && IsVisible && WindowState != WindowState.Minimized) RefreshDashboard();
+            if (!_closed && IsVisible && WindowState != WindowState.Minimized)
+            {
+                RefreshDashboard();
+                RefreshHistoryOverview();
+            }
         }));
     }
 
@@ -240,6 +280,7 @@ public partial class MainWindow : Window
     {
         if (_closed) return;
         if (HealthTab.IsSelected) RefreshHealth();
+        RefreshHistoryOverview(refresh: false);
         var snapshot = _monitoring.GetSnapshot();
         RefreshConnections(snapshot);
         DownloadRateText.Text = ByteFormatter.FormatRate(snapshot.DownloadBytesPerSecond);
@@ -342,7 +383,7 @@ public partial class MainWindow : Window
             _monitoring.Flush();
             new ConnectionHistoryWindow(_monitoring.History) { Owner = this }.ShowDialog();
         }
-        catch (Exception exception) { SessionMessageText.Text = $"Connection history could not be opened: {exception.Message}"; }
+        catch (Exception exception) { HistoryMessageText.Text = $"Connection history could not be opened: {exception.Message}"; }
     }
 
     private void RefreshConnections(MonitoringSnapshot snapshot)

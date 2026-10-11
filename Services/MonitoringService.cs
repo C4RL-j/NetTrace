@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using NetTrace.Models;
+using NetTrace.Presentation;
 
 namespace NetTrace.Services;
 
@@ -13,6 +14,7 @@ public sealed class MonitoringService : IDisposable
     private readonly UsageStore _store;
     private readonly ProfileStore _profiles;
     private readonly ConnectionHistoryStore _history;
+    private readonly HistoryOverviewService _historyOverview;
     private readonly ConnectionSessionTracker _sessions;
     private readonly ConnectionProfileMonitor _profileMonitor;
     private CurrentConnectionState _connection;
@@ -116,6 +118,7 @@ public sealed class MonitoringService : IDisposable
             _reachabilityMonitor = reachabilityMonitor ?? new InternetReachabilityMonitor(timeProvider: _timeProvider);
             _trafficPeaks[_pendingDay] = store.GetTrafficPeaks(_pendingDay);
             _history = new ConnectionHistoryStore(store);
+            _historyOverview = new HistoryOverviewService(_history, _timeProvider);
             _sessions = new ConnectionSessionTracker(_history, _timeProvider);
             _profiles = new ProfileStore(store);
             _profileMonitor = new ConnectionProfileMonitor(identityService, new ProfileResolver(_profiles), _timeProvider);
@@ -185,6 +188,23 @@ public sealed class MonitoringService : IDisposable
                 PeakDownloadBytesPerSecond = peaks.DownloadBytesPerSecond,
                 PeakUploadBytesPerSecond = peaks.UploadBytesPerSecond
             };
+        }
+    }
+
+    // The same gate protects transitions and the live snapshot, so a session cannot
+    // be counted as both the persisted predecessor and the current live session.
+    public HistoryOverview GetHistoryOverview(bool refresh = true)
+    {
+        lock (_gate)
+        {
+            var session = _sessions.ConfirmedSession;
+            if (session is not null)
+                session = session with
+                {
+                    ProfileDisplayName = session.ProfileId == _connection.Profile?.Id
+                        ? _connection.Profile?.DisplayName : session.ProfileDisplayName
+                };
+            return _historyOverview.GetOverview(session, refresh);
         }
     }
 

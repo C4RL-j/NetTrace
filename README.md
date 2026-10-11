@@ -93,7 +93,11 @@ Physical connection recognition is independent of the bandwidth adapter selector
 
 A session is one continuous observed physical network identity and adapter. Different SSIDs create different sessions even when they map to the same profile. Repeated callbacks and friendly-name changes do not split a session. Valid unassigned networks get sessions with no profile; assigning the current network associates only its active session. Completed sessions keep their profile association and captured network identity unless that profile is explicitly deleted. Profile names in history follow their stable profile ID; profile deletion clears the association while retaining the connection records.
 
-Dashboard and Connections show the current session duration and traffic. On **History**, choose **View history** to open the latest 100 sessions and 200 events, with UTC timestamps displayed in local time. Events include connection/disconnection, network change, profile assignment/change, sleep, resume, unexpected-exit recovery, normal application exit, and network-identity unavailability.
+Dashboard and Connections show the current session duration and traffic. **History** shows a compact Today summary (Sessions, Connected time, Download and Upload) and the newest four connection sessions, including the current active session. Choose **View full history** to open the unchanged detailed window with the latest 100 sessions and 200 events, with UTC timestamps displayed in local time. Events include connection/disconnection, network change, profile assignment/change, sleep, resume, unexpected-exit recovery, normal application exit, and network-identity unavailability.
+
+Today means the current local calendar day. Each distinct session overlapping today counts once; connected time includes only the part inside today's boundaries, up to now for the confirmed active session. A session from 23:50 yesterday to 00:20 today contributes 20 minutes. Sessions record total bytes without a per-minute traffic timeline, so **download and upload belong to the local day on which the session started**, for both completed and active sessions. An active session started yesterday contributes today's connected time and session count, but its bytes remain attributed to yesterday. Traffic is never estimated from duration. These History totals can differ from Dashboard daily usage, which is sampled by local day.
+
+The overview reuses the existing history store and live physical-session counters, replacing the persisted active record by ID without writing duplicate records. It reads only today's relevant records and the latest four sessions. Navigation, restore and existing monitoring changes refresh persisted data; the existing visible-window timer updates active time/bytes from the cached records. Hidden pages perform no overview queries or rendering and add no timers or workers. Deleted profiles retain their captured network identity with an Unassigned fallback. An empty history shows a plain message; an active-only first day shows the active session.
 
 Session traffic uses the existing one-second byte delta, now owned by the application monitoring service, and only accepts samples from the current physical adapter. Recognition changes automatically select that adapter and establish a new baseline; profile edits and repeated observations retain the baseline. Manual adapter selection remains available. If another or virtual adapter is selected, monitoring follows it while physical-session traffic pauses; the Connection card explains which selection is needed. No virtual-interface traffic is attributed to physical sessions.
 
@@ -171,7 +175,7 @@ an underline on the active page:
 | Dashboard | Live traffic, daily peaks, data usage and a compact current connection/session summary |
 | Health | Internet reachability, latest ICMP measurements, recent ICMP quality, latency/jitter chart and packet-loss history |
 | Connections | Current connection, monitored adapter/details, Profiles and Assign profile |
-| History | Opens the existing recent sessions/events history window |
+| History | Today's connection totals, newest four sessions and View full history |
 | Settings | Start NetTrace with Windows and the local database location |
 
 WPF's native tab control owns page selection and retains each page's controls.

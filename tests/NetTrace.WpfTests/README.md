@@ -1,6 +1,6 @@
 # NetTrace WPF integration tests
 
-The 554 Windows-only STA integration checks use isolated temporary databases and injected
+The Windows-only STA integration checks use isolated temporary databases and injected
 physical/VPN identities. They exercise the existing dashboard, persistence,
 profile, power, recovery and ownership behavior together with Task 005A tray and
 background lifecycle behavior. They retain the previous 77 WPF lifecycle checks,
@@ -232,3 +232,30 @@ ARGB, inherited-value-source and brush-identity diagnostics. The second runs the
 87 Wi-Fi checks, including label/cue layout and the owned previews, without the
 other integration groups. Both reuse the same injected fixture, owned database
 and shutdown behavior as the full suite; neither performs native WLAN discovery.
+
+History 001 adds 44 deterministic overview checks in `HistoryOverviewChecks.cs`.
+Owned databases and a fixed clock cover empty, one, four, active-only and
+completed-plus-active sessions; summary byte/duration updates; long profile and
+network names; GB totals; cached timer refresh; immediate navigation and profile,
+sleep/resume refresh; hidden-page query and rendering suppression; hidden-window
+rendering suppression; unchanged monitor/timer identity; and the minimum
+760×600 layout with vertical scrolling and no horizontal overflow. The same
+checks preserve the detailed Sessions/Events tables, 100/200 record limits,
+newest-first ordering, local timestamps, Refresh and repeated modal open/close.
+Synthetic screenshots are saved in `history-previews` under the isolated test
+output directory.
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests/NetTrace.WpfTests.csproj -- --history-overview-checks
+dotnet run --project tests/NetTrace.WpfTests/NetTrace.WpfTests.csproj -- --history-live-validation
+```
+
+The explicit live target opens the existing real database using SQLite
+`ReadOnly` and `query_only`, then makes a consistent SQLite backup beneath the
+temporary directory. The overview service and detailed window read that copy;
+the main-window monitor uses a separate empty owned store and never starts.
+Existing historical records and the running application are left untouched.
+The command saves temporary screenshots and reports their directory. An unfinished
+snapshot row shows `Last confirmed` and uses persisted confirmation time and byte
+counters; it does not imply live connectivity or extend connected time to now.
+The check cannot read unflushed counters from another running process.
