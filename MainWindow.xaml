@@ -342,18 +342,22 @@
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
                                     <TextBlock Text="VPN / tunnel" Style="{StaticResource MutedText}"/>
                                     <TextBlock x:Name="ConnectionsVpnStatusText" Grid.Column="1" Text="Unknown" FontWeight="SemiBold"
                                                Foreground="{StaticResource StatusNeutralBrush}"/>
-                                    <TextBlock Grid.Row="1" Text="IPv4 route" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
-                                    <TextBlock x:Name="IPv4RouteText" Grid.Row="1" Grid.Column="1" Text="Unknown" FontWeight="SemiBold" Margin="0,8,0,0"
+                                    <TextBlock Grid.Row="1" Text="VPN transport" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+                                    <TextBlock x:Name="VpnTransportText" Grid.Row="1" Grid.Column="1" Text="Unknown" FontWeight="SemiBold" Margin="0,8,0,0"
                                                Foreground="{StaticResource StatusNeutralBrush}"/>
-                                    <TextBlock Grid.Row="2" Text="IPv6 route" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
-                                    <TextBlock x:Name="IPv6RouteText" Grid.Row="2" Grid.Column="1" Text="Unknown" FontWeight="SemiBold" Margin="0,8,0,0"
+                                    <TextBlock Grid.Row="2" Text="IPv4 route" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+                                    <TextBlock x:Name="IPv4RouteText" Grid.Row="2" Grid.Column="1" Text="Unknown" FontWeight="SemiBold" Margin="0,8,0,0"
                                                Foreground="{StaticResource StatusNeutralBrush}"/>
-                                    <TextBlock Grid.Row="3" Text="Physical adapter" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
-                                    <TextBlock x:Name="PhysicalAdapterText" Grid.Row="3" Grid.Column="1" Text="Unavailable" Margin="0,8,0,0"
+                                    <TextBlock Grid.Row="3" Text="IPv6 route" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+                                    <TextBlock x:Name="IPv6RouteText" Grid.Row="3" Grid.Column="1" Text="Unknown" FontWeight="SemiBold" Margin="0,8,0,0"
+                                               Foreground="{StaticResource StatusNeutralBrush}"/>
+                                    <TextBlock Grid.Row="4" Text="Physical adapter" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+                                    <TextBlock x:Name="PhysicalAdapterText" Grid.Row="4" Grid.Column="1" Text="Unavailable" Margin="0,8,0,0"
                                                TextTrimming="CharacterEllipsis"/>
                                 </Grid>
                                 <TextBlock Text="CONNECTION SESSION" Style="{StaticResource MutedText}" Margin="0,14,0,0"

@@ -24,11 +24,12 @@ internal static class PassiveVpnValidation
             var ipv4 = Read(routes, AddressFamily.InterNetwork);
             var ipv6 = Read(routes, AddressFamily.InterNetworkV6);
             var snapshot = VpnRouteClassifier.Classify(interfaces, ipv4, ipv6, DateTimeOffset.UtcNow);
-            Console.WriteLine($"Passive local observation: VPN / tunnel {snapshot.Status}; IPv4 route {RouteName(snapshot.IPv4RouteKind)}; IPv6 route {RouteName(snapshot.IPv6RouteKind)}.");
+            Console.WriteLine($"Passive local observation: VPN / tunnel {snapshot.Status}; VPN transport {snapshot.TransportFamily}; IPv4 route {RouteName(snapshot.IPv4RouteKind)}; IPv6 route {RouteName(snapshot.IPv6RouteKind)}; Physical adapter {PhysicalAdapter()}.");
             Console.WriteLine("Effective interface: " + (snapshot.InterfaceName ?? "Unavailable"));
+            Console.WriteLine("Transport evidence: " + snapshot.TransportReason);
             Console.WriteLine("Route evidence: " + snapshot.Reason);
             Console.WriteLine($"Local capture: {interfaces.Interfaces.Count} interfaces; IPv4 rows {ipv4.Routes.Count}; IPv6 rows {ipv6.Routes.Count}; checked {snapshot.CheckedAtUtc:O}.");
-            Console.WriteLine("Only existing local Windows interface and route readers were used. No probes, network changes or real NetTrace database access occurred.");
+            Console.WriteLine("Only existing local Windows interface, RAS, route and physical-identity readers were used. No probes, network changes or real NetTrace database access occurred.");
             if (snapshot.Status != VpnTunnelStatus.Active)
             {
                 Console.WriteLine("Live active-VPN validation unavailable: the current local effective route is not conclusively VPN-active. The network was left unchanged.");
@@ -51,6 +52,16 @@ internal static class PassiveVpnValidation
         catch (Exception exception) { return new(family, [], false, exception.Message); }
     }
     private static string RouteName(InternetRouteKind route) => route == InternetRouteKind.Vpn ? "VPN" : route.ToString();
+
+    private static string PhysicalAdapter()
+    {
+        try
+        {
+            using var identity = new NetworkIdentityService();
+            return identity.GetCurrentNetwork().Network?.TypeDisplayName ?? "Unavailable";
+        }
+        catch { return "Unavailable"; }
+    }
 
     private static void RenderCapturedRoute(VpnInterfaceInventory interfaces, VpnRouteInventory ipv4, VpnRouteInventory ipv6,
         VpnRouteSnapshot capturedSnapshot)
@@ -79,13 +90,18 @@ internal static class PassiveVpnValidation
             window.UpdateLayout();
             var currentRoute = monitoring.GetSnapshot().VpnRoute;
             var connectionVpn = Control<TextBlock>(window, "ConnectionsVpnStatusText");
+            var transport = Control<TextBlock>(window, "VpnTransportText");
+            var transportResource = capturedSnapshot.TransportFamily is VpnTransportFamily.IPv4 or VpnTransportFamily.IPv6 or VpnTransportFamily.Mixed
+                ? "StatusInfoBrush" : "StatusNeutralBrush";
             if (currentRoute.IPv4RouteKind != capturedSnapshot.IPv4RouteKind || currentRoute.IPv6RouteKind != capturedSnapshot.IPv6RouteKind ||
+                currentRoute.TransportFamily != capturedSnapshot.TransportFamily || transport.Text != capturedSnapshot.TransportFamily.ToString() ||
+                !ReferenceEquals(transport.Foreground, window.FindResource(transportResource)) ||
                 connectionVpn.Text != "Active" || !ReferenceEquals(connectionVpn.Foreground, window.FindResource("StatusInfoBrush")) ||
                 !FamilyRouteMatches(window, "IPv4RouteText", capturedSnapshot.IPv4RouteKind) ||
                 !FamilyRouteMatches(window, "IPv6RouteText", capturedSnapshot.IPv6RouteKind))
-                throw new InvalidOperationException("Connections did not independently preserve the captured IPv4/IPv6 route values and semantic resources.");
+                throw new InvalidOperationException("Connections did not independently preserve the captured transport and IPv4/IPv6 route values and semantic resources.");
             var connectionPreview = VpnRouteAwarenessChecks.SavePreview(window, root, "captured-vpn-family-routes");
-            Console.WriteLine($"Connections presentation passed with REAL captured family routing: IPv4 {RouteName(capturedSnapshot.IPv4RouteKind)}; IPv6 {RouteName(capturedSnapshot.IPv6RouteKind)}. VPN rows are informational; Direct, Unknown and Unavailable rows are neutral.");
+            Console.WriteLine($"Connections presentation passed with REAL captured transport and family routing: transport {capturedSnapshot.TransportFamily}; IPv4 {RouteName(capturedSnapshot.IPv4RouteKind)}; IPv6 {RouteName(capturedSnapshot.IPv6RouteKind)}. Proven transport and VPN rows are informational; all other values are neutral.");
             Console.WriteLine("Physical identity, profile and bandwidth in this Connections preview are owned validation placeholders.");
             Console.WriteLine("Owned Connections preview: " + connectionPreview);
             Control<TabControl>(window, "MainNavigation").SelectedItem = Control<TabItem>(window, "HealthTab");

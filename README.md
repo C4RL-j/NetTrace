@@ -500,6 +500,60 @@ and never opens the real NetTrace database. This validates presentation; it does
 measure live DNS/HTTPS reachability or packet loss. Automated suites use injected
 interfaces, routes, counters and health sources and require no real VPN.
 
+## Connections 004 — VPN transport / underlay awareness
+
+The existing CURRENT CONNECTION card adds **VPN transport** between VPN / tunnel
+and the independent IPv4/IPv6 application route rows. It displays **IPv4**, **IPv6**,
+**Mixed**, **Unknown**, or **Inactive**. Known transport families use the shared
+informational cyan brush; Unknown and Inactive use the neutral brush. Transport
+describes the VPN's outer server connection, without adding a health or security
+verdict. Health and both application-route classifications are unchanged.
+
+The existing Windows RAS status query already returns `RASCONNSTATUS.remoteEndPoint`:
+the actual remote VPN server endpoint, not a projected payload address or a DNS
+answer. NetTrace now decodes that native union for connected VPN sessions with no
+error and a confirmed substate. Unknown endpoint types, unspecified, loopback,
+multicast, broadcast, mapped-family ambiguity and unscoped link-local peers do not
+establish a displayed family. Private unicast endpoints remain valid evidence.
+The native status layout and byte ordering are checked against the Windows SDK.
+See Microsoft's [RASCONNSTATUS documentation](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/legacy/aa376728(v=vs.85)).
+
+A single-family result additionally requires an unambiguous association between
+every proven effective PPP tunnel participant and its connected RAS VPN session,
+using the existing PPP/RAS name and device association. Incomplete inventory,
+ambiguous associations, unknown active peers and unrelated active RAS siblings
+remain Unknown. A custom/opaque routed tunnel cannot borrow an unrelated RAS
+session's single-family endpoint. **Mixed** requires actual usable remote endpoints
+over both families from independently confirmed active RAS sessions; it describes
+proven active VPN transports collectively, without assigning an opaque tunnel to a
+particular peer. The existing conservative multi-RAS PPP route rules are preserved.
+
+For example, IPv6 transport with IPv4 route VPN and IPv6 route Direct is valid.
+The direct physical route to the VPN server is an ordinary underlay path and never
+changes application-family route values. An active custom VPN without an exposed,
+reliably associated RAS remote peer correctly displays **Unknown** transport, even
+when manual IPv6 dependency tests or dual-stack DNS suggest IPv6.
+
+No sockets or processes are enumerated. DNS records, adapter names/presence,
+browser or SSH connections, proxies and virtual adapters cannot supply transport
+proof. There are no new probes, public-IP requests, network changes, timers,
+workers, persistence fields or administrator requirements. Access failures leave
+transport Unknown without interrupting monitoring. Remote endpoint addresses and
+session/process identifiers are not displayed or persisted.
+
+Transport is part of the existing immutable route snapshot. The established
+background VPN observer refreshes it on network changes, its 30-second cadence
+and resume, including endpoint changes discovered by that observation. Tray mode
+keeps the cache current without hidden WPF rendering. Existing generation checks
+reject pre-sleep or pre-disposal results. Monitored adapter selection, sampler
+baseline and physical session totals remain unchanged.
+
+The explicit `--passive-vpn-validation` WPF command also reports the transport
+value and a safe evidence explanation. It reads local Windows state only and
+never connects, disconnects or reconfigures a VPN. Automated transport tests use
+owned evidence and counters; their rendered examples are simulated presentation
+checks, rather than claims about the user's VPN.
+
 ## Verification
 
 Run the isolated migration checks without touching your application data:

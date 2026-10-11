@@ -285,6 +285,7 @@ internal static class Program
             ConnectionDetailsChecks.Run(ownedRoot, Check);
             ProfileManagementChecks.Run(ownedRoot, Check);
             VpnRouteAwarenessChecks.Run(ownedRoot, Check);
+            VpnTransportChecks.Run(ownedRoot, Check);
             Console.WriteLine($"{_passed}/{_passed} WPF integration checks passed. Isolated data: {ownedRoot}");
             return 0;
         }

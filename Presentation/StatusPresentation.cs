@@ -36,6 +36,10 @@ public static class StatusPresentation
     public static string ForRoute(InternetRouteKind route) =>
         route == InternetRouteKind.Vpn ? InfoBrushKey : NeutralBrushKey;
 
+    public static string ForVpnTransport(VpnTransportFamily family) => family is
+        VpnTransportFamily.IPv4 or VpnTransportFamily.IPv6 or VpnTransportFamily.Mixed
+            ? InfoBrushKey : NeutralBrushKey;
+
     public static string ForAdapter(string status) => status switch
     {
         "Connected" => PositiveBrushKey,

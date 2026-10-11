@@ -143,4 +143,20 @@ history classification. Controlled monitoring covers background transitions, unc
 adapter/session/counter baseline, identity-unavailable routing, cached reads without
 discovery, stale sleep observations, fresh resume and late disposal rejection.
 
+Connections 004 adds 43 groups in `TransportAwarenessTests.cs`, bringing the console
+suite to 493 groups. Connected Windows RAS remote endpoints prove IPv4/IPv6 only
+with a unique association to the effective PPP tunnel. Independently confirmed
+native VPN sessions with actual peers in both families establish global Mixed;
+single-family unmatched siblings, missing endpoint metadata, ambiguous identities,
+errors and reconnecting/dormant sessions retain Unknown. Native layout and decoder
+fixtures check the remote endpoint union, byte order and confirmed-session gate.
+DNS answer-like metadata, IPv6 Direct routes, adapter names/drivers, ordinary or
+internal virtual adapters, unrelated application endpoints and local proxies cannot
+prove the underlay. Explicit route-independence fixtures include IPv6 transport
+with IPv4 VPN/IPv6 Direct and an allowed direct route to the VPN peer. Controlled
+headless monitoring covers endpoint/connect/disconnect transitions, unchanged
+physical adapter/session/byte baseline, cached reads, one serialized existing
+worker, stale suspend/disposal rejection, fresh resume and metadata-failure recovery.
+No DNS, socket discovery, network probes or new monitor workers are used by these tests.
+
 Both harnesses use owned temporary databases and injected network/VPN/ICMP evidence. They do not open real application data or change Windows network settings.

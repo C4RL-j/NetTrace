@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.NetworkInformation;
 
 namespace NetTrace.Models;
@@ -26,7 +27,12 @@ public sealed record VpnRasConnectionEvidence(
     string DeviceType,
     uint ConnectionState,
     uint ErrorCode = 0,
-    uint ConnectionSubstate = 0);
+    uint ConnectionSubstate = 0)
+{
+    // Actual connected RAS VPN server endpoint, never a DNS answer or a
+    // projected address assigned to traffic flowing inside the tunnel.
+    public IPAddress? RemoteEndpoint { get; init; }
+}
 
 public sealed record VpnInterfaceInventory(
     IReadOnlyList<VpnInterfaceEvidence> Interfaces,

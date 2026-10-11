@@ -336,6 +336,9 @@ public partial class MainWindow : Window
         ConnectionsVpnStatusText.Text = route.VpnStatus;
         ConnectionsVpnStatusText.ToolTip = route.DetailToolTip;
         ConnectionsVpnStatusText.Foreground = StatusBrush(StatusPresentation.ForVpn(snapshot.VpnRoute.Status));
+        VpnTransportText.Text = route.VpnTransport;
+        VpnTransportText.ToolTip = route.TransportToolTip;
+        VpnTransportText.Foreground = StatusBrush(StatusPresentation.ForVpnTransport(snapshot.VpnRoute.TransportFamily));
         IPv4RouteText.Text = route.IPv4Route;
         IPv4RouteText.ToolTip = route.DetailToolTip;
         IPv4RouteText.Foreground = StatusBrush(StatusPresentation.ForRoute(snapshot.VpnRoute.IPv4RouteKind));

@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.IO;
+using System.Net;
 using System.Net.NetworkInformation;
 using System.Runtime.InteropServices;
 using System.Security;
@@ -185,7 +186,10 @@ public sealed class WindowsVpnNative : IVpnInterfaceSource
                     // identities. Keep this evidence separate rather than inventing
                     // an interface GUID/index or binding by a descriptive name.
                     connections.Add(new(connection.EntryName ?? string.Empty,
-                        status.DeviceName, status.DeviceType, status.ConnectionState, status.ErrorCode, status.Substate));
+                        status.DeviceName, status.DeviceType, status.ConnectionState, status.ErrorCode, status.Substate)
+                    {
+                        RemoteEndpoint = ReadConnectedRasRemoteEndpoint(status)
+                    });
                 }
                 return connections;
             }
@@ -219,6 +223,43 @@ public sealed class WindowsVpnNative : IVpnInterfaceSource
     }
 
     private sealed record DriverIdentity(string? ComponentId, string? Service, bool TapMediaAlwaysConnected);
+
+    private static IPAddress? ReadConnectedRasRemoteEndpoint(RasConnStatus status)
+    {
+        // RASCONNSTATUS.remoteEndPoint describes the VPN server, while RAS
+        // projection addresses describe the payload network. Admit only a
+        // successfully connected VPN session; reconnecting/dormant endpoints
+        // can belong to an earlier transport and are not current evidence.
+        if (status.ConnectionState != 0x2000 || status.ErrorCode != 0 ||
+            status.Substate is not (0 or 0x2000) ||
+            !string.Equals(status.DeviceType, "vpn", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        return ReadRasRemoteEndpoint(status.RemoteEndpoint.Type,
+            [status.RemoteEndpoint.Address0, status.RemoteEndpoint.Address1,
+             status.RemoteEndpoint.Address2, status.RemoteEndpoint.Address3,
+             status.RemoteEndpoint.Address4, status.RemoteEndpoint.Address5,
+             status.RemoteEndpoint.Address6, status.RemoteEndpoint.Address7,
+             status.RemoteEndpoint.Address8, status.RemoteEndpoint.Address9,
+             status.RemoteEndpoint.Address10, status.RemoteEndpoint.Address11,
+             status.RemoteEndpoint.Address12, status.RemoteEndpoint.Address13,
+             status.RemoteEndpoint.Address14, status.RemoteEndpoint.Address15]);
+    }
+
+    private static IPAddress? ReadRasRemoteEndpoint(uint type, byte[] addressBytes)
+    {
+        // ras.h: UNKNOWN=0, IPv4=1, IPv6=2. The union contains IN_ADDR or
+        // IN6_ADDR in network byte order, immediately after the DWORD type.
+        if (addressBytes.Length != 16 || type is not (1 or 2))
+            return null;
+        var address = new IPAddress(type == 1 ? addressBytes[..4] : addressBytes);
+        if (IPAddress.IsLoopback(address) || address.Equals(IPAddress.Any) ||
+            address.Equals(IPAddress.IPv6Any) || address.IsIPv6Multicast || address.IsIPv4MappedToIPv6)
+            return null;
+        if (type == 1 && (addressBytes[0] is 0 or >= 224 || address.Equals(IPAddress.Broadcast)))
+            return null;
+        return address;
+    }
 
     [DllImport("iphlpapi.dll")]
     private static extern uint GetIfTable2(out IntPtr table);
@@ -265,7 +306,7 @@ public sealed class WindowsVpnNative : IVpnInterfaceSource
         internal Guid CorrelationGuid;
     }
 
-    // The unused two RASTUNNELENDPOINT unions occupy 20 bytes each. The final
+    // The two RASTUNNELENDPOINT unions occupy 20 bytes each. The final
     // RASCONNSUBSTATE makes the Windows 7+ Unicode/pack-4 structure 608 bytes.
     [StructLayout(LayoutKind.Sequential, Pack = 4, CharSet = CharSet.Unicode)]
     private struct RasConnStatus
@@ -285,5 +326,24 @@ public sealed class WindowsVpnNative : IVpnInterfaceSource
     private struct RasTunnelEndpoint
     {
         [FieldOffset(0)] internal uint Type;
+        // SDK ras.h: DWORD followed by the IN_ADDR / IN6_ADDR union. Byte
+        // fields preserve network order without integer endianness conversion.
+        // https://learn.microsoft.com/previous-versions/windows/desktop/legacy/dd430579(v=vs.85)
+        [FieldOffset(4)] internal byte Address0;
+        [FieldOffset(5)] internal byte Address1;
+        [FieldOffset(6)] internal byte Address2;
+        [FieldOffset(7)] internal byte Address3;
+        [FieldOffset(8)] internal byte Address4;
+        [FieldOffset(9)] internal byte Address5;
+        [FieldOffset(10)] internal byte Address6;
+        [FieldOffset(11)] internal byte Address7;
+        [FieldOffset(12)] internal byte Address8;
+        [FieldOffset(13)] internal byte Address9;
+        [FieldOffset(14)] internal byte Address10;
+        [FieldOffset(15)] internal byte Address11;
+        [FieldOffset(16)] internal byte Address12;
+        [FieldOffset(17)] internal byte Address13;
+        [FieldOffset(18)] internal byte Address14;
+        [FieldOffset(19)] internal byte Address15;
     }
 }

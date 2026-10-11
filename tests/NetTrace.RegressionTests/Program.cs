@@ -227,7 +227,7 @@ var tests = new (string Name, Action Run)[]
     .Concat(IcmpStabilityChartTests.Cases).Concat(IcmpPacketLossChartTests.Cases)
     .Concat(IcmpQualityTests.Cases).Concat(InternetReachabilityTests.Cases)
     .Concat(ConnectionDetailsTests.Cases).Concat(ProfileManagementTests.Cases)
-    .Concat(RouteAwarenessTests.Cases).ToArray();
+    .Concat(RouteAwarenessTests.Cases).Concat(TransportAwarenessTests.Cases).ToArray();
 
 var failed = 0;
 foreach (var (name, run) in tests)

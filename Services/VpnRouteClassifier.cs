@@ -33,13 +33,16 @@ public static class VpnRouteClassifier
         {
             var participants = vpn.SelectMany(family => family.Participants)
                 .DistinctBy(item => (item.InterfaceIndex, item.InterfaceGuid)).ToArray();
+            var transport = VpnTransportClassifier.Classify(interfaces, VpnTunnelStatus.Active, participants);
             return new(VpnTunnelStatus.Active, InternetRouteKind.Vpn,
                 participants.Length == 1 ? participants[0].InterfaceName : "Multiple tunnel interfaces",
                 participants.Length == 1 ? participants[0].Description : null,
                 checkedAtUtc.ToUniversalTime(), reason + " VPN denotes proven general routing for at least one IP family, not all destinations.")
             {
                 IPv4RouteKind = families[0].Kind,
-                IPv6RouteKind = families[1].Kind
+                IPv6RouteKind = families[1].Kind,
+                TransportFamily = transport.Family,
+                TransportReason = transport.Reason
             };
         }
         var applicable = families.Where(family => family.Availability != IpFamilyAvailability.Unavailable).ToArray();
@@ -48,7 +51,9 @@ public static class VpnRouteClassifier
                 checkedAtUtc.ToUniversalTime(), reason)
             {
                 IPv4RouteKind = families[0].Kind,
-                IPv6RouteKind = families[1].Kind
+                IPv6RouteKind = families[1].Kind,
+                TransportFamily = VpnTransportFamily.Inactive,
+                TransportReason = "No active VPN/tunnel is established by the effective internet routes."
             };
         return new(VpnTunnelStatus.Unknown, InternetRouteKind.Unknown, null, null,
             checkedAtUtc.ToUniversalTime(), reason)
