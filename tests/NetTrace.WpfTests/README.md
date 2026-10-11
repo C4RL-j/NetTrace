@@ -1,6 +1,6 @@
 # NetTrace WPF integration tests
 
-The 537 Windows-only STA integration checks use isolated temporary databases and injected
+The 554 Windows-only STA integration checks use isolated temporary databases and injected
 physical/VPN identities. They exercise the existing dashboard, persistence,
 profile, power, recovery and ownership behavior together with Task 005A tray and
 background lifecycle behavior. They retain the previous 77 WPF lifecycle checks,
@@ -31,6 +31,17 @@ registration and the existing Profiles, Assign Profile and History dialogs. They
 also exercise dashboard closure, tray restoration and clean exit through the new
 shell. The harness renders each page at the normal and minimum window sizes into
 `navigation-previews` beneath its isolated data directory for layout review.
+
+Compact scrolling adds 16 checks in `ScrollingChecks.cs` for the 760-DIP startup
+width, all five page layouts, dark native scrollbar mechanics, eased wheel frames,
+rapid and reversed input, bounds, immediate keyboard/thumb/programmatic scrolling,
+nested controls, disabling, and hide/unload cleanup. The owned synthetic scrollbar
+preview is saved under `scrolling-previews`; no live network data is captured.
+Run this group independently with:
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests/NetTrace.WpfTests.csproj -- --scrolling-checks
+```
 
 UI Foundation 001.1 adds 20 checks for the latest completed ICMP result on Health, the initial
 waiting message, all-failed latency, local sample time and updates through the

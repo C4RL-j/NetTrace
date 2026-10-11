@@ -25,6 +25,8 @@ internal static class Program
     {
         if (args.Length > 0 && args[0] is "--wifi-radio-color-check" or "--wifi-radio-checks")
             return RunWifiRadioTarget(args[0] == "--wifi-radio-color-check");
+        if (args.Length > 0 && args[0] == "--scrolling-checks")
+            return RunScrollingTarget();
         if (args.Length > 0 && args[0] == "--passive-wifi-validation")
             return PassiveWifiValidation.Run();
         if (args.Length > 0 && args[0] == "--passive-vpn-validation")
@@ -291,6 +293,7 @@ internal static class Program
             VpnRouteAwarenessChecks.Run(ownedRoot, Check);
             VpnTransportChecks.Run(ownedRoot, Check);
             WifiRadioChecks.Run(ownedRoot, Check);
+            ScrollingChecks.Run(ownedRoot, Check);
             Console.WriteLine($"{_passed}/{_passed} WPF integration checks passed. Isolated data: {ownedRoot}");
             return 0;
         }
@@ -317,6 +320,24 @@ internal static class Program
         catch (Exception exception)
         {
             Console.Error.WriteLine($"FAIL after {_passed} targeted Wi-Fi checks: {exception}");
+            return 1;
+        }
+        finally { Application.Current?.Shutdown(); }
+    }
+
+    private static int RunScrollingTarget()
+    {
+        var ownedRoot = System.IO.Path.Combine(AppContext.BaseDirectory, "owned-scrolling-target-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            _ = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+            ScrollingChecks.Run(ownedRoot, Check);
+            Console.WriteLine($"{_passed}/{_passed} targeted scrolling WPF checks passed. Isolated data: {ownedRoot}");
+            return 0;
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"FAIL after {_passed} targeted scrolling checks: {exception}");
             return 1;
         }
         finally { Application.Current?.Shutdown(); }

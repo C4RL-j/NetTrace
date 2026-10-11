@@ -5,7 +5,7 @@
         xmlns:resources="clr-namespace:NetTrace.Resources"
         Title="NetTrace"
         Icon="/NetTrace;component/assets/NetTrace.ico"
-        Width="920" Height="740"
+        Width="760" Height="740"
         MinWidth="760" MinHeight="600"
         WindowStartupLocation="CenterScreen"
         Background="#0A1020"
@@ -30,6 +30,99 @@
         <Style TargetType="TextBlock" x:Key="MutedText">
             <Setter Property="Foreground" Value="{StaticResource SubtleBrush}"/>
             <Setter Property="FontSize" Value="13"/>
+        </Style>
+
+        <Style x:Key="PageScrollThumbStyle" TargetType="Thumb">
+            <Setter Property="MinHeight" Value="18"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Thumb">
+                        <Border x:Name="ThumbSurface" Background="{StaticResource SubtleBrush}" Opacity="0.6"/>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ThumbSurface" Property="Opacity" Value="0.7"/>
+                            </Trigger>
+                            <Trigger Property="IsDragging" Value="True">
+                                <Setter TargetName="ThumbSurface" Property="Opacity" Value="0.85"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="PageScrollTrackButtonStyle" TargetType="RepeatButton">
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="IsTabStop" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RepeatButton">
+                        <Border Background="Transparent"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="PageVerticalScrollBarStyle" TargetType="ScrollBar">
+            <Setter Property="Width" Value="11"/>
+            <Setter Property="MinWidth" Value="0"/>
+            <Setter Property="Background" Value="{StaticResource CardBrush}"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Border Background="{TemplateBinding Background}">
+                            <Track x:Name="PART_Track" Orientation="Vertical" IsDirectionReversed="True"
+                                   Minimum="{TemplateBinding Minimum}" Maximum="{TemplateBinding Maximum}"
+                                   Value="{TemplateBinding Value}" ViewportSize="{TemplateBinding ViewportSize}">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Style="{StaticResource PageScrollTrackButtonStyle}"
+                                                  Command="{x:Static ScrollBar.PageUpCommand}"
+                                                  CommandTarget="{Binding RelativeSource={RelativeSource TemplatedParent}}"/>
+                                </Track.DecreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb Style="{StaticResource PageScrollThumbStyle}"/>
+                                </Track.Thumb>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Style="{StaticResource PageScrollTrackButtonStyle}"
+                                                  Command="{x:Static ScrollBar.PageDownCommand}"
+                                                  CommandTarget="{Binding RelativeSource={RelativeSource TemplatedParent}}"/>
+                                </Track.IncreaseRepeatButton>
+                            </Track>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="PageScrollViewerStyle" TargetType="ScrollViewer">
+            <Setter Property="VerticalScrollBarVisibility" Value="Auto"/>
+            <Setter Property="HorizontalScrollBarVisibility" Value="Disabled"/>
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <Setter Property="controls:SmoothScroll.IsEnabled" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollViewer">
+                        <Grid Background="{TemplateBinding Background}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <ScrollContentPresenter x:Name="PART_ScrollContentPresenter"
+                                                    Content="{TemplateBinding Content}"
+                                                    ContentTemplate="{TemplateBinding ContentTemplate}"
+                                                    ContentStringFormat="{TemplateBinding ContentStringFormat}"
+                                                    CanContentScroll="{TemplateBinding CanContentScroll}"
+                                                    Margin="{TemplateBinding Padding}"/>
+                            <ScrollBar x:Name="PART_VerticalScrollBar" Grid.Column="1" Margin="3,0,0,0"
+                                       Style="{StaticResource PageVerticalScrollBarStyle}" Orientation="Vertical"
+                                       Minimum="0" Maximum="{TemplateBinding ScrollableHeight}"
+                                       ViewportSize="{TemplateBinding ViewportHeight}" Value="{TemplateBinding VerticalOffset}"
+                                       Visibility="{TemplateBinding ComputedVerticalScrollBarVisibility}"/>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
 
 
@@ -120,7 +213,7 @@
         <TabControl x:Name="MainNavigation" Grid.Row="2" Style="{StaticResource NavigationStyle}"
                     SelectedIndex="0" TabStripPlacement="Top" AutomationProperties.Name="Main navigation">
             <TabItem x:Name="DashboardTab" Header="Dashboard">
-                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <ScrollViewer Style="{StaticResource PageScrollViewerStyle}">
                     <StackPanel x:Name="DashboardContent">
                         <Grid>
                             <Grid.RowDefinitions>
@@ -233,7 +326,7 @@
             </TabItem>
 
             <TabItem x:Name="HealthTab" Header="Health">
-                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <ScrollViewer Style="{StaticResource PageScrollViewerStyle}">
                     <StackPanel x:Name="HealthContent">
                         <Border Style="{StaticResource CardStyle}">
                             <StackPanel>
@@ -317,7 +410,7 @@
             </TabItem>
 
             <TabItem x:Name="ConnectionsTab" Header="Connections">
-                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <ScrollViewer Style="{StaticResource PageScrollViewerStyle}">
                     <StackPanel x:Name="ConnectionsContent">
                         <StackPanel.Resources>
                             <Style TargetType="ToolTip">
@@ -542,7 +635,7 @@
             </TabItem>
 
             <TabItem x:Name="HistoryTab" Header="History">
-                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <ScrollViewer Style="{StaticResource PageScrollViewerStyle}">
                     <Border Style="{StaticResource CardStyle}" VerticalAlignment="Top">
                         <StackPanel>
                             <TextBlock Text="CONNECTION HISTORY" Style="{StaticResource MutedText}"/>
@@ -556,7 +649,7 @@
             </TabItem>
 
             <TabItem x:Name="SettingsTab" Header="Settings">
-                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <ScrollViewer Style="{StaticResource PageScrollViewerStyle}">
                     <StackPanel x:Name="SettingsContent">
                         <Border Style="{StaticResource CardStyle}">
                             <StackPanel>

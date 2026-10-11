@@ -181,6 +181,11 @@ is selected. Settings rereads the actual startup registration when opened.
 Closing the window and reopening it through the tray keeps the existing monitoring
 service; a recreated window starts on Dashboard.
 
+The dashboard opens at its minimum width of 760 DIP and remains resizable.
+Page content uses compact dark vertical scrollbars and eased mouse-wheel scrolling.
+Dragging the scrollbar and keyboard scrolling stay immediate; Windows animation
+preferences and mouse-wheel scroll settings are respected.
+
 ## ICMP latency and packet loss (Network Health 001)
 
 Network Health 001 adds raw ICMP measurements through application-owned `IcmpMonitor`.
