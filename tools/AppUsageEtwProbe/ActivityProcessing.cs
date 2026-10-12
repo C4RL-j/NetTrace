@@ -2,6 +2,8 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
+using System.Text;
 
 namespace AppUsageEtwProbe;
 
@@ -12,7 +14,15 @@ public static class ActivityParser
     {
         activity = null;
         var descriptor = schema.Events.FirstOrDefault(x => x.EventId == raw.EventId && x.Version == raw.Version);
-        if (descriptor is null || !TryUnsigned(raw.Payload, descriptor.PidField, out var pid) || pid > int.MaxValue ||
+        return descriptor is not null && TryParse(raw, descriptor, localAddresses, out activity);
+    }
+
+    public static bool TryParse(RawNetworkEvent raw, NetworkEventSchema descriptor,
+        IReadOnlySet<IPAddress> localAddresses, out NetworkActivity? activity)
+    {
+        activity = null;
+        if (descriptor.EventId != raw.EventId || descriptor.Version != raw.Version ||
+            !TryUnsigned(raw.Payload, descriptor.PidField, out var pid) || pid > int.MaxValue ||
             !TryUnsigned(raw.Payload, descriptor.SizeField, out var bytes)) return false;
         var source = Address(raw.Payload, descriptor.SourceAddressField);
         var destination = Address(raw.Payload, descriptor.DestinationAddressField);
@@ -53,7 +63,8 @@ public static class ActivityParser
     }
 
     public static IPAddress Normalize(IPAddress address) => address.IsIPv4MappedToIPv6 ? address.MapToIPv4()
-        : address.AddressFamily == AddressFamily.InterNetworkV6 ? new IPAddress(address.GetAddressBytes()) : address;
+        : address.AddressFamily == AddressFamily.InterNetworkV6 && address.ScopeId != 0
+            ? new IPAddress(address.GetAddressBytes()) : address;
 
     public static TrafficClass Classify(IPAddress? source, IPAddress? destination, IReadOnlySet<IPAddress> localAddresses)
     {
@@ -72,22 +83,94 @@ public interface IProcessResolver
     ProcessIdentity Resolve(int pid, DateTime eventTimeUtc);
 }
 
+public interface IProcessIdentityLease : IDisposable
+{
+    ProcessIdentity Identity { get; }
+    bool LifetimeVerified => true;
+    bool HasExited { get; }
+    DateTime? ExitTimeUtc { get; }
+}
+
+// One retained process handle identifies a particular lifetime even when Windows
+// reuses its PID. The hot path performs one zero-time kernel wait, never process
+// name/path/start-time lookups. Denied/exited lookups are negatively cached briefly.
 public sealed class WindowsProcessResolver : IProcessResolver, IDisposable
 {
-    private readonly Dictionary<int, (Process Process, ProcessIdentity Identity)> cache = new();
+    private sealed record Entry(IProcessIdentityLease? Lease, ProcessIdentity Identity,
+        long CreatedTimestamp, LinkedListNode<int> Node);
+    private readonly Dictionary<int, Entry> cache = new();
+    private readonly LinkedList<int> lru = new();
+    private readonly Func<int, IProcessIdentityLease?> lookup;
+    private readonly int capacity;
+    private readonly TimeProvider timeProvider;
+    private readonly TimeSpan unavailableRetryInterval;
+    private bool disposed;
+    private static readonly ProcessIdentity Unattributed = new(0, "Unknown / Unattributed", null, null, "Payload PID is zero");
+    private static readonly ProcessIdentity SystemIdentity = new(4, "System", null, null, "System payload PID");
+    public int CacheCount => cache.Count;
+    public long LookupCount { get; private set; }
+
+    public WindowsProcessResolver(Func<int, IProcessIdentityLease?>? lookup = null, int capacity = 4096,
+        TimeProvider? timeProvider = null, TimeSpan? unavailableRetryInterval = null)
+    {
+        if (capacity < 1) throw new ArgumentOutOfRangeException(nameof(capacity));
+        this.lookup = lookup ?? ReadProcess;
+        this.capacity = capacity;
+        this.timeProvider = timeProvider ?? TimeProvider.System;
+        this.unavailableRetryInterval = unavailableRetryInterval ?? TimeSpan.FromSeconds(1);
+        if (this.unavailableRetryInterval <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(unavailableRetryInterval));
+    }
+
     public ProcessIdentity Resolve(int pid, DateTime eventTimeUtc)
     {
-        if (pid == 0) return new(pid, "Unknown / Unattributed", null, null, "Payload PID is zero");
-        if (pid == 4) return new(pid, "System", null, null, "System payload PID");
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (pid == 0) return Unattributed;
+        if (pid == 4) return SystemIdentity;
+        if (cache.TryGetValue(pid, out var cached))
+        {
+            lru.Remove(cached.Node); lru.AddLast(cached.Node);
+            try
+            {
+                if (cached.Lease is null || !cached.Lease.LifetimeVerified)
+                {
+                    if (timeProvider.GetElapsedTime(cached.CreatedTimestamp) < unavailableRetryInterval)
+                        return cached.Identity;
+                }
+                else if (!cached.Lease.HasExited || eventTimeUtc <= cached.Lease.ExitTimeUtc)
+                    return ValidateLifetime(cached.Identity, eventTimeUtc);
+            }
+            catch { }
+            Remove(pid, cached);
+        }
+        IProcessIdentityLease? lease = null;
+        try { LookupCount++; lease = lookup(pid); }
+        catch { }
+        var identity = lease?.Identity ?? Unknown(pid, "Process exited or lookup denied");
+        if (identity.Pid != pid)
+        {
+            lease?.Dispose(); lease = null;
+            identity = Unknown(pid, "Process lookup returned an inconsistent PID");
+        }
+        while (cache.Count >= capacity)
+        {
+            int oldest = lru.First!.Value;
+            Remove(oldest, cache[oldest]);
+        }
+        cache[pid] = new(lease, identity, timeProvider.GetTimestamp(), lru.AddLast(pid));
+        return ValidateLifetime(identity, eventTimeUtc);
+    }
+
+    private void Remove(int pid, Entry entry)
+    {
+        cache.Remove(pid); lru.Remove(entry.Node);
+        try { entry.Lease?.Dispose(); } catch { }
+    }
+
+    private static IProcessIdentityLease ReadProcess(int pid)
+    {
+        var process = Process.GetProcessById(pid);
         try
         {
-            if (cache.TryGetValue(pid, out var cached))
-            {
-                if (!cached.Process.HasExited || eventTimeUtc <= cached.Process.ExitTime.ToUniversalTime())
-                    return ValidateLifetime(cached.Identity, eventTimeUtc);
-                cached.Process.Dispose(); cache.Remove(pid);
-            }
-            var process = Process.GetProcessById(pid);
             string name;
             DateTime? start = null;
             string? path = null;
@@ -97,20 +180,117 @@ public sealed class WindowsProcessResolver : IProcessResolver, IDisposable
             try { path = process.MainModule?.FileName; } catch { }
             var identity = new ProcessIdentity(pid, name, path, start,
                 path is null ? "Executable path unavailable; name identity is provisional" : "Executable path resolved");
-            cache[pid] = (process, identity);
-            return ValidateLifetime(identity, eventTimeUtc);
+            return new NativeProcessLease(process, identity);
         }
-        catch { return Unknown(pid, "Process exited or lookup denied"); }
+        catch { process.Dispose(); throw; }
+    }
+
+    private sealed class NativeProcessLease : IProcessIdentityLease
+    {
+        private readonly Process process;
+        private readonly Microsoft.Win32.SafeHandles.SafeProcessHandle? handle;
+        private readonly bool canWait;
+        private readonly bool timesVerified;
+        private DateTime? exitTime;
+        public NativeProcessLease(Process process, ProcessIdentity identity)
+        {
+            this.process = process;
+            var openedHandle = OpenProcess(0x00101000, false, (uint)identity.Pid); // SYNCHRONIZE | QUERY_LIMITED_INFORMATION
+            if (!openedHandle.IsInvalid) { handle = openedHandle; canWait = true; }
+            else
+            {
+                openedHandle.Dispose();
+                openedHandle = OpenProcess(0x00001000, false, (uint)identity.Pid); // QUERY_LIMITED_INFORMATION only
+                if (openedHandle.IsInvalid) openedHandle.Dispose();
+                else handle = openedHandle;
+            }
+            if (handle is not null)
+            {
+                var path = new StringBuilder(32768);
+                uint length = (uint)path.Capacity;
+                if (QueryFullProcessImageName(handle, 0, path, ref length))
+                    identity = identity with
+                    {
+                        Name = Path.GetFileName(path.ToString()), ExecutablePath = path.ToString(),
+                        AttributionStatus = canWait ? "Executable path and lifetime handle resolved"
+                            : "Executable path and query-only lifetime handle resolved"
+                    };
+                if (GetProcessTimes(handle, out var creation, out var exit, out _, out _))
+                {
+                    timesVerified = true;
+                    long createdTicks = creation.ToInt64(), exitedTicks = exit.ToInt64();
+                    if (createdTicks > 0) identity = identity with { StartTimeUtc = DateTime.FromFileTimeUtc(createdTicks) };
+                    if (GetExitCodeProcess(handle, out uint exitCode) && exitCode != 259 && exitedTicks > 0)
+                        exitTime = DateTime.FromFileTimeUtc(exitedTicks);
+                }
+            }
+            Identity = identity;
+        }
+        public ProcessIdentity Identity { get; }
+        public bool LifetimeVerified => handle is not null && (canWait || timesVerified);
+        public bool HasExited
+        {
+            get
+            {
+                if (handle is null) return true;
+                if (canWait) return WaitForSingleObject(handle, 0) switch
+                {
+                    0 => true, 258 => false, _ => throw new InvalidOperationException("Process lifetime handle is unavailable.")
+                };
+                if (!GetExitCodeProcess(handle, out uint exitCode))
+                    throw new InvalidOperationException("Query-only process lifetime handle is unavailable.");
+                return exitCode != 259; // STILL_ACTIVE; a live process's exit FILETIME is undefined.
+            }
+        }
+        public DateTime? ExitTimeUtc
+        {
+            get
+            {
+                if (exitTime is not null) return exitTime;
+                if (handle is not null && GetProcessTimes(handle, out _, out var exited, out _, out _))
+                {
+                    long ticks = exited.ToInt64();
+                    if (ticks > 0) return exitTime = DateTime.FromFileTimeUtc(ticks);
+                }
+                try { return exitTime = process.ExitTime.ToUniversalTime(); } catch { return null; }
+            }
+        }
+        public void Dispose() { handle?.Dispose(); process.Dispose(); }
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern uint WaitForSingleObject(Microsoft.Win32.SafeHandles.SafeProcessHandle handle, uint milliseconds);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern Microsoft.Win32.SafeHandles.SafeProcessHandle OpenProcess(uint access, bool inherit, uint processId);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, EntryPoint = "QueryFullProcessImageNameW")]
+        private static extern bool QueryFullProcessImageName(Microsoft.Win32.SafeHandles.SafeProcessHandle handle, uint flags,
+            StringBuilder name, ref uint length);
+        [StructLayout(LayoutKind.Sequential)]
+        private struct FileTime
+        {
+            public uint Low, High;
+            public long ToInt64() => unchecked((long)(((ulong)High << 32) | Low));
+        }
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool GetProcessTimes(Microsoft.Win32.SafeHandles.SafeProcessHandle handle,
+            out FileTime creation, out FileTime exit, out FileTime kernel, out FileTime user);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool GetExitCodeProcess(Microsoft.Win32.SafeHandles.SafeProcessHandle handle, out uint exitCode);
     }
     private static ProcessIdentity ValidateLifetime(ProcessIdentity identity, DateTime eventTimeUtc) =>
         identity.StartTimeUtc > eventTimeUtc ? Unknown(identity.Pid, "Event predates current PID lifetime") : identity;
     public static ProcessIdentity Unknown(int pid, string reason) => new(pid, $"PID {pid}", null, null, reason);
-    public void Dispose() { foreach (var entry in cache.Values) entry.Process.Dispose(); cache.Clear(); }
+    public void Dispose()
+    {
+        if (disposed) return;
+        disposed = true;
+        foreach (var entry in cache.Values) { try { entry.Lease?.Dispose(); } catch { } }
+        cache.Clear(); lru.Clear();
+    }
 }
 
 public sealed class ActivityAggregator(IProcessResolver resolver)
 {
     private readonly Dictionary<string, ProcessObservation> processes = new(StringComparer.Ordinal);
+    private readonly Dictionary<int, (ProcessIdentity Identity, ProcessObservation Observation)> currentProcesses = new();
     public IReadOnlyList<ProcessObservation> Processes => processes.Values.OrderByDescending(x => x.Bytes.Total).ToArray();
     public Dictionary<TrafficClass, ByteTotals> Traffic { get; } = new();
     public long EventCount { get; private set; }
@@ -125,8 +305,15 @@ public sealed class ActivityAggregator(IProcessResolver resolver)
         ProcessIdentity identity;
         try { identity = resolver.Resolve(activity.Pid, activity.TimestampUtc); }
         catch { identity = WindowsProcessResolver.Unknown(activity.Pid, "Process lookup failed"); }
-        if (!processes.TryGetValue(identity.LifetimeKey, out var observation))
-            processes[identity.LifetimeKey] = observation = new(identity);
+        ProcessObservation observation;
+        if (currentProcesses.TryGetValue(identity.Pid, out var current) && ReferenceEquals(current.Identity, identity))
+            observation = current.Observation;
+        else
+        {
+            string lifetime = identity.LifetimeKey;
+            if (!processes.TryGetValue(lifetime, out observation!)) processes[lifetime] = observation = new(identity);
+            currentProcesses[identity.Pid] = (identity, observation);
+        }
         observation.Add(activity);
         if (!Traffic.TryGetValue(activity.TrafficClass, out var totals)) Traffic[activity.TrafficClass] = totals = new();
         totals.Add(activity.Direction, activity.Bytes);

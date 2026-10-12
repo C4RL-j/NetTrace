@@ -17,7 +17,12 @@ public sealed record DiagnosticReport(bool ClientElevated, int ClientPid, int Pr
     string VpnStateAtStart, int SnapshotCount, IReadOnlyList<ConnectionObservation> Connections,
     IReadOnlyList<Guid> CollectorInstances, IReadOnlyList<ControlledIpcCheck> ControlledChecks,
     IReadOnlyList<SnapshotObservation> Samples, CollectorSnapshot? FirstSnapshot, CollectorSnapshot? LastSnapshot,
-    ClientMetrics Metrics, bool Cancelled, bool TestShutdownRequested);
+    ClientMetrics Metrics, bool Cancelled, bool TestShutdownRequested)
+{
+    public StressResult? Stress { get; init; }
+}
+
+public sealed record StressResult(int Messages, long PayloadBytes, double Seconds, bool Completed);
 
 public static class ControlledValidation
 {

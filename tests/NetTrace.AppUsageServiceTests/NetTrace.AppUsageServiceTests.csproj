@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../tools/AppUsageCollectorCore/AppUsageCollectorCore.csproj" />
+    <ProjectReference Include="../../tools/AppUsageIpc/AppUsageIpc.csproj" />
+    <ProjectReference Include="../../tools/NetTrace.AppUsageService/NetTrace.AppUsageService.csproj" />
+  </ItemGroup>
+</Project>

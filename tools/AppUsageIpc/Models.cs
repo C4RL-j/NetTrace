@@ -4,6 +4,7 @@ namespace AppUsageIpc;
 public static class Protocol
 {
     public const int Version = 1;
+    public const int ServiceVersion = 2;
     public const int MaximumRequestBytes = 4096;
     public const int MaximumResponseBytes = 4 * 1024 * 1024;
     public static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(3);
@@ -16,7 +17,14 @@ public sealed record PipeResponse(int ProtocolVersion, string Status,
 
 public sealed record CollectorCapabilities(bool CollectorElevated, bool Ipv4, bool Ipv6,
     bool LoopbackClassification, bool LostEventCountAvailable, bool CumulativeSinceStart,
-    bool ShutdownForTestEnabled, string Provider, string CounterSemantics);
+    bool ShutdownForTestEnabled, string Provider, string CounterSemantics)
+{
+    public string? ServiceIdentity { get; init; }
+}
+
+public sealed record CollectorHealth(DateTime StartedAtUtc, bool CaptureRunning,
+    string EtwSessionName, DateTime? LastEventAtUtc, int ApplicationCount,
+    string ServiceIdentity, bool CollectorPrivileged);
 
 public sealed record TrafficCounters(long RxBytes, long TxBytes, long Ipv4RxBytes, long Ipv4TxBytes,
     long Ipv6RxBytes, long Ipv6TxBytes, long LoopbackRxBytes, long LoopbackTxBytes,
@@ -36,4 +44,7 @@ public sealed record CollectorSnapshot(Guid CollectorInstanceId, DateTime Captur
     TimeSpan CollectorUptime, long EventCount, int LostEventCount, long ProviderEventCount,
     long UnsupportedEventCount, long MalformedEventCount, IReadOnlyList<ApplicationSummary> Applications,
     ApplicationSummary System, ApplicationSummary Unknown, CollectorCapabilities Capabilities,
-    CollectorMetrics Metrics);
+    CollectorMetrics Metrics)
+{
+    public CollectorHealth? Health { get; init; }
+}

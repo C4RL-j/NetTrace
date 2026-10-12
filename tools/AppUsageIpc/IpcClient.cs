@@ -23,6 +23,8 @@ public sealed class IpcClient : IAsyncDisposable
 {
     private readonly string pipeName;
     private readonly Func<NamedPipeClientStream, bool> verifyServer;
+    private readonly string? serviceName;
+    private readonly int protocolVersion;
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly CancellationTokenSource stopping = new();
     private NamedPipeClientStream? pipe;
@@ -30,12 +32,20 @@ public sealed class IpcClient : IAsyncDisposable
     private bool handshaken;
     private int disposed;
 
-    public IpcClient(string pipeName, Func<NamedPipeClientStream, bool>? serverVerifier = null)
+    public IpcClient(string pipeName, Func<NamedPipeClientStream, bool>? serverVerifier = null,
+        string? serviceName = null, int? protocolVersion = null)
     {
         NativePipeSecurity.ValidatePipeName(pipeName);
         this.pipeName = pipeName;
+        if (serviceName is not null) ServicePipeSecurity.ValidateServiceName(serviceName);
+        this.serviceName = serviceName;
+        this.protocolVersion = protocolVersion ?? (serviceName is null ? Protocol.Version : Protocol.ServiceVersion);
+        if (this.protocolVersion is not (Protocol.Version or Protocol.ServiceVersion))
+            throw new ArgumentOutOfRangeException(nameof(protocolVersion));
         // This seam exists only for deterministic diagnostic tests, never IPC or CLI.
-        verifyServer = serverVerifier ?? (stream => NativePipeSecurity.VerifyServer(stream.SafePipeHandle));
+        verifyServer = serverVerifier ?? (stream => serviceName is null
+            ? NativePipeSecurity.VerifyServer(stream.SafePipeHandle)
+            : NativePipeSecurity.VerifyServiceServer(stream.SafePipeHandle, serviceName));
     }
 
     public async Task<IpcResult<CollectorCapabilities>> ConnectAsync(CancellationToken cancellationToken = default)
@@ -49,10 +59,15 @@ public sealed class IpcClient : IAsyncDisposable
             if (Volatile.Read(ref disposed) != 0)
                 return Failure<CollectorCapabilities>(IpcState.Disconnected, "The diagnostic client is disposed.");
             ClosePipe();
-            pipe = NativePipeSecurity.CreateClient(pipeName);
-            await pipe.ConnectAsync(timeout.Token).ConfigureAwait(false);
+            if (serviceName is not null)
+                pipe = await NativePipeSecurity.ConnectServiceClientAsync(pipeName, timeout.Token).ConfigureAwait(false);
+            else
+            {
+                pipe = NativePipeSecurity.CreateClient(pipeName);
+                await pipe.ConnectAsync(timeout.Token).ConfigureAwait(false);
+            }
             if (!verifyServer(pipe))
-                return Failure<CollectorCapabilities>(IpcState.PeerRejected, "The collector peer did not pass local identity and elevation checks.");
+                return Failure<CollectorCapabilities>(IpcState.PeerRejected, "The collector peer did not pass local identity checks.");
             // The Hello exchange gets the normal request deadline after connect.
             using var helloTimeout = Deadline(cancellationToken, Protocol.RequestTimeout);
             var response = await ExchangeAsync("Hello", helloTimeout.Token).ConfigureAwait(false);
@@ -140,13 +155,13 @@ public sealed class IpcClient : IAsyncDisposable
 
     private async Task<PipeResponse> ExchangeAsync(string operation, CancellationToken cancellationToken)
     {
-        await IpcProtocol.WriteRequestAsync(pipe!, new(Protocol.Version, operation), cancellationToken).ConfigureAwait(false);
-        return await IpcProtocol.ReadResponseAsync(pipe!, cancellationToken).ConfigureAwait(false);
+        await IpcProtocol.WriteRequestAsync(pipe!, new(protocolVersion, operation), cancellationToken).ConfigureAwait(false);
+        return await IpcProtocol.ReadResponseAsync(pipe!, cancellationToken, protocolVersion).ConfigureAwait(false);
     }
 
-    private static IpcState? ValidateResponse(PipeResponse response, string operation)
+    private IpcState? ValidateResponse(PipeResponse response, string operation)
     {
-        if (response.ProtocolVersion != Protocol.Version || response.Status == "IncompatibleProtocol")
+        if (response.ProtocolVersion != protocolVersion || response.Status == "IncompatibleProtocol")
             return IpcState.IncompatibleProtocol;
         if (response.Status != "Ok")
         {
@@ -168,12 +183,14 @@ public sealed class IpcClient : IAsyncDisposable
         };
     }
 
-    private static bool ValidCapabilities(CollectorCapabilities? capabilities) => capabilities is not null
-        && capabilities.CollectorElevated && capabilities.CumulativeSinceStart
+    private bool ValidCapabilities(CollectorCapabilities? capabilities) => capabilities is not null
+        && (protocolVersion == Protocol.ServiceVersion
+            ? capabilities.ServiceIdentity is "LocalService" or "LocalSystem" && !capabilities.ShutdownForTestEnabled
+            : capabilities.CollectorElevated) && capabilities.CumulativeSinceStart
         && capabilities.Provider == "Microsoft-Windows-Kernel-Network"
         && !string.IsNullOrWhiteSpace(capabilities.CounterSemantics);
 
-    private static bool ValidSnapshot(CollectorSnapshot? snapshot)
+    private bool ValidSnapshot(CollectorSnapshot? snapshot)
     {
         if (snapshot is null || snapshot.CollectorInstanceId == Guid.Empty
             || snapshot.CapturedAtUtc.Kind != DateTimeKind.Utc || snapshot.CapturedAtUtc == default
@@ -184,6 +201,12 @@ public sealed class IpcClient : IAsyncDisposable
             || !double.IsFinite(snapshot.Metrics.CpuPercentOfOneCore) || snapshot.Metrics.CpuPercentOfOneCore < 0
             || snapshot.Metrics.WorkingSetBytes < 0 || snapshot.Metrics.SnapshotsServed < 0)
             return false;
+        if (protocolVersion == Protocol.ServiceVersion && (snapshot.Health is not { } health
+            || health.StartedAtUtc.Kind != DateTimeKind.Utc || health.StartedAtUtc == default
+            || health.StartedAtUtc > snapshot.CapturedAtUtc || !health.CaptureRunning || !health.CollectorPrivileged
+            || string.IsNullOrWhiteSpace(health.EtwSessionName) || health.ServiceIdentity != snapshot.Capabilities.ServiceIdentity
+            || health.ApplicationCount != snapshot.Applications.Count || health.LastEventAtUtc is DateTime last
+                && (last.Kind != DateTimeKind.Utc || last < health.StartedAtUtc))) return false;
         var identities = new HashSet<string>(StringComparer.Ordinal);
         long events = 0;
         foreach (var application in snapshot.Applications.Append(snapshot.System).Append(snapshot.Unknown))
@@ -240,7 +263,7 @@ public sealed class IpcClient : IAsyncDisposable
         // A connected pipe belongs to one collector instance. Reconnection clears
         // the baseline so a legitimate restart can begin again with empty counters.
         if (previous.CollectorInstanceId != current.CollectorInstanceId
-            || current.CapturedAtUtc < previous.CapturedAtUtc || current.CollectorUptime < previous.CollectorUptime
+            || current.CollectorUptime < previous.CollectorUptime
             || current.EventCount < previous.EventCount || current.ProviderEventCount < previous.ProviderEventCount
             || current.UnsupportedEventCount < previous.UnsupportedEventCount || current.MalformedEventCount < previous.MalformedEventCount
             || current.Metrics.SnapshotsServed < previous.Metrics.SnapshotsServed

@@ -11,6 +11,7 @@ public sealed class CollectorAggregation
 {
     private readonly object gate = new();
     private readonly ProviderSchema schema;
+    private readonly IReadOnlyDictionary<(int, int), NetworkEventSchema> descriptors;
     private readonly IReadOnlySet<IPAddress> localAddresses;
     private readonly ActivityAggregator aggregation;
     private readonly TimeProvider timeProvider;
@@ -22,38 +23,50 @@ public sealed class CollectorAggregation
     private long snapshotsServed;
     private long rejectedEvents;
     private int maximumKnownLostEvents = -1;
+    private CollectorSnapshot? cachedSnapshot;
+    private long cachedSnapshotTimestamp;
+    private readonly TimeSpan snapshotCacheInterval;
 
     public CollectorAggregation(ProviderSchema schema, IProcessResolver resolver,
         IReadOnlySet<IPAddress> localAddresses, Guid? instanceId = null, TimeProvider? timeProvider = null,
-        bool shutdownForTestEnabled = false, bool collectorElevated = true)
+        bool shutdownForTestEnabled = false, bool collectorElevated = true,
+        TimeSpan? snapshotCacheInterval = null)
     {
         ArgumentNullException.ThrowIfNull(schema);
         ArgumentNullException.ThrowIfNull(resolver);
         ArgumentNullException.ThrowIfNull(localAddresses);
         this.schema = schema;
+        descriptors = schema.Events.ToDictionary(value => (value.EventId, value.Version));
         this.localAddresses = localAddresses.Select(ActivityParser.Normalize).ToHashSet();
         aggregation = new(resolver);
         this.timeProvider = timeProvider ?? TimeProvider.System;
         this.shutdownForTestEnabled = shutdownForTestEnabled;
         this.collectorElevated = collectorElevated;
         CollectorInstanceId = instanceId ?? Guid.NewGuid();
+        StartedAtUtc = this.timeProvider.GetUtcNow().UtcDateTime;
+        this.snapshotCacheInterval = snapshotCacheInterval ?? TimeSpan.Zero;
+        if (this.snapshotCacheInterval < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(snapshotCacheInterval));
         startedTimestamp = this.timeProvider.GetTimestamp();
         using var process = Process.GetCurrentProcess();
         cpuAtStart = process.TotalProcessorTime;
     }
 
     public Guid CollectorInstanceId { get; }
+    public DateTime StartedAtUtc { get; }
+    public DateTime? LastEventAtUtc { get; private set; }
 
     public bool Add(RawNetworkEvent raw)
     {
         lock (gate)
         {
-            if (!ActivityParser.TryParse(raw, schema, localAddresses, out var activity))
+            if (!descriptors.TryGetValue((raw.EventId, raw.Version), out var descriptor)
+                || !ActivityParser.TryParse(raw, descriptor, localAddresses, out var activity))
             {
                 rejectedEvents = ByteTotals.SaturatingAdd(rejectedEvents, 1);
                 return false;
             }
             aggregation.Add(activity!);
+            if (LastEventAtUtc is null || raw.TimestampUtc > LastEventAtUtc) LastEventAtUtc = raw.TimestampUtc;
             return true;
         }
     }
@@ -88,6 +101,9 @@ public sealed class CollectorAggregation
         lock (gate)
         {
             if (countRequest) snapshotsServed = ByteTotals.SaturatingAdd(snapshotsServed, 1);
+            if (countRequest && cachedSnapshot is not null
+                && timeProvider.GetElapsedTime(cachedSnapshotTimestamp) < snapshotCacheInterval)
+                return cachedSnapshot with { Metrics = cachedSnapshot.Metrics with { SnapshotsServed = snapshotsServed } };
             var processes = aggregation.Processes;
             var systemProcesses = processes.Where(process => process.Identity.Pid == 4).ToArray();
             var unknownProcesses = processes.Where(process => process.Identity.Pid != 4 && IsUnknown(process)).ToArray();
@@ -103,13 +119,16 @@ public sealed class CollectorAggregation
             var cpu = Math.Max(0, (processMetrics.TotalProcessorTime - cpuAtStart).TotalSeconds)
                 / Math.Max(uptime.TotalSeconds, 0.001) * 100;
             bool lossAvailable = captureStatus.LostEventCountAvailable && captureStatus.EventsLost is >= 0;
-            return new(CollectorInstanceId, timeProvider.GetUtcNow().UtcDateTime, uptime,
+            var snapshot = new CollectorSnapshot(CollectorInstanceId, timeProvider.GetUtcNow().UtcDateTime, uptime,
                 aggregation.EventCount, lossAvailable ? captureStatus.EventsLost!.Value : -1,
                 captureStatus.ProviderEventCount, captureStatus.UnsupportedEventCount,
                 ByteTotals.SaturatingAdd(captureStatus.MalformedEventCount, rejectedEvents),
                 Array.AsReadOnly(applications), Application("system", "System", null, systemProcesses),
                 Application("unknown", "Unknown / Unattributed", null, unknownProcesses), Capabilities(),
                 new(cpu, processMetrics.WorkingSet64, snapshotsServed));
+            cachedSnapshot = snapshot;
+            cachedSnapshotTimestamp = timeProvider.GetTimestamp();
+            return snapshot;
         }
     }
 

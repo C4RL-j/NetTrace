@@ -8,5 +8,6 @@
   <ItemGroup>
     <ProjectReference Include="../AppUsageEtwProbe/AppUsageEtwProbe.csproj" />
     <ProjectReference Include="../AppUsageIpc/AppUsageIpc.csproj" />
+    <ProjectReference Include="../AppUsageCollectorCore/AppUsageCollectorCore.csproj" />
   </ItemGroup>
 </Project>

@@ -30,6 +30,20 @@ public static class NativePipeSecurity
         return $"D:P(A;;GA;;;{sid})S:(ML;;NW;;;ME)";
     }
 
+    // Explicit client rights exclude FILE_CREATE_PIPE_INSTANCE (0x4), DELETE,
+    // WRITE_DAC and WRITE_OWNER. GenericWrite would accidentally grant 0x4.
+    public const uint ServiceClientAccessMask = 0x0012019b;
+    public static string ServiceSecurityDescriptorSddl(string clientSid, string serviceIdentitySid, string serviceSid)
+    {
+        _ = new SecurityIdentifier(clientSid); _ = new SecurityIdentifier(serviceIdentitySid);
+        _ = new SecurityIdentifier(serviceSid);
+        if (serviceIdentitySid is not ("S-1-5-18" or "S-1-5-19")
+            || !serviceSid.StartsWith("S-1-5-80-", StringComparison.Ordinal)
+            || !clientSid.StartsWith("S-1-5-21-", StringComparison.Ordinal))
+            throw new ArgumentException("Only a built-in collector identity and an intended user are supported.");
+        return $"O:{serviceIdentitySid}D:P(A;;GA;;;SY)(A;;GA;;;{serviceSid})(A;;0x{ServiceClientAccessMask:x};;;{clientSid})S:(ML;;NW;;;ME)";
+    }
+
     public static void ValidatePipeName(string pipeName)
     {
         if (string.IsNullOrEmpty(pipeName) || pipeName.Length > 120
@@ -37,11 +51,20 @@ public static class NativePipeSecurity
             throw new ArgumentException("Use a short local pipe name containing only letters, digits, dot, dash or underscore.", nameof(pipeName));
     }
 
-    public static NamedPipeServerStream CreateServer(string pipeName, bool firstInstance, int maxInstances = MaximumClients)
+    public static NamedPipeServerStream CreateServer(string pipeName, bool firstInstance, int maxInstances = MaximumClients,
+        ServicePipeSecurity? serviceSecurity = null)
     {
         ValidatePipeName(pipeName);
         if (maxInstances is < 1 or > MaximumClients) throw new ArgumentOutOfRangeException(nameof(maxInstances));
-        if (!ConvertStringSecurityDescriptorToSecurityDescriptor(SecurityDescriptorSddl(CurrentUserSid()), 1, out var descriptor, out _))
+        string descriptorText;
+        if (serviceSecurity is null) descriptorText = SecurityDescriptorSddl(CurrentUserSid());
+        else
+        {
+            ServicePipeSecurity.ValidateServiceName(serviceSecurity.ServiceName);
+            descriptorText = ServiceSecurityDescriptorSddl(serviceSecurity.AllowedClientSid, CurrentUserSid(),
+                ServicePipeSecurity.ServiceSid(serviceSecurity.ServiceName));
+        }
+        if (!ConvertStringSecurityDescriptorToSecurityDescriptor(descriptorText, 1, out var descriptor, out _))
             throw new Win32Exception(Marshal.GetLastWin32Error());
         try
         {
@@ -71,9 +94,49 @@ public static class NativePipeSecurity
     }
 
     public static bool VerifyClient(SafePipeHandle pipe) => VerifyPeer(pipe, server: false);
+    public static bool VerifyClient(SafePipeHandle pipe, string allowedSid) => VerifyPeer(pipe, server: false, allowedSid);
     public static bool VerifyServer(SafePipeHandle pipe) => VerifyPeer(pipe, server: true);
+    public static bool VerifyServiceServer(SafePipeHandle pipe, string serviceName) => ServicePeerVerification.Verify(pipe, serviceName);
 
-    private static bool VerifyPeer(SafePipeHandle pipe, bool server)
+    public static bool VerifyServiceClient(SafePipeHandle pipe, string allowedSid)
+    {
+        // The first bounded request has been read. SQOS Identification lets us
+        // inspect its authenticated token; no privileged action runs impersonated.
+        if (!ImpersonateNamedPipeClient(pipe)) return false;
+        try
+        {
+            if (!OpenThreadToken(GetCurrentThread(), 0x0008, true, out var token)) return false;
+            using (token) return ReadSid(token) == allowedSid;
+        }
+        finally
+        {
+            // Remaining code must never execute with the client's identity.
+            if (!RevertToSelf()) Environment.FailFast("Pipe identity inspection could not restore the service token.");
+        }
+    }
+
+    public static async Task<NamedPipeClientStream> ConnectServiceClientAsync(string pipeName, CancellationToken cancellationToken)
+    {
+        ValidatePipeName(pipeName);
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            const uint overlapped = 0x40000000, sqosPresent = 0x00100000, identification = 0x00010000;
+            var handle = CreateFile(@"\\.\pipe\" + pipeName, ServiceClientAccessMask, 0, IntPtr.Zero, 3,
+                overlapped | sqosPresent | identification, IntPtr.Zero);
+            if (!handle.IsInvalid)
+            {
+                try { return new NamedPipeClientStream(PipeDirection.InOut, true, true, handle); }
+                catch { handle.Dispose(); throw; }
+            }
+            int error = Marshal.GetLastWin32Error(); handle.Dispose();
+            if (error == 5) throw new UnauthorizedAccessException("The service pipe denied access.");
+            if (error is not (2 or 231)) throw new IOException("The service pipe could not be opened.", new Win32Exception(error));
+            await Task.Delay(100, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private static bool VerifyPeer(SafePipeHandle pipe, bool server, string? allowedSid = null)
     {
         try
         {
@@ -84,7 +147,7 @@ public static class NativePipeSecurity
             using (token)
             {
                 string sid = ReadSid(token);
-                return sid == CurrentUserSid() && (!server || ReadElevated(token));
+                return sid == (allowedSid ?? CurrentUserSid()) && (!server || ReadElevated(token));
             }
         }
         catch (Exception ex) when (ex is Win32Exception or ArgumentException or UnauthorizedAccessException
@@ -122,10 +185,17 @@ public static class NativePipeSecurity
     private static extern SafePipeHandle CreateNamedPipe(string name, uint openMode, uint pipeMode, uint maxInstances, uint outputBuffer,
         uint inputBuffer, uint timeout, ref SecurityAttributes security);
     [DllImport("kernel32.dll")] private static extern IntPtr LocalFree(IntPtr value);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, EntryPoint = "CreateFileW")]
+    private static extern SafePipeHandle CreateFile(string path, uint access, uint sharing, IntPtr security,
+        uint disposition, uint flags, IntPtr template);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool GetNamedPipeServerProcessId(SafePipeHandle pipe, out uint pid);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool GetNamedPipeClientProcessId(SafePipeHandle pipe, out uint pid);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern SafeProcessHandle OpenProcess(uint access, bool inherit, uint pid);
     [DllImport("advapi32.dll", SetLastError = true)] private static extern bool OpenProcessToken(SafeProcessHandle process, uint access, out SafeAccessTokenHandle token);
+    [DllImport("advapi32.dll", SetLastError = true)] private static extern bool ImpersonateNamedPipeClient(SafePipeHandle pipe);
+    [DllImport("advapi32.dll", SetLastError = true)] private static extern bool RevertToSelf();
+    [DllImport("kernel32.dll")] private static extern IntPtr GetCurrentThread();
+    [DllImport("advapi32.dll", SetLastError = true)] private static extern bool OpenThreadToken(IntPtr thread, uint access, bool openAsSelf, out SafeAccessTokenHandle token);
     [DllImport("advapi32.dll", SetLastError = true)] private static extern bool GetTokenInformation(SafeAccessTokenHandle token, int informationClass,
         IntPtr information, int length, out int returnedLength);
 }

@@ -23,6 +23,7 @@ public static class IpcProtocol
         PropertyNameCaseInsensitive = false,
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        TypeInfoResolver = IpcJsonContext.Default,
         MaxDepth = 32
     };
 
@@ -32,9 +33,26 @@ public static class IpcProtocol
         return Deserialize<PipeRequest>(bytes);
     }
 
-    public static async Task<PipeResponse> ReadResponseAsync(Stream stream, CancellationToken cancellationToken = default)
+    public static async Task<PipeResponse> ReadResponseAsync(Stream stream, CancellationToken cancellationToken = default,
+        int expectedVersion = Protocol.Version)
     {
         var bytes = await ReadFrameAsync(stream, Protocol.MaximumResponseBytes, cancellationToken).ConfigureAwait(false);
+        // Inspect the version before validating this version's exact record shape.
+        // Newer health fields must yield an explicit compatibility error to old clients.
+        try
+        {
+            using var json = JsonDocument.Parse(bytes, new JsonDocumentOptions { MaxDepth = 32 });
+            if (json.RootElement.ValueKind == JsonValueKind.Object
+                && json.RootElement.TryGetProperty("protocolVersion", out var version)
+                && version.ValueKind == JsonValueKind.Number && version.TryGetInt32(out int number))
+            {
+                if (json.RootElement.EnumerateObject().Count(property => property.Name == "protocolVersion") != 1)
+                    throw new JsonException();
+                if (number != expectedVersion)
+                    return new(number, "IncompatibleProtocol", Error: "The protocol version is incompatible.");
+            }
+        }
+        catch (JsonException) { throw new IpcProtocolException("Malformed IPC JSON."); }
         return Deserialize<PipeResponse>(bytes);
     }
 
@@ -120,20 +138,27 @@ public static class IpcProtocol
     }
 
     public static PipeResponse Dispatch(PipeRequest request, bool handshaken,
-        Func<CollectorCapabilities> capabilities, Func<CollectorSnapshot> snapshot, bool shutdownEnabled)
+        Func<CollectorCapabilities> capabilities, Func<CollectorSnapshot> snapshot, bool shutdownEnabled,
+        int protocolVersion = Protocol.Version)
     {
-        if (request.ProtocolVersion != Protocol.Version)
-            return new(Protocol.Version, "IncompatibleProtocol", Error: "The protocol version is incompatible.");
+        if (request.ProtocolVersion != protocolVersion)
+            return new(protocolVersion, "IncompatibleProtocol", Error: "The protocol version is incompatible.");
         if (request.Operation is not ("Hello" or "GetCapabilities" or "GetSnapshot" or "ShutdownForTest"))
-            return new(Protocol.Version, "UnknownOperation", Error: "The operation is unsupported.");
+            return new(protocolVersion, "UnknownOperation", Error: "The operation is unsupported.");
         if (!handshaken && request.Operation != "Hello")
-            return new(Protocol.Version, "HandshakeRequired", Error: "Hello must complete before other requests.");
+            return new(protocolVersion, "HandshakeRequired", Error: "Hello must complete before other requests.");
         return request.Operation switch
         {
-            "Hello" or "GetCapabilities" => new(Protocol.Version, "Ok", Capabilities: capabilities()),
-            "GetSnapshot" => new(Protocol.Version, "Ok", Snapshot: snapshot()),
-            "ShutdownForTest" when shutdownEnabled => new(Protocol.Version, "Ok"),
-            _ => new(Protocol.Version, "ShutdownDisabled", Error: "Test shutdown is disabled.")
+            "Hello" or "GetCapabilities" => new(protocolVersion, "Ok", Capabilities: capabilities()),
+            "GetSnapshot" => new(protocolVersion, "Ok", Snapshot: snapshot()),
+            "ShutdownForTest" when shutdownEnabled => new(protocolVersion, "Ok"),
+            _ => new(protocolVersion, "ShutdownDisabled", Error: "Test shutdown is disabled.")
         };
     }
 }
+
+[JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
+    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
+[JsonSerializable(typeof(PipeRequest))]
+[JsonSerializable(typeof(PipeResponse))]
+internal partial class IpcJsonContext : JsonSerializerContext;

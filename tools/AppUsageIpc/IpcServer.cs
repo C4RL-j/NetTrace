@@ -9,6 +9,8 @@ public sealed class IpcServer : IAsyncDisposable
     private readonly Func<CollectorSnapshot> snapshot;
     private readonly Action? shutdownForTest;
     private readonly Func<NamedPipeServerStream, bool> verifyClient;
+    private readonly int protocolVersion;
+    private readonly bool authenticateAfterFirstRead;
     private readonly CancellationTokenSource stopping = new();
     private Task? running;
     private int disposed;
@@ -18,17 +20,27 @@ public sealed class IpcServer : IAsyncDisposable
     public long RejectedRequests => Interlocked.Read(ref rejectedRequests);
 
     public IpcServer(string pipeName, Func<CollectorCapabilities> capabilities, Func<CollectorSnapshot> snapshot,
-        Action? shutdownForTest = null, Func<NamedPipeServerStream, bool>? clientVerifier = null)
+        Action? shutdownForTest = null, Func<NamedPipeServerStream, bool>? clientVerifier = null,
+        ServicePipeSecurity? serviceSecurity = null, int protocolVersion = Protocol.Version)
     {
         this.capabilities = capabilities ?? throw new ArgumentNullException(nameof(capabilities));
         this.snapshot = snapshot ?? throw new ArgumentNullException(nameof(snapshot));
         this.shutdownForTest = shutdownForTest;
+        if (protocolVersion is not (Protocol.Version or Protocol.ServiceVersion))
+            throw new ArgumentOutOfRangeException(nameof(protocolVersion));
+        if (serviceSecurity is not null && (shutdownForTest is not null || protocolVersion != Protocol.ServiceVersion))
+            throw new ArgumentException("Service pipes require service protocol and disallow diagnostic shutdown.");
+        this.protocolVersion = protocolVersion;
+        authenticateAfterFirstRead = serviceSecurity is not null && clientVerifier is null;
         // Test-only hook is never exposed as a protocol or CLI option. Default authentication is real.
-        verifyClient = clientVerifier ?? (pipe => NativePipeSecurity.VerifyClient(pipe.SafePipeHandle));
+        verifyClient = clientVerifier ?? (pipe => serviceSecurity is null
+            ? NativePipeSecurity.VerifyClient(pipe.SafePipeHandle)
+            : NativePipeSecurity.VerifyServiceClient(pipe.SafePipeHandle, serviceSecurity.AllowedClientSid));
         try
         {
             for (int i = 0; i < NativePipeSecurity.MaximumClients; i++)
-                pipes.Add(NativePipeSecurity.CreateServer(pipeName, firstInstance: i == 0));
+                pipes.Add(NativePipeSecurity.CreateServer(pipeName, firstInstance: i == 0,
+                    serviceSecurity: serviceSecurity));
         }
         catch { foreach (var pipe in pipes) pipe.Dispose(); throw; }
     }
@@ -64,15 +76,25 @@ public sealed class IpcServer : IAsyncDisposable
             try
             {
                 await pipe.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
-                if (!verifyClient(pipe)) { Interlocked.Increment(ref rejectedClients); continue; }
-                Interlocked.Increment(ref accepted);
+                if (!authenticateAfterFirstRead)
+                {
+                    if (!verifyClient(pipe)) { Interlocked.Increment(ref rejectedClients); continue; }
+                    Interlocked.Increment(ref accepted);
+                }
                 bool handshaken = false;
+                bool authenticated = !authenticateAfterFirstRead;
                 while (!cancellationToken.IsCancellationRequested && pipe.IsConnected)
                 {
                     using var requestTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                     requestTimeout.CancelAfter(Protocol.RequestTimeout);
                     var request = await IpcProtocol.ReadRequestAsync(pipe, requestTimeout.Token).ConfigureAwait(false);
-                    var response = IpcProtocol.Dispatch(request, handshaken, capabilities, snapshot, shutdownForTest is not null);
+                    if (!authenticated)
+                    {
+                        if (!verifyClient(pipe)) { Interlocked.Increment(ref rejectedClients); break; }
+                        authenticated = true; Interlocked.Increment(ref accepted);
+                    }
+                    var response = IpcProtocol.Dispatch(request, handshaken, capabilities, snapshot,
+                        shutdownForTest is not null, protocolVersion);
                     await IpcProtocol.WriteResponseAsync(pipe, response, requestTimeout.Token).ConfigureAwait(false);
                     if (response.Status != "Ok")
                     {

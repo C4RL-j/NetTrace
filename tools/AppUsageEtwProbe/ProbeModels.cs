@@ -39,6 +39,11 @@ public sealed class ByteTotals
 
 public sealed class ProcessObservation(ProcessIdentity identity)
 {
+    private static readonly string[,] BucketKeys =
+    {
+        { "Ipv4/Loopback", "Ipv4/LocalToLocal", "Ipv4/NonLoopback", "Ipv4/Unknown" },
+        { "Ipv6/Loopback", "Ipv6/LocalToLocal", "Ipv6/NonLoopback", "Ipv6/Unknown" }
+    };
     public ProcessIdentity Identity { get; } = identity;
     public long EventCount { get; private set; }
     public ByteTotals Bytes { get; } = new();
@@ -51,7 +56,7 @@ public sealed class ProcessObservation(ProcessIdentity identity)
         FirstEventUtc = FirstEventUtc is null || activity.TimestampUtc < FirstEventUtc ? activity.TimestampUtc : FirstEventUtc;
         LastEventUtc = LastEventUtc is null || activity.TimestampUtc > LastEventUtc ? activity.TimestampUtc : LastEventUtc;
         Bytes.Add(activity.Direction, activity.Bytes);
-        var key = $"{activity.Family}/{activity.TrafficClass}";
+        var key = BucketKeys[(int)activity.Family, (int)activity.TrafficClass];
         if (!Breakdown.TryGetValue(key, out var totals)) Breakdown[key] = totals = new();
         totals.Add(activity.Direction, activity.Bytes);
     }

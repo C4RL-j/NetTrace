@@ -18,26 +18,40 @@ string pipeName = NativePipeSecurity.DefaultPipeName;
 string output = Path.Combine(AppContext.BaseDirectory, "client-result.json");
 int seconds = 20, shutdownAfter = 0;
 bool controlled = false, recover = false;
+bool serviceMode = false, quiet = false, stress = false, explicitPipe = false;
+int cadenceMilliseconds = 1000;
+int protocolVersion;
+string? stopWhenFile = null;
 try
 {
     for (int i = 0; i < args.Length; i++)
         switch (args[i])
         {
             case "--seconds": seconds = int.Parse(args[++i]); break;
-            case "--pipe": pipeName = args[++i]; break;
+            case "--pipe": pipeName = args[++i]; explicitPipe = true; break;
             case "--output": output = Path.GetFullPath(args[++i]); break;
             case "--controlled": controlled = true; break;
             case "--recover": recover = true; break;
+            case "--service": serviceMode = true; break;
+            case "--quiet": quiet = true; break;
+            case "--stress": stress = true; break;
+            case "--cadence-ms": cadenceMilliseconds = int.Parse(args[++i]); break;
+            case "--stop-when-file": stopWhenFile = Path.GetFullPath(args[++i]); break;
             case "--shutdown-after": shutdownAfter = int.Parse(args[++i]); break;
             default: throw new ArgumentException("Unknown diagnostic option.");
         }
-    if (seconds is < 1 or > 120 || shutdownAfter < 0 || shutdownAfter >= seconds && shutdownAfter != 0)
-        throw new ArgumentException("Use a 1–120 second window and an optional shutdown time inside it.");
+    if (seconds is < 1 or > 240 || shutdownAfter < 0 || shutdownAfter >= seconds && shutdownAfter != 0
+        || cadenceMilliseconds is < 1000 or > 2000 || serviceMode && shutdownAfter != 0
+        || stress && (!serviceMode || controlled)
+        || stopWhenFile is not null && (!serviceMode || !recover))
+        throw new ArgumentException("Use a bounded window, 1–2 second cadence, and compatible diagnostic options.");
+    if (serviceMode && !explicitPipe) pipeName = ServicePipeSecurity.DefaultPipeName;
+    protocolVersion = serviceMode ? Protocol.ServiceVersion : Protocol.Version;
     NativePipeSecurity.ValidatePipeName(pipeName);
 }
 catch (Exception ex) when (ex is ArgumentException or FormatException or OverflowException or IndexOutOfRangeException)
 {
-    Console.Error.WriteLine("Usage: AppUsageDiagnosticClient [--seconds 20] [--pipe NAME] [--controlled] [--recover] [--shutdown-after N] [--output FILE]");
+    Console.Error.WriteLine("Usage: AppUsageDiagnosticClient [--seconds 20] [--pipe NAME] [--service] [--cadence-ms 1000|2000] [--quiet] [--controlled|--stress] [--recover] [--stop-when-file PATH (service recovery only)] [--shutdown-after N] [--output FILE]");
     return 2;
 }
 
@@ -57,39 +71,46 @@ TimeSpan? pollingCpuStart = null;
 TimeSpan pollingStart = TimeSpan.Zero;
 IpcClient? client = null;
 Task? transferWork = null;
+Task<StressResult>? stressWork = null;
+StressResult? stressResult = null;
+var backoff = new ReconnectBackoff();
 bool cancelled = false, shutdownRequested = false;
 int snapshotCount = 0;
 
-Console.WriteLine($"Client PID: {Environment.ProcessId}; elevated: False; protocol: {Protocol.Version}.");
+Console.WriteLine($"Client PID: {Environment.ProcessId}; elevated: False; protocol: {protocolVersion}; service mode: {serviceMode}.");
 try
 {
     while (elapsed.Elapsed < TimeSpan.FromSeconds(seconds))
     {
+        if (stopWhenFile is not null && File.Exists(stopWhenFile)) break;
         cancellation.Token.ThrowIfCancellationRequested();
         if (client is null)
         {
-            client = new IpcClient(pipeName);
+            client = new IpcClient(pipeName, serviceName: serviceMode ? ServicePipeSecurity.DefaultServiceName : null);
             var hello = await client.ConnectAsync(cancellation.Token);
             Observe(hello.State, hello.Detail);
             if (hello.State != IpcState.Connected)
             {
                 await client.DisposeAsync(); client = null;
                 if (!recover) break;
-                await Task.Delay(TimeSpan.FromSeconds(2), cancellation.Token);
+                await Task.Delay(backoff.NextDelay(), cancellation.Token);
                 continue;
             }
             var capabilities = await client.GetCapabilitiesAsync(cancellation.Token);
-            if (capabilities.State != IpcState.Connected || capabilities.Value?.CollectorElevated != true)
+            if (capabilities.State != IpcState.Connected || capabilities.Value is null
+                || (!serviceMode && !capabilities.Value.CollectorElevated))
             {
                 Observe(capabilities.State == IpcState.Connected ? IpcState.PeerRejected : capabilities.State,
-                    "Collector capabilities did not establish an elevated collector.");
+                    "Collector capabilities did not establish the authenticated collector mode.");
                 await client.DisposeAsync(); client = null;
                 if (!recover) break;
-                await Task.Delay(TimeSpan.FromSeconds(2), cancellation.Token);
+                await Task.Delay(backoff.NextDelay(), cancellation.Token);
                 continue;
             }
             if (controlled && transferWork is null)
                 transferWork = RunTransfersAsync(cancellation.Token);
+            if (stress && stressWork is null) stressWork = BoundedStress.RunAsync(cancellation.Token);
+            backoff.Reset();
         }
 
         var snapshot = await client.GetSnapshotAsync(cancellation.Token);
@@ -98,7 +119,7 @@ try
         {
             await client.DisposeAsync(); client = null;
             if (!recover) break;
-            await Task.Delay(TimeSpan.FromSeconds(2), cancellation.Token);
+            await Task.Delay(backoff.NextDelay(), cancellation.Token);
             continue;
         }
         lastSnapshot = snapshot.Value;
@@ -113,7 +134,7 @@ try
         snapshotCount++;
         samples.Add(new(lastSnapshot.CapturedAtUtc, lastSnapshot.CollectorInstanceId,
             lastSnapshot.CollectorUptime, lastSnapshot.EventCount, lastSnapshot.LostEventCount));
-        Console.WriteLine($"Snapshot {snapshotCount}: instance={lastSnapshot.CollectorInstanceId:N}; events={lastSnapshot.EventCount}; lost={lastSnapshot.LostEventCount}; collector elevated={lastSnapshot.Capabilities.CollectorElevated}.");
+        if (!quiet) Console.WriteLine($"Snapshot {snapshotCount}: instance={lastSnapshot.CollectorInstanceId:N}; events={lastSnapshot.EventCount}; lost={lastSnapshot.LostEventCount}; collector elevated={lastSnapshot.Capabilities.CollectorElevated}; identity={lastSnapshot.Capabilities.ServiceIdentity ?? "diagnostic"}.");
 
         if (shutdownAfter > 0 && !shutdownRequested && elapsed.Elapsed.TotalSeconds >= shutdownAfter)
         {
@@ -121,9 +142,10 @@ try
             var shutdown = await client.ShutdownForTestAsync(cancellation.Token);
             Console.WriteLine($"ShutdownForTest: {shutdown.State}.");
         }
-        await Task.Delay(TimeSpan.FromSeconds(1), cancellation.Token);
+        await Task.Delay(TimeSpan.FromMilliseconds(cadenceMilliseconds), cancellation.Token);
     }
     if (transferWork is not null) await transferWork;
+    if (stressWork is not null) stressResult = await stressWork;
 }
 catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
 {
@@ -136,6 +158,8 @@ finally
     cancellation.Cancel();
     if (transferWork is not null)
         try { await transferWork; } catch (OperationCanceledException) { }
+    if (stressWork is not null)
+        try { stressResult = await stressWork; } catch (OperationCanceledException) { }
 }
 elapsed.Stop();
 process.Refresh();
@@ -146,8 +170,9 @@ var metrics = new ClientMetrics((process.TotalProcessorTime - initialCpu).TotalS
     pollingCpuStart is null ? 0 : (process.TotalProcessorTime - pollingCpuStart.Value).TotalSeconds /
         Math.Max((elapsed.Elapsed - pollingStart).TotalSeconds, .001) * 100,
     pollingCpuStart is null ? 0 : (elapsed.Elapsed - pollingStart).TotalSeconds);
-var report = new DiagnosticReport(false, Environment.ProcessId, Protocol.Version, vpnState, snapshotCount,
-    connections, instances.ToArray(), checks, samples, firstSnapshot, lastSnapshot, metrics, cancelled, shutdownRequested);
+var report = new DiagnosticReport(false, Environment.ProcessId, protocolVersion, vpnState, snapshotCount,
+    connections, instances.ToArray(), checks, samples, firstSnapshot, lastSnapshot, metrics, cancelled, shutdownRequested)
+    { Stress = stressResult };
 
 Directory.CreateDirectory(Path.GetDirectoryName(output)!);
 await File.WriteAllTextAsync(output, JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));
