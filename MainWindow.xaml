@@ -32,6 +32,18 @@
             <Setter Property="FontSize" Value="13"/>
         </Style>
 
+        <Style x:Key="LiveRatePrimaryTextStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="34"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="Margin" Value="0,8,0,0"/>
+        </Style>
+
+        <Style x:Key="LiveRateSecondaryTextStyle" TargetType="TextBlock" BasedOn="{StaticResource MutedText}">
+            <Setter Property="Margin" Value="0,1,0,0"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+
         <Style x:Key="PageScrollThumbStyle" TargetType="Thumb">
             <Setter Property="MinHeight" Value="18"/>
             <Setter Property="Template">
@@ -263,8 +275,12 @@
 
                             <Border Grid.Row="1" Grid.Column="0" Style="{StaticResource CardStyle}">
                                 <StackPanel>
-                                    <TextBlock Text="↓ Download" Style="{StaticResource MutedText}"/>
-                                    <TextBlock x:Name="DownloadRateText" Text="0.00 Mbps" FontSize="34" FontWeight="SemiBold" Margin="0,8,0,0"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="↓ Download" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                                        <controls:NetworkHelpButton x:Name="DownloadRateHelp" Term="Transfer rate" Margin="6,0,0,0"/>
+                                    </StackPanel>
+                                    <TextBlock x:Name="DownloadRateText" Text="0 B/s" Style="{StaticResource LiveRatePrimaryTextStyle}"/>
+                                    <TextBlock x:Name="DownloadMbpsText" Text="0.00 Mbps" Style="{StaticResource LiveRateSecondaryTextStyle}"/>
                                     <TextBlock x:Name="DownloadPeakText" Text="Peak today ↓ 0.00 Mbps" Style="{StaticResource MutedText}" Margin="0,6,0,0"
                                                ToolTip="Highest sampled download traffic NetTrace observed today across monitored adapters. Saved across restarts; not a speed-test result."/>
                                     <TextBlock x:Name="DownloadSessionText" Text="App session ↓ 0 B" Style="{StaticResource MutedText}" Margin="0,8,0,0"
@@ -274,8 +290,12 @@
 
                             <Border Grid.Row="1" Grid.Column="2" Style="{StaticResource CardStyle}">
                                 <StackPanel>
-                                    <TextBlock Text="↑ Upload" Style="{StaticResource MutedText}"/>
-                                    <TextBlock x:Name="UploadRateText" Text="0.00 Mbps" FontSize="34" FontWeight="SemiBold" Margin="0,8,0,0"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="↑ Upload" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                                        <controls:NetworkHelpButton x:Name="UploadRateHelp" Term="Transfer rate" Margin="6,0,0,0"/>
+                                    </StackPanel>
+                                    <TextBlock x:Name="UploadRateText" Text="0 B/s" Style="{StaticResource LiveRatePrimaryTextStyle}"/>
+                                    <TextBlock x:Name="UploadMbpsText" Text="0.00 Mbps" Style="{StaticResource LiveRateSecondaryTextStyle}"/>
                                     <TextBlock x:Name="UploadPeakText" Text="Peak today ↑ 0.00 Mbps" Style="{StaticResource MutedText}" Margin="0,6,0,0"
                                                ToolTip="Highest sampled upload traffic NetTrace observed today across monitored adapters. Saved across restarts; not a speed-test result."/>
                                     <TextBlock x:Name="UploadSessionText" Text="App session ↑ 0 B" Style="{StaticResource MutedText}" Margin="0,8,0,0"

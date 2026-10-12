@@ -229,7 +229,7 @@ var tests = new (string Name, Action Run)[]
     .Concat(ConnectionDetailsTests.Cases).Concat(ProfileManagementTests.Cases)
     .Concat(RouteAwarenessTests.Cases).Concat(TransportAwarenessTests.Cases)
     .Concat(WifiRadioTests.Cases).Concat(HistoryOverviewTests.Cases)
-    .Concat(HistoryUsageTests.Cases).ToArray();
+    .Concat(HistoryUsageTests.Cases).Concat(DashboardSpeedTests.Cases).ToArray();
 
 if (args.Length > 0 && args[0] == "--wifi-radio-checks")
     tests = WifiRadioTests.Cases;
@@ -239,6 +239,9 @@ if (args.Length > 0 && args[0] == "--history-overview-checks")
 
 if (args.Length > 0 && args[0] == "--history-usage-checks")
     tests = HistoryUsageTests.Cases;
+
+if (args.Length > 0 && args[0] == "--dashboard-speed-checks")
+    tests = DashboardSpeedTests.Cases;
 
 var failed = 0;
 foreach (var (name, run) in tests)

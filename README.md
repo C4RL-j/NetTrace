@@ -7,7 +7,7 @@ NetTrace V1.1 establishes the NetTrace identity and safely migrates local histor
 ## Current features
 
 - Active network adapter selector
-- Live download/upload traffic in Mbps
+- Live download/upload traffic with adaptive byte-rate primary and Mbps secondary
 - Persistent daily peaks from passive traffic observations
 - Download/upload totals for the current app session
 - Today total
@@ -27,7 +27,9 @@ NetTrace V1.1 establishes the NetTrace identity and safely migrates local histor
 
 ## Measurement meanings
 
-**Live Traffic** is the current transfer rate on the monitored adapter, displayed in decimal Mbps (one megabit is 1,000,000 bits). It watches existing traffic and generates no speed-test traffic. **Data Usage** stays in byte quantities such as MB and GB. The app-session totals cover this NetTrace process, including time with the dashboard closed; a connection session covers one continuous observed physical connection.
+**Live Traffic** is the current transfer rate on the monitored adapter. Download and Upload show a large adaptive byte-rate (B/s, KB/s, MB/s or GB/s), with the existing decimal Mbps directly below as a smaller secondary reading. Both formats use the same captured raw bytes-per-second measurement; 1 MB/s equals 8 Mbps. Byte rates use decimal units: 1 KB/s is 1,000 B/s, 1 MB/s is 1,000,000 B/s and 1 GB/s is 1,000,000,000 B/s. The unit is chosen before rounding, with compact magnitude-based precision and idle displayed as 0 B/s / 0.00 Mbps. A reading immediately below a unit boundary may round to 1000 in its current unit; the unit changes at the exact raw threshold.
+
+Live Traffic watches existing traffic and generates no speed-test traffic. The stable help cue beside each Download/Upload label reuses the centralized wrapped help control, with the same hover, focus, click and Escape behavior as Connections. Peak today retains its Mbps format. **Data Usage** and App session remain cumulative byte quantities using the existing size formatter. The app-session totals cover this NetTrace process, including time with the dashboard closed; a connection session covers one continuous observed physical connection. This presentation change adds no timer, worker, sampler, network/database query or Settings preference.
 
 **Peak today** is the highest sampled download/upload traffic NetTrace observed across monitored adapters during the local calendar day. Peaks are saved about every 30 seconds and on normal exit, survive restarts, and begin at zero on a new day. They are observations while NetTrace runs, not guaranteed maximum internet throughput. Earlier usage totals cannot reconstruct old traffic peaks, so peak recording begins with this build. A sudden termination can lose the most recent unsaved peak.
 

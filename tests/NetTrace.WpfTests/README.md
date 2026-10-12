@@ -282,3 +282,32 @@ from the same read-only real-history backup. A single frozen snapshot time keeps
 Today/chart definitions consistent. An unfinished stored session's persisted bytes
 are included once on its local start day; current unflushed process counters remain
 unavailable. Session/event row hashes must remain unchanged after every view.
+
+Dashboard 001 adds 32 checks in `DashboardSpeedChecks.cs` and runs with the full suite:
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests/NetTrace.WpfTests.csproj -- --dashboard-speed-checks
+dotnet run --project tests/NetTrace.WpfTests/NetTrace.WpfTests.csproj -- --dashboard-live-validation
+```
+
+Owned zero/KB/MB/GB and asymmetric rate fixtures verify large adaptive byte-rate
+primaries with muted Mbps directly below, semantic shared styles, unchanged peak
+Mbps and cumulative session/data usage labels, stable transfer-rate help cues,
+wrapped native help popups with focus/click/Escape behavior, and two aligned cards
+at 760×600. Minimum-size scrolling preserves access to the data usage/current
+connection sections. Synthetic page and help screenshots are saved beneath
+`dashboard-speed-previews` in the owned test directory.
+
+A two-second physical-counter fixture independently supplies 10 MB download and
+2 MB upload: both live pairs must show 5.00 MB/s / 40.00 Mbps and 1.00 MB/s /
+8.00 Mbps from the same raw measurements. Repeated presentation refresh must not
+read adapter counters, replace workers/timers, change rate/accounting state or
+alter History 001/002 session bytes. A temporarily unavailable owned usage table
+also verifies the speed presentation has no database dependency.
+
+The explicit live target passively observes a confirmed physical adapter over
+35 bounded one-second intervals without generating traffic or opening the real
+NetTrace database. It renders exact observed raw pairs in a separate empty owned
+UI store and reports which adaptive traffic conditions occurred. If ordinary
+background traffic never reaches MB/s, that live condition is reported as
+unavailable; deterministic MB/s coverage remains part of the owned WPF checks.

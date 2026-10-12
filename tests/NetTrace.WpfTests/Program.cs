@@ -33,6 +33,10 @@ internal static class Program
             return RunHistoryUsageTarget();
         if (args.Length > 0 && args[0] == "--history-live-validation")
             return PassiveHistoryValidation.Run();
+        if (args.Length > 0 && args[0] == "--dashboard-speed-checks")
+            return RunDashboardSpeedTarget();
+        if (args.Length > 0 && args[0] == "--dashboard-live-validation")
+            return PassiveDashboardValidation.Run();
         if (args.Length > 0 && args[0] == "--passive-wifi-validation")
             return PassiveWifiValidation.Run();
         if (args.Length > 0 && args[0] == "--passive-vpn-validation")
@@ -302,6 +306,7 @@ internal static class Program
             ScrollingChecks.Run(ownedRoot, Check);
             HistoryOverviewChecks.Run(ownedRoot, Check);
             HistoryUsageChecks.Run(ownedRoot, Check);
+            DashboardSpeedChecks.Run(ownedRoot, Check);
             Console.WriteLine($"{_passed}/{_passed} WPF integration checks passed. Isolated data: {ownedRoot}");
             return 0;
         }
@@ -382,6 +387,24 @@ internal static class Program
         catch (Exception exception)
         {
             Console.Error.WriteLine($"FAIL after {_passed} targeted History usage checks: {exception}");
+            return 1;
+        }
+        finally { Application.Current?.Shutdown(); }
+    }
+
+    private static int RunDashboardSpeedTarget()
+    {
+        var ownedRoot = System.IO.Path.Combine(AppContext.BaseDirectory, "owned-dashboard-speed-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            _ = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+            DashboardSpeedChecks.Run(ownedRoot, Check);
+            Console.WriteLine($"{_passed}/{_passed} targeted Dashboard speed WPF checks passed. Isolated data: {ownedRoot}");
+            return 0;
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"FAIL after {_passed} targeted Dashboard speed checks: {exception}");
             return 1;
         }
         finally { Application.Current?.Shutdown(); }

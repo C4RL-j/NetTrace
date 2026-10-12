@@ -303,8 +303,7 @@ public partial class MainWindow : Window
         RefreshHistoryOverview(refresh: false);
         var snapshot = _monitoring.GetSnapshot();
         RefreshConnections(snapshot);
-        DownloadRateText.Text = ByteFormatter.FormatRate(snapshot.DownloadBytesPerSecond);
-        UploadRateText.Text = ByteFormatter.FormatRate(snapshot.UploadBytesPerSecond);
+        ApplyLiveSpeed(snapshot.DownloadBytesPerSecond, snapshot.UploadBytesPerSecond);
         DownloadPeakText.Text = $"Peak today ↓ {ByteFormatter.FormatRate(snapshot.PeakDownloadBytesPerSecond)}";
         UploadPeakText.Text = $"Peak today ↑ {ByteFormatter.FormatRate(snapshot.PeakUploadBytesPerSecond)}";
         DownloadSessionText.Text = $"App session ↓ {ByteFormatter.Format(snapshot.SessionDownloaded)}";
@@ -340,6 +339,17 @@ public partial class MainWindow : Window
             SessionMessageText.Text = $"Usage history could not be read: {exception.Message}";
             Trace.TraceError(SessionMessageText.Text);
         }
+    }
+
+    private void ApplyLiveSpeed(double downloadBytesPerSecond, double uploadBytesPerSecond)
+    {
+        var download = LiveSpeedPresentation.Create(downloadBytesPerSecond);
+        var upload = LiveSpeedPresentation.Create(uploadBytesPerSecond);
+        // One snapshot and one UI cycle supply both formats for each direction.
+        DownloadRateText.Text = download.ByteRateText;
+        DownloadMbpsText.Text = download.MbpsText;
+        UploadRateText.Text = upload.ByteRateText;
+        UploadMbpsText.Text = upload.MbpsText;
     }
 
     private void RefreshCurrentSession(MonitoringSnapshot snapshot)

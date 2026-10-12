@@ -226,4 +226,20 @@ Run only these deterministic History 002 groups with:
 dotnet run --project tests/NetTrace.RegressionTests/NetTrace.RegressionTests.csproj -- --history-usage-checks
 ```
 
+Dashboard 001 adds 30 deterministic groups in `DashboardSpeedTests.cs`, bringing
+the console suite to 651 groups. Paired live values derive from the same raw
+bytes-per-second sample; Mbps continues using the existing formatter. Adaptive
+byte rates use decimal B/s, KB/s, MB/s and GB/s with compact magnitude-based
+precision. Tests cover the approved conversion/readability examples, exact and
+adjacent raw thresholds, rounding without premature unit promotion, fractions,
+small/invalid/negative-zero/extreme samples, English/French cultures and raw-sample
+pairing that avoids conversion through rounded display text. Existing Mbps and
+cumulative binary byte-quantity formatting remain covered unchanged.
+
+Run only these deterministic Dashboard 001 groups with:
+
+```powershell
+dotnet run --project tests/NetTrace.RegressionTests/NetTrace.RegressionTests.csproj -- --dashboard-speed-checks
+```
+
 Both harnesses use owned temporary databases and injected network/VPN/ICMP evidence. They do not open real application data or change Windows network settings.
