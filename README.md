@@ -633,3 +633,20 @@ Run the isolated migration checks without touching your application data:
 dotnet run --project tests\NetTrace.RegressionTests\NetTrace.RegressionTests.csproj
 dotnet run --project tests\NetTrace.WpfTests\NetTrace.WpfTests.csproj
 ```
+
+## App Usage 004.1 — daily usage storage foundation
+
+The standalone [App Usage storage library](tools/AppUsageStorage/README.md)
+provides SQLite daily application aggregates at
+`%ProgramData%\NetTrace\app-usage.db`. Schema version 1 aggregates by normalized
+executable identity and observed local calendar date, preserves historical
+display metadata and provides explicit 90-day retention cleanup. The current
+service, IPC and WPF application do not yet use this store.
+
+Run its isolated storage tests, existing App Usage 003 checks and library build:
+
+```powershell
+dotnet run --project tests/NetTrace.AppUsageStorageTests/NetTrace.AppUsageStorageTests.csproj
+dotnet run --project tests/NetTrace.AppUsageServiceTests/NetTrace.AppUsageServiceTests.csproj
+dotnet build tools/AppUsageStorage/AppUsageStorage.csproj
+```
