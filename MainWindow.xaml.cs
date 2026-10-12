@@ -33,6 +33,8 @@ public partial class MainWindow : Window
         _startupRegistration = startupRegistration;
         InitializeComponent();
         _loadingAdapters = false;
+        HistoryUsage7DButton.IsChecked = monitoring.SelectedHistoryUsageRange == HistoryUsageRange.SevenDays;
+        HistoryUsage30DButton.IsChecked = monitoring.SelectedHistoryUsageRange == HistoryUsageRange.ThirtyDays;
         RefreshStartupSetting();
         DatabasePathText.Text = monitoring.DatabasePath;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
@@ -159,13 +161,31 @@ public partial class MainWindow : Window
         if (_closed || !IsVisible || WindowState == WindowState.Minimized || !HistoryContent.IsVisible) return;
         try
         {
-            ApplyHistoryOverview(_monitoring.GetHistoryOverview(refresh));
+            var page = _monitoring.GetHistoryPageData(refresh);
+            ApplyHistoryOverview(page.Overview);
+            ApplyHistoryUsageChart(page.Usage);
             HistoryMessageText.Text = "";
         }
         catch (Exception exception)
         {
             HistoryMessageText.Text = $"Connection history could not be loaded: {exception.Message}";
         }
+    }
+
+    private void HistoryUsageRange_OnChecked(object sender, RoutedEventArgs args)
+    {
+        if (_loadingAdapters || _closed) return;
+        _monitoring.SelectedHistoryUsageRange = ReferenceEquals(sender, HistoryUsage30DButton)
+            ? HistoryUsageRange.ThirtyDays : HistoryUsageRange.SevenDays;
+        RefreshHistoryUsage();
+    }
+
+    private void RefreshHistoryUsage(bool refresh = true) => RefreshHistoryOverview(refresh);
+
+    private void ApplyHistoryUsageChart(HistoryUsageChartData data)
+    {
+        HistoryUsageChart.UpdateData(data);
+        HistoryUsageMessageText.Text = "";
     }
 
     private void ApplyHistoryOverview(HistoryOverview overview)

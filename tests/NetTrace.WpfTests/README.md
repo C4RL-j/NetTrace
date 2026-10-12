@@ -259,3 +259,26 @@ The command saves temporary screenshots and reports their directory. An unfinish
 snapshot row shows `Last confirmed` and uses persisted confirmation time and byte
 counters; it does not imply live connectivity or extend connected time to now.
 The check cannot read unflushed counters from another running process.
+
+History 002 adds 44 checks in `HistoryUsageChecks.cs` and runs with the full suite:
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests/NetTrace.WpfTests.csproj -- --history-usage-checks
+```
+
+The owned fixtures exercise empty/mixed 7D, varied/mostly-zero 30D, GB scaling,
+native stacked geometry and measurement colors, sparse labels, wrapped exact-value
+WPF tooltip popups (including zero days), and stationary tooltip freshness during
+active usage. They verify active/persisted deduplication, start-day attribution after
+midnight, Today consistency, cached view refresh, hidden query/render suppression,
+minimized/restored behavior, app-session range retention across navigation/window
+recreation, and unchanged workers/timers/history records. At 760×600, the chart,
+long recent-profile identities and full-history action remain reachable by vertical
+scrolling without horizontal overflow. Screenshots are saved beneath
+`history-usage-previews` in the owned test directory.
+
+`--history-live-validation` also renders 7D/30D charts and actual tooltip popups
+from the same read-only real-history backup. A single frozen snapshot time keeps
+Today/chart definitions consistent. An unfinished stored session's persisted bytes
+are included once on its local start day; current unflushed process counters remain
+unavailable. Session/event row hashes must remain unchanged after every view.

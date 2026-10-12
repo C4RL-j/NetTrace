@@ -68,6 +68,23 @@ public sealed class ConnectionHistoryStore
         return ReadSessions(command);
     }
 
+    // Usage is attributed by start day, so intervals that began before this window
+    // must not enter its daily buckets merely because they later overlapped it.
+    public IReadOnlyList<ConnectionSession> GetSessionsStartedBetween(DateTimeOffset fromUtc, DateTimeOffset toUtc)
+    {
+        if (toUtc <= fromUtc)
+            throw new ArgumentException("The session date range must end after it starts.");
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = SessionSelect + """
+             WHERE s.StartedAtUtc >= $from AND s.StartedAtUtc < $to
+             ORDER BY s.StartedAtUtc DESC, s.Id DESC;
+            """;
+        command.Parameters.AddWithValue("$from", Timestamp(fromUtc));
+        command.Parameters.AddWithValue("$to", Timestamp(toUtc));
+        return ReadSessions(command);
+    }
+
     public IReadOnlyList<ConnectionSession> GetSessionsByProfile(long profileId, int limit = 100)
     {
         ValidateLimit(limit);

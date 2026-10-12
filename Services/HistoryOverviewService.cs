@@ -22,12 +22,13 @@ public sealed class HistoryOverviewService
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
-    public HistoryOverview GetOverview(ConnectionSession? activeSession, bool refresh = true)
+    public HistoryOverview GetOverview(ConnectionSession? activeSession, bool refresh = true,
+        DateTimeOffset? observedAtUtc = null, TimeZoneInfo? localTimeZone = null)
     {
         lock (_gate)
         {
-            var now = _timeProvider.GetUtcNow();
-            var zone = _timeProvider.LocalTimeZone;
+            var now = observedAtUtc ?? _timeProvider.GetUtcNow();
+            var zone = localTimeZone ?? _timeProvider.LocalTimeZone;
             var (dayStart, dayEnd) = HistoryOverview.GetLocalDayBounds(now, zone);
             if (refresh || _today is null || _recent is null || _dayStart != dayStart ||
                 _dayEnd != dayEnd || _zone?.Equals(zone) != true || _activeId != activeSession?.Id)

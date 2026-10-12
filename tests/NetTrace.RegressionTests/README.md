@@ -206,4 +206,24 @@ Run only these deterministic History 001 groups with:
 dotnet run --project tests/NetTrace.RegressionTests/NetTrace.RegressionTests.csproj -- --history-overview-checks
 ```
 
+History 002 adds 43 deterministic groups in `HistoryUsageTests.cs`, bringing the
+console suite to 621 groups. Integer download/upload totals aggregate by local
+session start date into exactly 7 or 30 chronological, zero-filled buckets. Completed
+and active session bytes follow History 001's same start-day rule, including the
+explicit December 31 to January 1 case; current live counters replace the persisted
+representation of the same stable session ID. Tests cover local range endpoints,
+future starts, missing dates, month/year transitions, DST, zero traffic, readable
+byte axes and hover values, sparse 30D labels, overflow safety and immutable data.
+Owned SQLite fixtures verify start-only bounded retrieval through the existing
+timestamp index, unchanged schema/rows, range/date/timezone/active-ID cache
+invalidation, query-free live updates and reuse of unchanged visual snapshots. A
+shared explicit time/zone context keeps Today and chart consistent exactly at
+midnight while preserving the existing provider-based service defaults.
+
+Run only these deterministic History 002 groups with:
+
+```powershell
+dotnet run --project tests/NetTrace.RegressionTests/NetTrace.RegressionTests.csproj -- --history-usage-checks
+```
+
 Both harnesses use owned temporary databases and injected network/VPN/ICMP evidence. They do not open real application data or change Windows network settings.

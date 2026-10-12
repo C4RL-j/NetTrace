@@ -59,7 +59,15 @@ public sealed record HistoryOverview(int TodaySessionCount, TimeSpan TodayConnec
     {
         ArgumentNullException.ThrowIfNull(localTimeZone);
         var localDate = TimeZoneInfo.ConvertTime(nowUtc, localTimeZone).Date;
-        return (DayBoundary(localDate, localTimeZone), DayBoundary(localDate.AddDays(1), localTimeZone));
+        return GetLocalDayBounds(DateOnly.FromDateTime(localDate), localTimeZone);
+    }
+
+    public static (DateTimeOffset StartUtc, DateTimeOffset EndUtc) GetLocalDayBounds(
+        DateOnly localDate, TimeZoneInfo localTimeZone)
+    {
+        ArgumentNullException.ThrowIfNull(localTimeZone);
+        return (DayBoundary(localDate.ToDateTime(TimeOnly.MinValue), localTimeZone),
+            DayBoundary(localDate.AddDays(1).ToDateTime(TimeOnly.MinValue), localTimeZone));
     }
 
     private static DateTimeOffset DayBoundary(DateTime localDate, TimeZoneInfo zone)

@@ -15,6 +15,8 @@ public sealed class MonitoringService : IDisposable
     private readonly ProfileStore _profiles;
     private readonly ConnectionHistoryStore _history;
     private readonly HistoryOverviewService _historyOverview;
+    private readonly HistoryUsageService _historyUsage;
+    private HistoryUsageRange _selectedHistoryUsageRange = HistoryUsageRange.SevenDays;
     private readonly ConnectionSessionTracker _sessions;
     private readonly ConnectionProfileMonitor _profileMonitor;
     private CurrentConnectionState _connection;
@@ -119,6 +121,7 @@ public sealed class MonitoringService : IDisposable
             _trafficPeaks[_pendingDay] = store.GetTrafficPeaks(_pendingDay);
             _history = new ConnectionHistoryStore(store);
             _historyOverview = new HistoryOverviewService(_history, _timeProvider);
+            _historyUsage = new HistoryUsageService(_history, _timeProvider);
             _sessions = new ConnectionSessionTracker(_history, _timeProvider);
             _profiles = new ProfileStore(store);
             _profileMonitor = new ConnectionProfileMonitor(identityService, new ProfileResolver(_profiles), _timeProvider);
@@ -196,16 +199,48 @@ public sealed class MonitoringService : IDisposable
     public HistoryOverview GetHistoryOverview(bool refresh = true)
     {
         lock (_gate)
+            return _historyOverview.GetOverview(GetHistorySession(), refresh);
+    }
+
+    public HistoryUsageRange SelectedHistoryUsageRange
+    {
+        get { lock (_gate) return _selectedHistoryUsageRange; }
+        set
         {
-            var session = _sessions.ConfirmedSession;
-            if (session is not null)
-                session = session with
-                {
-                    ProfileDisplayName = session.ProfileId == _connection.Profile?.Id
-                        ? _connection.Profile?.DisplayName : session.ProfileDisplayName
-                };
-            return _historyOverview.GetOverview(session, refresh);
+            if (value is not HistoryUsageRange.SevenDays and not HistoryUsageRange.ThirtyDays)
+                throw new ArgumentOutOfRangeException(nameof(value));
+            lock (_gate) _selectedHistoryUsageRange = value;
         }
+    }
+
+    public HistoryUsageChartData GetHistoryUsageChart(HistoryUsageRange range, bool refresh = true)
+    {
+        lock (_gate)
+            return _historyUsage.GetChartData(range, GetHistorySession(), refresh);
+    }
+
+    public (HistoryOverview Overview, HistoryUsageChartData Usage) GetHistoryPageData(bool refresh = true)
+    {
+        lock (_gate)
+        {
+            // Both presentations receive the same live byte counters. Sampling and
+            // persistence cannot slip between the Today summary and its chart bucket.
+            var session = GetHistorySession();
+            var now = _timeProvider.GetUtcNow();
+            var zone = _timeProvider.LocalTimeZone;
+            return (_historyOverview.GetOverview(session, refresh, now, zone),
+                _historyUsage.GetChartData(_selectedHistoryUsageRange, session, refresh, now, zone));
+        }
+    }
+
+    private ConnectionSession? GetHistorySession()
+    {
+        var session = _sessions.ConfirmedSession;
+        return session is null ? null : session with
+        {
+            ProfileDisplayName = session.ProfileId == _connection.Profile?.Id
+                ? _connection.Profile?.DisplayName : session.ProfileDisplayName
+        };
     }
 
     // Visible dashboards request these queries. A concurrent flush cannot double-count

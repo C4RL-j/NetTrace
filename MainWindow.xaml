@@ -134,6 +134,38 @@
             <Setter Property="BorderBrush" Value="#2B3957"/>
         </Style>
 
+        <Style x:Key="HistoryUsageRangeStyle" TargetType="RadioButton">
+            <Setter Property="Foreground" Value="{StaticResource SubtleBrush}"/>
+            <Setter Property="Padding" Value="10,6"/>
+            <Setter Property="Margin" Value="0,0,8,0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Grid>
+                            <Border x:Name="RangeFocusBorder" Background="Transparent" BorderBrush="Transparent"
+                                    BorderThickness="1" CornerRadius="4" Padding="{TemplateBinding Padding}">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                  TextElement.FontSize="13" TextElement.FontWeight="SemiBold"/>
+                            </Border>
+                            <Border x:Name="RangeIndicator" Height="2" VerticalAlignment="Bottom" Background="Transparent"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter Property="Foreground" Value="#F8FAFC"/>
+                                <Setter TargetName="RangeIndicator" Property="Background" Value="{StaticResource AccentBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Foreground" Value="#F8FAFC"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="RangeFocusBorder" Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style x:Key="NavigationTabStyle" TargetType="TabItem">
             <Setter Property="Foreground" Value="{StaticResource SubtleBrush}"/>
             <Setter Property="Padding" Value="10,10"/>
@@ -662,6 +694,24 @@
                                     </UniformGrid>
                                 </StackPanel>
                                 <TextBlock x:Name="HistoryMessageText" Text="" Foreground="#FBBF24" FontSize="11" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                                <StackPanel x:Name="HistoryUsageSection" Margin="0,16,0,0">
+                                    <TextBlock Text="DATA USAGE" Style="{StaticResource MutedText}"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                        <RadioButton x:Name="HistoryUsage7DButton" Content="7D" GroupName="HistoryUsageRange"
+                                                     Style="{StaticResource HistoryUsageRangeStyle}" IsChecked="True" Checked="HistoryUsageRange_OnChecked"/>
+                                        <RadioButton x:Name="HistoryUsage30DButton" Content="30D" GroupName="HistoryUsageRange"
+                                                     Style="{StaticResource HistoryUsageRangeStyle}" Checked="HistoryUsageRange_OnChecked"/>
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                        <Rectangle Width="10" Height="10" Fill="{x:Static controls:HistoryUsageChart.DownloadBrush}" Margin="0,0,6,0"/>
+                                        <TextBlock Text="Download" Style="{StaticResource MutedText}" Margin="0,0,18,0"/>
+                                        <Rectangle Width="10" Height="10" Fill="{x:Static controls:HistoryUsageChart.UploadBrush}" Margin="0,0,6,0"/>
+                                        <TextBlock Text="Upload" Style="{StaticResource MutedText}"/>
+                                    </StackPanel>
+                                    <controls:HistoryUsageChart x:Name="HistoryUsageChart" Height="190" Margin="0,8,0,0"
+                                                                AutomationProperties.Name="Daily download and upload data usage"/>
+                                    <TextBlock x:Name="HistoryUsageMessageText" Text="" Foreground="#FBBF24" FontSize="11" TextWrapping="Wrap"/>
+                                </StackPanel>
                                 <TextBlock Text="RECENT SESSIONS" Style="{StaticResource MutedText}" Margin="0,16,0,0"/>
                                 <StackPanel x:Name="HistoryEmptyState" Margin="0,12,0,0">
                                     <TextBlock Text="No connection history yet." FontWeight="SemiBold"/>
