@@ -11,6 +11,17 @@ public sealed record EtwCaptureResult(string SessionName, bool SessionStarted, b
     long UnsupportedEventCount, long MalformedEventCount, DateTime? WindowStartUtc,
     DateTime? WindowEndUtc, string? Error);
 
+// Live diagnostics are separate from the completed-window result. A real-time
+// source's startup loss snapshot is not an authoritative live controller count.
+public sealed record EtwCaptureLiveStatus(string? SessionName, bool SessionStarted, bool IsCapturing,
+    bool LostEventCountAvailable, int? EventsLost, long ProviderEventCount,
+    long UnsupportedEventCount, long MalformedEventCount);
+
+public interface IEtwCaptureStatusSession
+{
+    bool TryGetEventsLost(out int count);
+}
+
 // The same ownership and shutdown path is exercised by deterministic tests without requiring ETW rights.
 public interface IEtwCaptureSession : IDisposable
 {
@@ -25,8 +36,34 @@ public interface IEtwCaptureSession : IDisposable
 
 /// <summary>Owns one bounded, real-time, metadata-only session; never attaches to other sessions.</summary>
 public sealed class EtwCapture(ProviderSchema schema,
-    Func<string, ProviderSchema, Action<RawNetworkEvent>, IEtwCaptureSession>? sessionFactory = null)
+    Func<string, ProviderSchema, Action<RawNetworkEvent>, IEtwCaptureSession>? sessionFactory = null,
+    string sessionNamePrefix = "NetTrace-AppUsage000")
 {
+    private readonly object _statusGate = new();
+    private IEtwCaptureSession? _liveSession;
+    private EtwCaptureLiveStatus _liveStatus = new(null, false, false, false, null, 0, 0, 0);
+
+    public EtwCaptureLiveStatus GetLiveStatus()
+    {
+        lock (_statusGate)
+            return _liveSession is null ? _liveStatus : ReadStatus(_liveSession, _liveStatus.SessionName,
+                _liveStatus.SessionStarted, _liveStatus.IsCapturing);
+    }
+
+    private static EtwCaptureLiveStatus ReadStatus(IEtwCaptureSession session, string? name,
+        bool started, bool capturing)
+    {
+        int? lost = null;
+        try
+        {
+            if (session is IEtwCaptureStatusSession source && source.TryGetEventsLost(out var count) && count >= 0)
+                lost = count;
+        }
+        catch { }
+        return new(name, started, capturing, lost is not null, lost,
+            session.ProviderEventCount, session.UnsupportedEventCount, session.MalformedEventCount);
+    }
+
     public static bool IsElevated
     {
         get
@@ -44,7 +81,11 @@ public sealed class EtwCapture(ProviderSchema schema,
         if (duration <= TimeSpan.Zero || duration > TimeSpan.FromMinutes(5))
             throw new ArgumentOutOfRangeException(nameof(duration), "The diagnostic window must be between zero and five minutes.");
         ArgumentNullException.ThrowIfNull(onEvent);
-        string sessionName = $"NetTrace-AppUsage000-{Environment.ProcessId}-{Guid.NewGuid():N}";
+        if (string.IsNullOrWhiteSpace(sessionNamePrefix) || sessionNamePrefix.Length > 96
+            || sessionNamePrefix.Any(character => !char.IsAsciiLetterOrDigit(character) && character is not '-' and not '_'))
+            throw new ArgumentException("The owned session name prefix must contain only letters, digits, hyphens or underscores.");
+        string sessionName = $"{sessionNamePrefix}-{Environment.ProcessId}-{Guid.NewGuid():N}";
+        lock (_statusGate) _liveStatus = new(sessionName, false, false, false, null, 0, 0, 0);
         bool started = false, denied = false, clean = true, cancelled = cancellationToken.IsCancellationRequested;
         int eventsLost = 0;
         string? error = null;
@@ -66,6 +107,11 @@ public sealed class EtwCapture(ProviderSchema schema,
             // Do not assume that a non-admin token fails: ETW permissions can be delegated on Windows.
             session.Start();
             started = true;
+            lock (_statusGate)
+            {
+                _liveSession = session;
+                _liveStatus = new(sessionName, true, true, false, null, 0, 0, 0);
+            }
             consumer = Task.Run(session.Process, CancellationToken.None);
             lock (windowGate)
             {
@@ -144,6 +190,19 @@ public sealed class EtwCapture(ProviderSchema schema,
                 }
                 try { session.Dispose(); }
                 catch (Exception ex) { clean = false; AddError($"ETW dispose failed: {ex.GetType().Name}: {ex.Message}"); }
+                if (consumer is { IsCompleted: false })
+                {
+                    // Disposing the native session also closes its real-time source.
+                    // If the normal flush/drain timed out, join that forced stop before
+                    // allowing callers to release state referenced by event callbacks.
+                    try { await consumer.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false); }
+                    catch (Exception ex) { clean = false; AddError($"ETW consumer did not exit after disposal: {ex.GetType().Name}: {ex.Message}"); }
+                }
+                lock (_statusGate)
+                {
+                    _liveStatus = ReadStatus(session, sessionName, started, false);
+                    _liveSession = null;
+                }
             }
             if (startedWork is not null)
             {
@@ -198,7 +257,7 @@ public sealed class EtwCapture(ProviderSchema schema,
     }
 
     private sealed class NativeSession(string sessionName, ProviderSchema providerSchema,
-        Action<RawNetworkEvent> onEvent) : IEtwCaptureSession
+        Action<RawNetworkEvent> onEvent) : IEtwCaptureSession, IEtwCaptureStatusSession
     {
         private TraceEventSession? trace;
         private ETWTraceEventSource? source;
@@ -206,10 +265,24 @@ public sealed class EtwCapture(ProviderSchema schema,
             .ToDictionary(e => (e.EventId, e.Version));
         private long total, unsupported, malformed;
         private int finalEventsLost;
+        private bool finalLossAvailable;
+        private readonly object controllerGate = new();
         public int EventsLost => finalEventsLost;
         public long ProviderEventCount => Interlocked.Read(ref total);
         public long UnsupportedEventCount => Interlocked.Read(ref unsupported);
         public long MalformedEventCount => Interlocked.Read(ref malformed);
+
+        public bool TryGetEventsLost(out int count)
+        {
+            lock (controllerGate)
+            {
+                count = finalEventsLost;
+                if (finalLossAvailable) return true;
+                if (trace?.IsActive != true) return false;
+                try { count = trace.EventsLost; return count >= 0; }
+                catch { return false; }
+            }
+        }
 
         public void Start()
         {
@@ -268,20 +341,24 @@ public sealed class EtwCapture(ProviderSchema schema,
         public void Process() => source?.Process();
         public void Stop()
         {
-            if (trace?.IsActive != true) return;
-            try
+            lock (controllerGate)
             {
-                // Freeze input before querying the controller's authoritative loss counter. The
-                // source's EventsLost property is only its startup snapshot for real-time sessions.
-                trace.DisableProvider(ProviderSchema.ProviderGuid);
-                trace.Flush();
-                finalEventsLost = trace.EventsLost;
-            }
-            finally
-            {
-                if (!trace.Stop()) throw new InvalidOperationException("Owned session did not stop.");
+                if (trace?.IsActive != true) return;
+                try
+                {
+                    // Freeze input before querying the controller's authoritative loss counter. The
+                    // source's EventsLost property is only its startup snapshot for real-time sessions.
+                    trace.DisableProvider(ProviderSchema.ProviderGuid);
+                    trace.Flush();
+                    finalEventsLost = trace.EventsLost;
+                    finalLossAvailable = finalEventsLost >= 0;
+                }
+                finally
+                {
+                    if (!trace.Stop()) throw new InvalidOperationException("Owned session did not stop.");
+                }
             }
         }
-        public void Dispose() => trace?.Dispose();
+        public void Dispose() { lock (controllerGate) trace?.Dispose(); }
     }
 }
