@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App" />
+    <PackageReference Include="Microsoft.Diagnostics.Tracing.TraceEvent" Version="3.2.8" />
+    <Compile Include="../../Services/NetworkMonitor.cs" Link="NetTrace/NetworkMonitor.cs" />
+    <Compile Include="../../Services/INetworkMonitor.cs" Link="NetTrace/INetworkMonitor.cs" />
+    <Compile Include="../../Services/NetworkIdentityService.cs" Link="NetTrace/NetworkIdentityService.cs" />
+    <Compile Include="../../Services/INetworkIdentityService.cs" Link="NetTrace/INetworkIdentityService.cs" />
+    <Compile Include="../../Services/WindowsNetworkNative.cs" Link="NetTrace/WindowsNetworkNative.cs" />
+    <Compile Include="../../Services/VpnDetectionService.cs" Link="NetTrace/VpnDetectionService.cs" />
+    <Compile Include="../../Services/IVpnInterfaceSource.cs" Link="NetTrace/IVpnInterfaceSource.cs" />
+    <Compile Include="../../Services/WindowsVpnNative.cs" Link="NetTrace/WindowsVpnNative.cs" />
+    <Compile Include="../../Models/AdapterInfo.cs" Link="NetTrace/AdapterInfo.cs" />
+    <Compile Include="../../Models/NetworkSnapshot.cs" Link="NetTrace/NetworkSnapshot.cs" />
+    <Compile Include="../../Models/NetworkAdapterDetails.cs" Link="NetTrace/NetworkAdapterDetails.cs" />
+    <Compile Include="../../Models/NetworkIdentity.cs" Link="NetTrace/NetworkIdentity.cs" />
+    <Compile Include="../../Models/NetworkIdentityResult.cs" Link="NetTrace/NetworkIdentityResult.cs" />
+    <Compile Include="../../Models/VpnState.cs" Link="NetTrace/VpnState.cs" />
+    <Compile Include="../../Models/VpnInterfaceInventory.cs" Link="NetTrace/VpnInterfaceInventory.cs" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,287 @@
+using System.ComponentModel;
+using System.Net;
+using System.Security.Principal;
+using Microsoft.Diagnostics.Tracing;
+using Microsoft.Diagnostics.Tracing.Session;
+
+namespace AppUsageEtwProbe;
+
+public sealed record EtwCaptureResult(string SessionName, bool SessionStarted, bool AccessDenied,
+    bool ShutdownClean, bool Cancelled, int EventsLost, long ProviderEventCount,
+    long UnsupportedEventCount, long MalformedEventCount, DateTime? WindowStartUtc,
+    DateTime? WindowEndUtc, string? Error);
+
+// The same ownership and shutdown path is exercised by deterministic tests without requiring ETW rights.
+public interface IEtwCaptureSession : IDisposable
+{
+    void Start();
+    void Process();
+    void Stop();
+    int EventsLost { get; }
+    long ProviderEventCount { get; }
+    long UnsupportedEventCount { get; }
+    long MalformedEventCount { get; }
+}
+
+/// <summary>Owns one bounded, real-time, metadata-only session; never attaches to other sessions.</summary>
+public sealed class EtwCapture(ProviderSchema schema,
+    Func<string, ProviderSchema, Action<RawNetworkEvent>, IEtwCaptureSession>? sessionFactory = null)
+{
+    public static bool IsElevated
+    {
+        get
+        {
+            using var identity = WindowsIdentity.GetCurrent();
+            return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
+        }
+    }
+
+    public async Task<EtwCaptureResult> CaptureAsync(TimeSpan duration, CancellationToken cancellationToken,
+        Action<RawNetworkEvent> onEvent, Func<CancellationToken, Task>? onStarted = null,
+        Action? onWindowEnding = null, Func<DateTime?>? onWindowOpening = null,
+        Func<DateTime?>? onWindowClosing = null)
+    {
+        if (duration <= TimeSpan.Zero || duration > TimeSpan.FromMinutes(5))
+            throw new ArgumentOutOfRangeException(nameof(duration), "The diagnostic window must be between zero and five minutes.");
+        ArgumentNullException.ThrowIfNull(onEvent);
+        string sessionName = $"NetTrace-AppUsage000-{Environment.ProcessId}-{Guid.NewGuid():N}";
+        bool started = false, denied = false, clean = true, cancelled = cancellationToken.IsCancellationRequested;
+        int eventsLost = 0;
+        string? error = null;
+        long startTicks = 0, endTicks = DateTime.MaxValue.Ticks;
+        var windowGate = new object();
+        IEtwCaptureSession? session = null;
+        Task? consumer = null;
+        Task? startedWork = null;
+        using var workCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+        if (!schema.ProviderAvailable || schema.Events.Count == 0 || schema.KeywordMask == 0)
+            return Result(schema.Error ?? "No validated provider/schema is available.");
+        if (cancelled) return Result(null);
+
+        try
+        {
+            session = sessionFactory is null ? new NativeSession(sessionName, schema, Accept)
+                : sessionFactory(sessionName, schema, Accept);
+            // Do not assume that a non-admin token fails: ETW permissions can be delegated on Windows.
+            session.Start();
+            started = true;
+            consumer = Task.Run(session.Process, CancellationToken.None);
+            lock (windowGate)
+            {
+                // The counter snapshot supplies its actual read timestamp. Holding the gate
+                // keeps concurrent callbacks from crossing a boundary before it is known.
+                DateTime start = onWindowOpening?.Invoke() ?? DateTime.UtcNow;
+                Interlocked.Exchange(ref startTicks, start.ToUniversalTime().Ticks);
+            }
+            var window = Task.Delay(duration, cancellationToken);
+            startedWork = onStarted?.Invoke(workCancellation.Token) ?? Task.CompletedTask;
+            var first = await Task.WhenAny(window, consumer, startedWork).ConfigureAwait(false);
+            if (first == startedWork)
+            {
+                await startedWork.ConfigureAwait(false);
+                first = await Task.WhenAny(window, consumer).ConfigureAwait(false);
+            }
+            if (first == consumer)
+            {
+                await consumer.ConfigureAwait(false);
+                error = "The ETW consumer ended before the observation window completed.";
+            }
+            else
+            {
+                await window.ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            cancelled = true;
+        }
+        catch (Exception ex)
+        {
+            denied = IsAccessDenied(ex);
+            error = denied ? "ETW access denied. Administrator rights or delegated ETW permissions are required on this system."
+                : $"ETW capture failed: {ex.GetType().Name}: {ex.Message}";
+        }
+        finally
+        {
+            if (started)
+            {
+                lock (windowGate)
+                {
+                    try
+                    {
+                        // ETW may deliver buffered events after the physical counter read.
+                        // Every forwarded event must fall inside these exact counter timestamps.
+                        DateTime end = onWindowClosing?.Invoke() ?? DateTime.UtcNow;
+                        Interlocked.Exchange(ref endTicks, end.ToUniversalTime().Ticks);
+                    }
+                    catch (Exception ex)
+                    {
+                        Interlocked.Exchange(ref endTicks, DateTime.UtcNow.Ticks);
+                        AddError($"End-of-window snapshot failed: {ex.GetType().Name}: {ex.Message}");
+                    }
+                }
+                try { onWindowEnding?.Invoke(); }
+                catch (Exception ex) { AddError($"End-of-window callback failed: {ex.GetType().Name}: {ex.Message}"); }
+            }
+            workCancellation.Cancel();
+            if (session is not null)
+            {
+                // Stop flushes the owned real-time session. Process drains those buffered events;
+                // timestamp filtering keeps the adapter comparison inside the same window.
+                try { session.Stop(); }
+                catch (Exception ex) { clean = false; AddError($"ETW stop failed: {ex.GetType().Name}: {ex.Message}"); }
+                if (consumer is not null)
+                {
+                    try { await consumer.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false); }
+                    catch (Exception ex) { clean = false; AddError($"ETW consumer shutdown failed: {ex.GetType().Name}: {ex.Message}"); }
+                }
+                if (started)
+                {
+                    // NativeSession preserves its final loss snapshot when disabling/flushing the provider.
+                    try { eventsLost = session.EventsLost; }
+                    catch (Exception ex) { AddError($"ETW loss-counter query failed: {ex.GetType().Name}: {ex.Message}"); }
+                }
+                try { session.Dispose(); }
+                catch (Exception ex) { clean = false; AddError($"ETW dispose failed: {ex.GetType().Name}: {ex.Message}"); }
+            }
+            if (startedWork is not null)
+            {
+                try { await startedWork.WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false); }
+                catch (OperationCanceledException) when (workCancellation.IsCancellationRequested) { }
+                catch (Exception ex) { AddError($"Controlled workload failed: {ex.GetType().Name}: {ex.Message}"); }
+            }
+        }
+        return Result(error);
+
+        void Accept(RawNetworkEvent value)
+        {
+            lock (windowGate)
+            {
+                long start = Interlocked.Read(ref startTicks), end = Interlocked.Read(ref endTicks);
+                if (start != 0 && value.TimestampUtc.Ticks >= start && value.TimestampUtc.Ticks <= end) onEvent(value);
+            }
+        }
+        void AddError(string message) => error = error is null ? message : error + " " + message;
+        EtwCaptureResult Result(string? message) => new(sessionName, started, denied, clean, cancelled, eventsLost,
+            session?.ProviderEventCount ?? 0, session?.UnsupportedEventCount ?? 0, session?.MalformedEventCount ?? 0,
+            startTicks == 0 ? null : new DateTime(startTicks, DateTimeKind.Utc),
+            !started ? null : new DateTime(endTicks, DateTimeKind.Utc), message);
+    }
+
+    private static bool IsAccessDenied(Exception ex) => ex is UnauthorizedAccessException or System.Security.SecurityException
+        || ex.HResult == unchecked((int)0x80070005) || ex is Win32Exception { NativeErrorCode: 5 }
+        || ex.InnerException is not null && IsAccessDenied(ex.InnerException);
+
+    /// <summary>Apply installed field types to TDH values; addresses remain in memory only.</summary>
+    public static object? NormalizePayloadValue(PayloadField field, object? value)
+    {
+        if (field.OutputType == "win:IPv4")
+        {
+            if (value is IPAddress address && address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                return address;
+            uint number = value switch { uint u => u, int i => unchecked((uint)i), _ => throw new FormatException("Invalid IPv4 field type.") };
+            return new IPAddress(BitConverter.GetBytes(number));
+        }
+        if (field.OutputType == "win:IPv6")
+            return value is byte[] { Length: 16 } bytes ? new IPAddress(bytes)
+                : value is IPAddress address && address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6
+                    ? address : throw new FormatException("Invalid IPv6 field type/length.");
+        // TDH's dynamic parser can represent an unsigned manifest integer as a boxed signed integer.
+        return field.Type switch
+        {
+            "win:UInt32" when value is int signed => unchecked((uint)signed),
+            "win:UInt16" when value is short signed => unchecked((ushort)signed),
+            "win:UInt16" when value is int signed => unchecked((ushort)signed),
+            _ => value
+        };
+    }
+
+    private sealed class NativeSession(string sessionName, ProviderSchema providerSchema,
+        Action<RawNetworkEvent> onEvent) : IEtwCaptureSession
+    {
+        private TraceEventSession? trace;
+        private ETWTraceEventSource? source;
+        private readonly Dictionary<(int, int), NetworkEventSchema> schemas = providerSchema.Events
+            .ToDictionary(e => (e.EventId, e.Version));
+        private long total, unsupported, malformed;
+        private int finalEventsLost;
+        public int EventsLost => finalEventsLost;
+        public long ProviderEventCount => Interlocked.Read(ref total);
+        public long UnsupportedEventCount => Interlocked.Read(ref unsupported);
+        public long MalformedEventCount => Interlocked.Read(ref malformed);
+
+        public void Start()
+        {
+            trace = new TraceEventSession(sessionName, TraceEventSessionOptions.Create | TraceEventSessionOptions.NoRestartOnCreate)
+            {
+                StopOnDispose = true,
+                BufferSizeMB = 16,
+                EnableProviderTimeoutMSec = 5000
+            };
+            trace.EnableProvider(ProviderSchema.ProviderGuid, TraceEventLevel.Verbose, providerSchema.KeywordMask);
+            source = trace.Source;
+            // Dynamic includes registered TDH manifests and avoids TraceEvent's fixed kernel payload parser.
+            source.Dynamic.All += Observe;
+            source.AllEvents += value =>
+            {
+                if (value.ProviderGuid == ProviderSchema.ProviderGuid) Interlocked.Increment(ref total);
+            };
+            source.UnhandledEvents += value =>
+            {
+                if (value.ProviderGuid == ProviderSchema.ProviderGuid) Interlocked.Increment(ref malformed);
+            };
+        }
+
+        private void Observe(TraceEvent value)
+        {
+            if (value.ProviderGuid != ProviderSchema.ProviderGuid) return;
+            if (!schemas.TryGetValue(((int)value.ID, value.Version), out var schema))
+            {
+                Interlocked.Increment(ref unsupported);
+                return;
+            }
+            Dictionary<string, object?> payload;
+            try
+            {
+                if (schema.MinimumPayloadBytes is int minimum && value.EventDataLength < minimum)
+                    throw new FormatException("Observed payload is shorter than its installed field template.");
+                var names = value.PayloadNames;
+                payload = new Dictionary<string, object?>(StringComparer.Ordinal);
+                foreach (var field in schema.Fields)
+                {
+                    int index = Array.IndexOf(names, field.Name);
+                    if (index < 0) throw new FormatException("Observed payload fields disagree with the installed schema.");
+                    payload.Add(field.Name, NormalizePayloadValue(field, value.PayloadValue(index)));
+                }
+            }
+            catch (Exception ex) when (ex is FormatException or InvalidCastException or IndexOutOfRangeException
+                or ArgumentException or OverflowException)
+            {
+                Interlocked.Increment(ref malformed);
+                return;
+            }
+            // Payload PID remains authoritative. The event header's PID can be a kernel execution context.
+            onEvent(new((int)value.ID, value.Version, value.ProcessID, value.TimeStamp.ToUniversalTime(), payload));
+        }
+
+        public void Process() => source?.Process();
+        public void Stop()
+        {
+            if (trace?.IsActive != true) return;
+            try
+            {
+                // Freeze input before querying the controller's authoritative loss counter. The
+                // source's EventsLost property is only its startup snapshot for real-time sessions.
+                trace.DisableProvider(ProviderSchema.ProviderGuid);
+                trace.Flush();
+                finalEventsLost = trace.EventsLost;
+            }
+            finally
+            {
+                if (!trace.Stop()) throw new InvalidOperationException("Owned session did not stop.");
+            }
+        }
+        public void Dispose() => trace?.Dispose();
+    }
+}

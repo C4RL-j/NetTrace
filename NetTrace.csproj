@@ -15,6 +15,7 @@
     <FrameworkReference Include="Microsoft.WindowsDesktop.App.WindowsForms" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.11" />
     <Compile Remove="tests\**\*.cs" />
+    <Compile Remove="tools\**\*.cs" />
     <Resource Include="assets\Network Globe Icon.png" />
     <Resource Include="assets\NetTrace.ico" />
   </ItemGroup>
