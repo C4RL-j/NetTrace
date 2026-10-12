@@ -12,7 +12,7 @@ public static class Program
     {
         if (args.SequenceEqual(["--help"]))
         {
-            Console.WriteLine("NetTrace.AppUsageService --client-sid SID [--pipe NAME] [--log FILE] [--report FILE]");
+            Console.WriteLine("NetTrace.AppUsageService --client-sid SID [--pipe NAME] [--log FILE] [--report FILE] [--data-root DIRECTORY]");
             Console.WriteLine("SCM-only development service. Administrator-only --cleanup-owned-session manages the exact owned ETW identity.");
             return 0;
         }
@@ -49,7 +49,8 @@ public static class Program
     }
 }
 
-public sealed record ServiceOptions(string ClientSid, string PipeName, string? LogPath, string? ReportPath)
+public sealed record ServiceOptions(string ClientSid, string PipeName, string? LogPath, string? ReportPath,
+    string? CommonDataRoot = null)
 {
     public static ServiceOptions Parse(string[] args)
     {
@@ -57,7 +58,7 @@ public sealed record ServiceOptions(string ClientSid, string PipeName, string? L
         for (int index = 0; index < args.Length; index++)
         {
             string name = args[index];
-            if (name is not ("--client-sid" or "--pipe" or "--log" or "--report" or "--service-name")
+            if (name is not ("--client-sid" or "--pipe" or "--log" or "--report" or "--service-name" or "--data-root")
                 || ++index >= args.Length || args[index].StartsWith("--", StringComparison.Ordinal)
                 || !values.TryAdd(name, args[index])) throw new ArgumentException("Invalid service options.");
         }
@@ -68,7 +69,9 @@ public sealed record ServiceOptions(string ClientSid, string PipeName, string? L
         if (values.TryGetValue("--service-name", out var serviceName)) ServicePipeSecurity.ValidateServiceName(serviceName);
         string pipe = values.GetValueOrDefault("--pipe") ?? ServicePipeSecurity.DefaultPipeName;
         NativePipeSecurity.ValidatePipeName(pipe);
-        return new(clientSid, pipe, FullPath("--log"), FullPath("--report"));
+        if (values.TryGetValue("--data-root", out var root) && !Path.IsPathFullyQualified(root))
+            throw new ArgumentException("The service data root must be an absolute path.");
+        return new(clientSid, pipe, FullPath("--log"), FullPath("--report"), FullPath("--data-root"));
         string? FullPath(string name) => values.TryGetValue(name, out var path) ? Path.GetFullPath(path) : null;
     }
 }

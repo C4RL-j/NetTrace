@@ -1,10 +1,61 @@
-# App Usage 003 service and crash-recovery prototype
+# App Usage service prototype (003 lifecycle, 004.2 persistence)
 
 This is a separate, headless Windows Service prototype. It owns metadata-only
 Kernel-Network ETW capture, in-memory application counters and local named-pipe
 snapshots. Normal NetTrace has no dependency on the service: its UI, startup,
-monitoring, physical adapter accounting, database and permissions are unchanged.
-No App Usage production page or persistent application history is added.
+monitoring, physical adapter accounting, desktop database and permissions are
+unchanged. No App Usage production page is added. The explicit development
+service now persists qualifying event deltas through the separate 004.1 daily
+application store.
+
+App Usage 004.2 checkpoints pending non-loopback event bytes every five seconds
+in one storage batch. RX is download and TX is upload. The pending key combines
+the event's local date with the normalized executable identity, or the existing
+System/Unknown fallback; PIDs never become daily database identities. Loopback,
+local-to-local and unclassified diagnostic traffic remain excluded. The event
+path reuses cached process metadata and does no disk I/O. A failed transaction
+is requeued for the next interval. Clean stop stops event acceptance and performs
+a bounded final flush. Forced termination can lose approximately the latest
+checkpoint window, and a persistence outage can extend that window.
+
+The service uses `%ProgramData%\NetTrace\app-usage.db`. Retention cleanup runs
+once per service lifetime at successful storage initialization, not every
+checkpoint. Persistence availability, last successful checkpoint, degraded state
+and counters appear in the internal final diagnostic report and bounded service
+log. The public App Usage 003 pipe protocol is unchanged.
+
+Run the separate 004.2 workflow from a **normal terminal**:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\tools\NetTrace.AppUsageService\Validate-Persistence.ps1
+```
+
+It builds a separate diagnostic helper and uses the established explicit UAC
+worker pattern. Only the temporary LocalSystem service is installed, with
+protected ProgramData images and demand startup. The helper runs with the
+original normal token and sends one tiny IPv4 and one IPv6 DNS question per
+collector lifetime. It records byte counts, family and attribution, never
+response contents or endpoints. Brave/NetMod are observed passively if active.
+If the IPv6 DNS peer does not reply, the report preserves that limitation: the
+controlled IPv6 send must still be captured, and passive non-loopback IPv6 RX/TX
+must be proven against the persisted application row. No browser or VPN traffic
+is generated to force that passive evidence.
+
+The workflow refuses any pre-existing development service or default database
+(including companion files). It verifies that SYSTEM created the actual default
+database without granting Everyone write access. After two clean service
+lifetimes, the 004.1 API verifies that the second lifetime's event deltas extend
+the same daily application row. It measures idle and normal CPU/RAM, checkpoint
+frequency, approximate database-file changes and database size. JSON evidence
+remains under the ignored verification folder; the database is removed.
+Its `finally` block removes the exact registration, owned database and protected
+staging after confirming SCM 1060, no collector process, no owned ETW session and
+no stale pipe. It preserves the existing ProgramData directory and ACL.
+
+The original App Usage 003 lifecycle script and its phases below remain
+unchanged. The current service enables persistence by default, so running that
+older script also uses the default application database; the 004.2 workflow above
+owns the database creation and cleanup checks for persistence validation.
 
 The shared collector core reuses the installed-provider discovery, parser and
 consumer from App Usage 000 and the aggregation/IPC contract from App Usage 002.

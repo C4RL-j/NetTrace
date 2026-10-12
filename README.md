@@ -640,8 +640,8 @@ The standalone [App Usage storage library](tools/AppUsageStorage/README.md)
 provides SQLite daily application aggregates at
 `%ProgramData%\NetTrace\app-usage.db`. Schema version 1 aggregates by normalized
 executable identity and observed local calendar date, preserves historical
-display metadata and provides explicit 90-day retention cleanup. The current
-service, IPC and WPF application do not yet use this store.
+display metadata and provides explicit 90-day retention cleanup. The App Usage
+service uses this store through the 004.2 checkpoint integration below.
 
 Run its isolated storage tests, existing App Usage 003 checks and library build:
 
@@ -650,3 +650,27 @@ dotnet run --project tests/NetTrace.AppUsageStorageTests/NetTrace.AppUsageStorag
 dotnet run --project tests/NetTrace.AppUsageServiceTests/NetTrace.AppUsageServiceTests.csproj
 dotnet build tools/AppUsageStorage/AppUsageStorage.csproj
 ```
+
+## App Usage 004.2 — service persistence checkpoints
+
+The headless development service accumulates accepted non-loopback ETW byte
+deltas by observed local calendar date and normalized application identity.
+Five-second checkpoints write aggregate batches through the 004.1 store;
+failed batches remain pending for later retries. A final bounded flush drains
+accepted events after capture is quiesced, and retention runs once at service
+startup. Internal persistence health and bounded logs support diagnostic
+validation; the UI and named-pipe protocol keep their existing behavior.
+
+Forced termination can lose usage since the latest successful checkpoint,
+normally roughly the latest five-second window while storage is healthy.
+An outage can extend that window. This is not zero-loss crash accounting.
+
+```powershell
+dotnet run --project tests/NetTrace.AppUsageCheckpointTests/NetTrace.AppUsageCheckpointTests.csproj
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File tools/NetTrace.AppUsageService/Validate-Persistence.ps1
+```
+
+The explicit validation workflow temporarily runs the development service as
+LocalSystem, collects small controlled IPv4/IPv6 traffic and passive application
+evidence, verifies restart persistence, then removes its owned service, trace,
+pipe and validation database. See the [service documentation](tools/NetTrace.AppUsageService/README.md).

@@ -7,5 +7,6 @@
   <ItemGroup>
     <ProjectReference Include="../AppUsageEtwProbe/AppUsageEtwProbe.csproj" />
     <ProjectReference Include="../AppUsageIpc/AppUsageIpc.csproj" />
+    <ProjectReference Include="../AppUsageStorage/AppUsageStorage.csproj" />
   </ItemGroup>
 </Project>

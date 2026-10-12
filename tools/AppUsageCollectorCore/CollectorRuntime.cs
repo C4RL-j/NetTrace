@@ -26,7 +26,8 @@ public sealed class CollectorRuntime : IDisposable
 
     public CollectorRuntime(ProviderSchema schema, bool privileged = true, string? identityName = null,
         bool enforceOwnership = true, EtwCapture? capture = null, IProcessResolver? resolver = null,
-        IReadOnlySet<IPAddress>? localAddresses = null, TimeProvider? timeProvider = null)
+        IReadOnlySet<IPAddress>? localAddresses = null, TimeProvider? timeProvider = null,
+        UsageEventPersistence? persistence = null)
     {
         this.enforceOwnership = enforceOwnership;
         this.identityName = identityName ?? "Diagnostic";
@@ -34,7 +35,8 @@ public sealed class CollectorRuntime : IDisposable
         if (resolver is null) { var native = new WindowsProcessResolver(); resolver = native; ownedResolver = native; }
         Aggregation = new CollectorAggregation(schema, resolver, localAddresses ?? ReadLocalAddresses(),
             timeProvider: timeProvider, collectorElevated: EtwCapture.IsElevated,
-            snapshotCacheInterval: TimeSpan.FromSeconds(1));
+            snapshotCacheInterval: TimeSpan.FromSeconds(1),
+            acceptedActivity: persistence is null ? null : persistence.RecordActivity);
         this.capture = capture ?? new EtwCapture(schema, sessionNamePrefix: "NetTrace-AppUsage003",
             exactSessionName: SessionOwnership.SessionName, exactSessionGuid: SessionOwnership.SessionGuid);
     }

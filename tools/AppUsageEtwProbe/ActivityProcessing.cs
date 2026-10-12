@@ -287,7 +287,8 @@ public sealed class WindowsProcessResolver : IProcessResolver, IDisposable
     }
 }
 
-public sealed class ActivityAggregator(IProcessResolver resolver)
+public sealed class ActivityAggregator(IProcessResolver resolver,
+    Action<NetworkActivity, ProcessIdentity>? acceptedActivity = null)
 {
     private readonly Dictionary<string, ProcessObservation> processes = new(StringComparer.Ordinal);
     private readonly Dictionary<int, (ProcessIdentity Identity, ProcessObservation Observation)> currentProcesses = new();
@@ -326,6 +327,8 @@ public sealed class ActivityAggregator(IProcessResolver resolver)
             if (activity.InterfaceIndex is int index) NonLoopbackInterfaces.Add(index);
             else NonLoopbackInterfaceMissing = true;
         }
+        // Reuse this event's proven attribution rather than looking up the process twice.
+        acceptedActivity?.Invoke(activity, identity);
     }
     public IReadOnlyList<ApplicationObservation> Applications => processes.Values.GroupBy(x => x.Identity.ApplicationKey)
         .Select(group =>

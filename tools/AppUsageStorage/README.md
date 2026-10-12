@@ -2,8 +2,8 @@
 
 This standalone .NET 8 Windows library provides SQLite storage for daily
 application aggregates. It reuses NetTrace's `Microsoft.Data.Sqlite` 8.0.11
-dependency. It is a foundation for future service integration; the current
-collector, named-pipe protocol and WPF application do not read or write it.
+dependency. The 004.2 service checkpoint integration writes these aggregates;
+the diagnostic collector, named-pipe protocol and WPF application do not query it.
 No raw ETW events are persisted.
 
 ## Database location

@@ -30,7 +30,8 @@ public sealed class CollectorAggregation
     public CollectorAggregation(ProviderSchema schema, IProcessResolver resolver,
         IReadOnlySet<IPAddress> localAddresses, Guid? instanceId = null, TimeProvider? timeProvider = null,
         bool shutdownForTestEnabled = false, bool collectorElevated = true,
-        TimeSpan? snapshotCacheInterval = null)
+        TimeSpan? snapshotCacheInterval = null,
+        Action<NetworkActivity, ProcessIdentity>? acceptedActivity = null)
     {
         ArgumentNullException.ThrowIfNull(schema);
         ArgumentNullException.ThrowIfNull(resolver);
@@ -38,7 +39,7 @@ public sealed class CollectorAggregation
         this.schema = schema;
         descriptors = schema.Events.ToDictionary(value => (value.EventId, value.Version));
         this.localAddresses = localAddresses.Select(ActivityParser.Normalize).ToHashSet();
-        aggregation = new(resolver);
+        aggregation = new(resolver, acceptedActivity);
         this.timeProvider = timeProvider ?? TimeProvider.System;
         this.shutdownForTestEnabled = shutdownForTestEnabled;
         this.collectorElevated = collectorElevated;
