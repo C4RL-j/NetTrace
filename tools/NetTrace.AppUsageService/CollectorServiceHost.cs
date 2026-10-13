@@ -117,8 +117,10 @@ internal sealed class CollectorServiceWorker : IServiceWorker
             captureTask = capture = runtime.RunAsync(stopping.Token);
             await runtime.Ready.WaitAsync(TimeSpan.FromSeconds(25), stopping.Token).ConfigureAwait(false);
             log.Write($"ETW ready; session={SessionOwnership.SessionName}; recovered stale session={runtime.ReclaimedStaleSession}.");
+            var appUsageQueries = AppUsageQueryService.ForDatabase(options.CommonDataRoot, () => persistence.Health);
             server = new(options.PipeName, runtime.GetCapabilities, () => runtime.GetSnapshot(),
-                serviceSecurity: new(options.ClientSid), protocolVersion: Protocol.ServiceVersion);
+                serviceSecurity: new(options.ClientSid), protocolVersion: Protocol.ServiceVersion,
+                appUsageQuery: appUsageQueries.QueryAsync);
             serving = server.RunAsync(stopping.Token);
             log.Write($"Pipe ready; local-only authenticated service protocol={Protocol.ServiceVersion}.");
             checkpointTask = persistence.RunAsync(checkpointStopping.Token);

@@ -1,4 +1,4 @@
-# App Usage service prototype (003 lifecycle, 004.2 persistence)
+# App Usage service prototype (003 lifecycle, 004.2 persistence, 004.3 queries)
 
 This is a separate, headless Windows Service prototype. It owns metadata-only
 Kernel-Network ETW capture, in-memory application counters and local named-pipe
@@ -22,7 +22,57 @@ The service uses `%ProgramData%\NetTrace\app-usage.db`. Retention cleanup runs
 once per service lifetime at successful storage initialization, not every
 checkpoint. Persistence availability, last successful checkpoint, degraded state
 and counters appear in the internal final diagnostic report and bounded service
-log. The public App Usage 003 pipe protocol is unchanged.
+log. App Usage 004.3 extends service protocol version 2 additively with the
+read-only `GetAppUsageRange` operation. Existing Hello, capabilities and snapshot
+payloads remain compatible; the standalone App Usage 002 protocol stays version 1.
+
+The typed range is exactly Today, 7D or 30D: inclusive local calendar dates ending
+today, with the previous 0, 6 or 29 days. The service uses the existing storage
+abstraction and aggregates persisted rows by application identity, excluding
+zero-use apps and retaining System/Unknown rows. Results are sorted by total bytes
+descending, then application identity in ordinal ascending order. Download, upload
+and logical totals describe application traffic; Dashboard physical usage is a
+separate accounting system. Empty history is a valid available empty result.
+Storage failures return a bounded typed unavailable/degraded diagnostic without
+stack traces. Query requests accept no SQL, database paths, free-form dates or
+mutation commands; response rows retain historical executable metadata.
+
+From a **normal terminal**, the existing diagnostic client can request a range:
+
+```powershell
+dotnet run --project .\tools\AppUsageDiagnosticClient -- --service --app-usage Today --output .\bin\today-client.json
+dotnet run --project .\tools\AppUsageDiagnosticClient -- --service --app-usage 7D --output .\bin\7d-client.json
+dotnet run --project .\tools\AppUsageDiagnosticClient -- --service --app-usage 30D --output .\bin\30d-client.json
+```
+
+Query mode does not discover physical adapters or request collector snapshots.
+It displays application rows and records typed responses, query latency and client
+resources. `--app-usage-all --query-count 5 --seconds 45 --quiet` performs five
+reads per range, separated by one second; `--recover` retains the established
+bounded reconnect backoff for a stopped/restarting service. Query counts are
+bounded to 1–20, and the normal elevation guard still applies.
+
+Run the isolated 004.3 service/query validation from a **normal terminal**:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\tools\NetTrace.AppUsageService\Validate-UsageQueries.ps1
+```
+
+The wrapper builds separate Release service/client outputs and requests the
+established explicit UAC worker for a temporary demand-start LocalSystem service.
+It refuses a pre-existing development registration, protects the service image,
+and uses a new isolated `--data-root` beneath protected ProgramData staging. The
+real default database is never adopted or deleted. The original normal-token
+parent confirms direct database access is denied, then queries only authenticated
+IPC after a logged successful checkpoint of passive traffic. It runs warm reads,
+five repeated reads per range, a service stop/restart with reconnect, and a final
+absent-service check. No intentional network traffic is generated. Brave/NetMod
+examples depend on existing activity. Client and service handles/private memory
+are measured after warmup. Exact aggregation and concurrency are tested separately
+against controlled fixtures. The worker removes the owned registration and entire
+isolated data root in `finally`, after verifying SCM 1060, no collector process,
+no exact owned ETW session and no stale pipe. JSON evidence remains in the ignored
+`bin/AppUsage0043Verification` folder; no validation SQLite copy is retained.
 
 Run the separate 004.2 workflow from a **normal terminal**:
 

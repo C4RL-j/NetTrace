@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Reflection;
@@ -58,8 +59,77 @@ public static class IpcProtocol
 
     public static Task WriteRequestAsync(Stream stream, PipeRequest request, CancellationToken cancellationToken = default) =>
         WriteFrameAsync(stream, JsonSerializer.SerializeToUtf8Bytes(request, JsonOptions), Protocol.MaximumRequestBytes, cancellationToken);
-    public static Task WriteResponseAsync(Stream stream, PipeResponse response, CancellationToken cancellationToken = default) =>
-        WriteFrameAsync(stream, JsonSerializer.SerializeToUtf8Bytes(response, JsonOptions), Protocol.MaximumResponseBytes, cancellationToken);
+    public static async Task WriteResponseAsync(Stream stream, PipeResponse response, CancellationToken cancellationToken = default)
+    {
+        if (response.AppUsage is null)
+        {
+            await WriteFrameAsync(stream, JsonSerializer.SerializeToUtf8Bytes(response, JsonOptions),
+                Protocol.MaximumResponseBytes, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+        ValidateQueryMetadataSize(response.AppUsage, cancellationToken);
+        // Query history can contain many rows. Cap allocation while serializing,
+        // before writing any frame header, and honor cancellation between chunks.
+        using var buffer = new BoundedResponseBuffer(Protocol.MaximumResponseBytes, cancellationToken);
+        using (var writer = new Utf8JsonWriter(buffer))
+            JsonSerializer.Serialize(writer, response, JsonOptions);
+        await WriteFrameAsync(stream, buffer.ToArray(), Protocol.MaximumResponseBytes, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static void ValidateQueryMetadataSize(AppUsageQueryResult usage, CancellationToken cancellationToken)
+    {
+        // Escaping a single JSON string can allocate before the writer requests
+        // output space. Bound each stored field too; Windows paths fit this cap.
+        const int maximumCharacters = 65536;
+        static bool TooLong(string? value) => value?.Length > maximumCharacters;
+        if (TooLong(usage.Diagnostic)) throw new IpcProtocolException("Invalid or oversized IPC metadata.");
+        foreach (var application in usage.Applications)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (application is not null && (TooLong(application.ApplicationIdentity) || TooLong(application.DisplayName)
+                || TooLong(application.ExecutableName) || TooLong(application.ExecutablePath)))
+                throw new IpcProtocolException("Invalid or oversized IPC metadata.");
+        }
+    }
+
+    private sealed class BoundedResponseBuffer(int maximumBytes, CancellationToken cancellationToken)
+        : IBufferWriter<byte>, IDisposable
+    {
+        private byte[] bytes = ArrayPool<byte>.Shared.Rent(256);
+        private int written;
+        private void EnsureSpace(int sizeHint)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            sizeHint = Math.Max(1, sizeHint);
+            if (sizeHint > maximumBytes - written)
+                throw new IpcProtocolException("Invalid or oversized IPC frame.");
+            if (sizeHint <= bytes.Length - written) return;
+            int capacity = Math.Max(written + sizeHint, Math.Min(maximumBytes, bytes.Length * 2));
+            var replacement = ArrayPool<byte>.Shared.Rent(capacity);
+            bytes.AsSpan(0, written).CopyTo(replacement);
+            ArrayPool<byte>.Shared.Return(bytes);
+            bytes = replacement;
+        }
+        public void Advance(int count)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (count < 0 || count > bytes.Length - written || count > maximumBytes - written)
+                throw new IpcProtocolException("Invalid or oversized IPC frame.");
+            written += count;
+        }
+        public Memory<byte> GetMemory(int sizeHint = 0)
+        {
+            EnsureSpace(sizeHint);
+            return bytes.AsMemory(written, Math.Min(bytes.Length - written, maximumBytes - written));
+        }
+        public Span<byte> GetSpan(int sizeHint = 0)
+        {
+            EnsureSpace(sizeHint);
+            return bytes.AsSpan(written, Math.Min(bytes.Length - written, maximumBytes - written));
+        }
+        public byte[] ToArray() => bytes.AsSpan(0, written).ToArray();
+        public void Dispose() => ArrayPool<byte>.Shared.Return(bytes);
+    }
 
     public static async Task<byte[]> ReadFrameAsync(Stream stream, int maximumBytes, CancellationToken cancellationToken = default)
     {
@@ -101,6 +171,13 @@ public static class IpcProtocol
     {
         if (value.ValueKind == JsonValueKind.Null) return;
         if (Nullable.GetUnderlyingType(type) is Type underlying) { ValidateShape(value, underlying); return; }
+        if (type.IsEnum)
+        {
+            if (value.ValueKind != JsonValueKind.String
+                || !Enum.GetNames(type).Contains(value.GetString(), StringComparer.Ordinal))
+                throw new JsonException();
+            return;
+        }
         if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(IReadOnlyList<>))
         {
             if (value.ValueKind != JsonValueKind.Array) throw new JsonException();
@@ -143,6 +220,8 @@ public static class IpcProtocol
     {
         if (request.ProtocolVersion != protocolVersion)
             return new(protocolVersion, "IncompatibleProtocol", Error: "The protocol version is incompatible.");
+        if (request.AppUsageQuery is not null)
+            return new(protocolVersion, "InvalidRequest", Error: "The request parameters are unsupported for this operation.");
         if (request.Operation is not ("Hello" or "GetCapabilities" or "GetSnapshot" or "ShutdownForTest"))
             return new(protocolVersion, "UnknownOperation", Error: "The operation is unsupported.");
         if (!handshaken && request.Operation != "Hello")
@@ -154,6 +233,36 @@ public static class IpcProtocol
             "ShutdownForTest" when shutdownEnabled => new(protocolVersion, "Ok"),
             _ => new(protocolVersion, "ShutdownDisabled", Error: "Test shutdown is disabled.")
         };
+    }
+
+    public static async Task<PipeResponse> DispatchAsync(PipeRequest request, bool handshaken,
+        Func<CollectorCapabilities> capabilities, Func<CollectorSnapshot> snapshot, bool shutdownEnabled,
+        int protocolVersion = Protocol.Version,
+        Func<AppUsageRange, CancellationToken, Task<AppUsageQueryResult>>? appUsageQuery = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (request.Operation != "GetAppUsageRange")
+            return Dispatch(request, handshaken, capabilities, snapshot, shutdownEnabled, protocolVersion);
+        if (request.ProtocolVersion != protocolVersion)
+            return new(protocolVersion, "IncompatibleProtocol", Error: "The protocol version is incompatible.");
+        if (protocolVersion != Protocol.ServiceVersion || appUsageQuery is null)
+            return new(protocolVersion, "UnknownOperation", Error: "The operation is unsupported.");
+        if (!handshaken)
+            return new(protocolVersion, "HandshakeRequired", Error: "Hello must complete before other requests.");
+        if (request.AppUsageQuery is null || !Enum.IsDefined(request.AppUsageQuery.Range))
+            return new(protocolVersion, "InvalidRequest", Error: "Only Today, 7D and 30D are supported.");
+        try
+        {
+            var result = await appUsageQuery(request.AppUsageQuery.Range, cancellationToken)
+                .WaitAsync(cancellationToken).ConfigureAwait(false);
+            return new(protocolVersion, "Ok", AppUsage: result);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception)
+        {
+            // The authenticated connection remains usable after a history failure.
+            return new(protocolVersion, "Ok", AppUsage: AppUsageRangeRules.Unavailable(request.AppUsageQuery.Range));
+        }
     }
 }
 

@@ -19,6 +19,9 @@ string output = Path.Combine(AppContext.BaseDirectory, "client-result.json");
 int seconds = 20, shutdownAfter = 0;
 bool controlled = false, recover = false;
 bool serviceMode = false, quiet = false, stress = false, explicitPipe = false;
+bool appUsageAll = false;
+AppUsageRange? appUsageRange = null;
+int queryCount = 1;
 int cadenceMilliseconds = 1000;
 int protocolVersion;
 string? stopWhenFile = null;
@@ -33,6 +36,17 @@ try
             case "--controlled": controlled = true; break;
             case "--recover": recover = true; break;
             case "--service": serviceMode = true; break;
+            case "--app-usage":
+                appUsageRange = args[++i] switch
+                {
+                    "Today" => AppUsageRange.Today,
+                    "7D" => AppUsageRange.SevenDays,
+                    "30D" => AppUsageRange.ThirtyDays,
+                    _ => throw new ArgumentException("Use Today, 7D or 30D.")
+                };
+                break;
+            case "--app-usage-all": appUsageAll = true; break;
+            case "--query-count": queryCount = int.Parse(args[++i]); break;
             case "--quiet": quiet = true; break;
             case "--stress": stress = true; break;
             case "--cadence-ms": cadenceMilliseconds = int.Parse(args[++i]); break;
@@ -43,7 +57,11 @@ try
     if (seconds is < 1 or > 240 || shutdownAfter < 0 || shutdownAfter >= seconds && shutdownAfter != 0
         || cadenceMilliseconds is < 1000 or > 2000 || serviceMode && shutdownAfter != 0
         || stress && (!serviceMode || controlled)
-        || stopWhenFile is not null && (!serviceMode || !recover))
+        || stopWhenFile is not null && (!serviceMode || !recover)
+        || queryCount is < 1 or > 20
+        || appUsageAll && appUsageRange is not null
+        || (appUsageAll || appUsageRange is not null) && (!serviceMode || controlled || stress || shutdownAfter != 0)
+        || queryCount != 1 && !appUsageAll && appUsageRange is null)
         throw new ArgumentException("Use a bounded window, 1–2 second cadence, and compatible diagnostic options.");
     if (serviceMode && !explicitPipe) pipeName = ServicePipeSecurity.DefaultPipeName;
     protocolVersion = serviceMode ? Protocol.ServiceVersion : Protocol.Version;
@@ -51,12 +69,16 @@ try
 }
 catch (Exception ex) when (ex is ArgumentException or FormatException or OverflowException or IndexOutOfRangeException)
 {
-    Console.Error.WriteLine("Usage: AppUsageDiagnosticClient [--seconds 20] [--pipe NAME] [--service] [--cadence-ms 1000|2000] [--quiet] [--controlled|--stress] [--recover] [--stop-when-file PATH (service recovery only)] [--shutdown-after N] [--output FILE]");
+    Console.Error.WriteLine("Usage: AppUsageDiagnosticClient [--seconds 20] [--pipe NAME] [--service] [--cadence-ms 1000|2000] [--quiet] [--controlled|--stress] [--recover] [--stop-when-file PATH (service recovery only)] [--shutdown-after N] [--output FILE]\nUsage queries: --service (--app-usage Today|7D|30D | --app-usage-all) [--query-count 1..20] [--seconds 20] [--recover] [--quiet] [--output FILE]");
     return 2;
 }
 
 using var cancellation = new CancellationTokenSource();
 Console.CancelKeyPress += (_, eventArgs) => { eventArgs.Cancel = true; cancellation.Cancel(); };
+if (appUsageAll || appUsageRange is not null)
+    return await AppUsageQueryDiagnostics.RunAsync(pipeName,
+        appUsageAll ? [AppUsageRange.Today, AppUsageRange.SevenDays, AppUsageRange.ThirtyDays] : [appUsageRange!.Value],
+        queryCount, seconds, recover, quiet, stopWhenFile, output, cancellation.Token);
 using var process = Process.GetCurrentProcess();
 string vpnState = AdapterObservation.Create().Vpn.Status;
 var initialCpu = process.TotalProcessorTime;

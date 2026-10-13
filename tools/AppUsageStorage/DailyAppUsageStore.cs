@@ -8,6 +8,7 @@ public sealed class DailyAppUsageStore
     public const int CurrentSchemaVersion = 1;
     public const int RetentionDays = 90;
     private readonly string connectionString;
+    private readonly bool readOnly;
 
     public DailyAppUsageStore()
         : this(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData))
@@ -16,19 +17,31 @@ public sealed class DailyAppUsageStore
 
     // Only tests/deployment tooling should override the machine data root.
     public DailyAppUsageStore(string commonApplicationDataDirectory)
+        : this(commonApplicationDataDirectory, readOnly: false)
     {
+        Initialize();
+    }
+
+    private DailyAppUsageStore(string commonApplicationDataDirectory, bool readOnly)
+    {
+        this.readOnly = readOnly;
         DatabasePath = GetDatabasePath(commonApplicationDataDirectory);
         connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = DatabasePath,
-            Mode = SqliteOpenMode.ReadWrite,
+            Mode = readOnly ? SqliteOpenMode.ReadOnly : SqliteOpenMode.ReadWrite,
             Pooling = false,
-            DefaultTimeout = 5
+            DefaultTimeout = readOnly ? 1 : 5
         }.ToString();
-        Initialize();
     }
 
     public string DatabasePath { get; }
+
+    // This reader never creates directories/databases or initializes/migrates a
+    // schema. Open and schema failures are reported when a query is attempted.
+    public static DailyAppUsageStore OpenReadOnly(string? commonApplicationDataDirectory = null) =>
+        new(commonApplicationDataDirectory
+            ?? Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), readOnly: true);
 
     public static string GetDatabasePath(string commonApplicationDataDirectory)
     {
@@ -40,6 +53,7 @@ public sealed class DailyAppUsageStore
 
     public void Initialize()
     {
+        EnsureWritable();
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(DatabasePath)!);
@@ -71,6 +85,7 @@ public sealed class DailyAppUsageStore
     // One batch is one transaction: a failed row leaves every previous row unchanged.
     public void AddUsageDeltas(IReadOnlyCollection<UsageDelta> deltas)
     {
+        EnsureWritable();
         ArgumentNullException.ThrowIfNull(deltas);
         var batch = deltas.ToArray();
         foreach (var delta in batch)
@@ -138,14 +153,26 @@ public sealed class DailyAppUsageStore
 
     public IReadOnlyList<DailyApplicationUsage> GetUsageForDate(DateOnly date) => GetUsageForRange(date, date);
 
-    public IReadOnlyList<DailyApplicationUsage> GetUsageForRange(DateOnly startDate, DateOnly endDate)
+    public IReadOnlyList<DailyApplicationUsage> GetUsageForRange(DateOnly startDate, DateOnly endDate) =>
+        GetUsageForRange(startDate, endDate, CancellationToken.None);
+
+    public IReadOnlyList<DailyApplicationUsage> GetUsageForRange(DateOnly startDate, DateOnly endDate,
+        CancellationToken cancellationToken)
     {
         if (endDate < startDate)
             throw new ArgumentException("The inclusive date range must end on or after its start.", nameof(endDate));
+        cancellationToken.ThrowIfCancellationRequested();
         using var connection = Open();
         try
         {
+            // A short deferred read transaction holds one consistent snapshot
+            // for schema validation and all selected rows while checkpoints
+            // retain their existing independent write transactions.
+            using var transaction = readOnly ? connection.BeginTransaction(deferred: true) : null;
+            if (readOnly) AppUsageSchema.ValidateReadOnly(connection, transaction!, DatabasePath);
+            cancellationToken.ThrowIfCancellationRequested();
             using var command = connection.CreateCommand();
+            command.Transaction = transaction;
             command.CommandText = """
                 SELECT local_date, application_identity, display_name, executable_name, executable_path,
                        download_bytes, upload_bytes, last_seen_utc
@@ -156,13 +183,18 @@ public sealed class DailyAppUsageStore
             command.Parameters.AddWithValue("$end", Date(endDate));
             using var reader = command.ExecuteReader();
             var rows = new List<DailyApplicationUsage>();
-            while (reader.Read())
+            while (true)
             {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!reader.Read()) break;
                 rows.Add(new(DateOnly.ParseExact(reader.GetString(0), "yyyy-MM-dd", CultureInfo.InvariantCulture),
                     reader.GetString(1), reader.GetString(2), reader.IsDBNull(3) ? null : reader.GetString(3),
                     reader.IsDBNull(4) ? null : reader.GetString(4), reader.GetInt64(5), reader.GetInt64(6),
                     DateTimeOffset.ParseExact(reader.GetString(7), "O", CultureInfo.InvariantCulture)));
             }
+            reader.Dispose();
+            cancellationToken.ThrowIfCancellationRequested();
+            transaction?.Commit();
             return rows.AsReadOnly();
         }
         catch (SqliteException exception)
@@ -182,6 +214,7 @@ public sealed class DailyAppUsageStore
     // The cutoff itself is retained. Scheduling and choosing 'today' belong to the future service.
     public int RetentionCleanup(DateOnly cutoffDate)
     {
+        EnsureWritable();
         using var connection = Open();
         try
         {
@@ -205,7 +238,8 @@ public sealed class DailyAppUsageStore
     {
         var settings = new SqliteConnectionStringBuilder(connectionString)
         {
-            Mode = create ? SqliteOpenMode.ReadWriteCreate : SqliteOpenMode.ReadWrite
+            Mode = readOnly ? SqliteOpenMode.ReadOnly
+                : create ? SqliteOpenMode.ReadWriteCreate : SqliteOpenMode.ReadWrite
         };
         var connection = new SqliteConnection(settings.ToString());
         try
@@ -223,6 +257,10 @@ public sealed class DailyAppUsageStore
 
     private AppUsageStorageException Failure(AppUsageStorageFailure failure, string message, Exception exception) =>
         new(failure, DatabasePath, message, exception);
+    private void EnsureWritable()
+    {
+        if (readOnly) throw new InvalidOperationException("This daily application usage store is read-only.");
+    }
     private static bool IsCorrupt(SqliteException exception) => exception.SqliteErrorCode is 11 or 26;
     private static string Date(DateOnly date) => date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 }

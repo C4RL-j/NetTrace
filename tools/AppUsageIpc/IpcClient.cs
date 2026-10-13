@@ -12,7 +12,8 @@ public enum IpcState
     MalformedResponse,
     Disconnected,
     TimedOut,
-    Cancelled
+    Cancelled,
+    OperationUnsupported
 }
 
 public sealed record IpcResult<T>(IpcState State, T? Value, string? Detail = null);
@@ -101,11 +102,21 @@ public sealed class IpcClient : IAsyncDisposable
     public Task<IpcResult<CollectorSnapshot>> GetSnapshotAsync(CancellationToken cancellationToken = default) =>
         RequestAsync("GetSnapshot", response => response.Snapshot!, cancellationToken);
 
+    public Task<IpcResult<AppUsageQueryResult>> GetAppUsageRangeAsync(AppUsageRange range,
+        CancellationToken cancellationToken = default)
+    {
+        if (!Enum.IsDefined(range)) throw new ArgumentOutOfRangeException(nameof(range));
+        if (protocolVersion != Protocol.ServiceVersion)
+            return Task.FromResult(new IpcResult<AppUsageQueryResult>(IpcState.OperationUnsupported, null,
+                "Persisted app usage queries require the service protocol."));
+        return RequestAsync("GetAppUsageRange", response => response.AppUsage!, cancellationToken, new(range));
+    }
+
     public Task<IpcResult<bool>> ShutdownForTestAsync(CancellationToken cancellationToken = default) =>
         RequestAsync("ShutdownForTest", _ => true, cancellationToken);
 
     private async Task<IpcResult<T>> RequestAsync<T>(string operation, Func<PipeResponse, T> value,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, AppUsageQueryRequest? appUsageQuery = null)
     {
         using var timeout = Deadline(cancellationToken, Protocol.RequestTimeout);
         bool entered = false;
@@ -115,9 +126,11 @@ public sealed class IpcClient : IAsyncDisposable
             entered = true;
             if (Volatile.Read(ref disposed) != 0 || !handshaken || pipe is null || !pipe.IsConnected)
                 return Failure<T>(IpcState.Disconnected, "The collector is disconnected.");
-            var response = await ExchangeAsync(operation, timeout.Token).ConfigureAwait(false);
+            var response = await ExchangeAsync(operation, timeout.Token, appUsageQuery).ConfigureAwait(false);
             var state = ValidateResponse(response, operation);
             if (state is not null) return Failure<T>(state.Value, Detail(state.Value));
+            if (appUsageQuery is not null && response.AppUsage!.Range != appUsageQuery.Range)
+                return Failure<T>(IpcState.MalformedResponse, "The collector returned a different usage range.");
             if (operation == "GetSnapshot")
             {
                 var current = response.Snapshot!;
@@ -153,9 +166,10 @@ public sealed class IpcClient : IAsyncDisposable
         finally { if (entered) gate.Release(); }
     }
 
-    private async Task<PipeResponse> ExchangeAsync(string operation, CancellationToken cancellationToken)
+    private async Task<PipeResponse> ExchangeAsync(string operation, CancellationToken cancellationToken,
+        AppUsageQueryRequest? appUsageQuery = null)
     {
-        await IpcProtocol.WriteRequestAsync(pipe!, new(protocolVersion, operation), cancellationToken).ConfigureAwait(false);
+        await IpcProtocol.WriteRequestAsync(pipe!, new(protocolVersion, operation, appUsageQuery), cancellationToken).ConfigureAwait(false);
         return await IpcProtocol.ReadResponseAsync(pipe!, cancellationToken, protocolVersion).ConfigureAwait(false);
     }
 
@@ -165,22 +179,60 @@ public sealed class IpcClient : IAsyncDisposable
             return IpcState.IncompatibleProtocol;
         if (response.Status != "Ok")
         {
-            if (response.Capabilities is not null || response.Snapshot is not null || string.IsNullOrWhiteSpace(response.Error))
+            if (response.Capabilities is not null || response.Snapshot is not null || response.AppUsage is not null
+                || string.IsNullOrWhiteSpace(response.Error))
                 return IpcState.MalformedResponse;
+            if (response.Status == "UnknownOperation" && operation == "GetAppUsageRange")
+                return IpcState.OperationUnsupported;
             return response.Status == "ShutdownDisabled" && operation == "ShutdownForTest"
                 ? IpcState.AccessDenied : IpcState.MalformedResponse;
         }
         if (response.Error is not null) return IpcState.MalformedResponse;
         return operation switch
         {
-            "Hello" or "GetCapabilities" => response.Snapshot is null && ValidCapabilities(response.Capabilities)
+            "Hello" or "GetCapabilities" => response.Snapshot is null && response.AppUsage is null && ValidCapabilities(response.Capabilities)
                 ? null : IpcState.MalformedResponse,
-            "GetSnapshot" => response.Capabilities is null && ValidSnapshot(response.Snapshot)
+            "GetSnapshot" => response.Capabilities is null && response.AppUsage is null && ValidSnapshot(response.Snapshot)
                 ? null : IpcState.MalformedResponse,
-            "ShutdownForTest" => response.Capabilities is null && response.Snapshot is null
+            "ShutdownForTest" => response.Capabilities is null && response.Snapshot is null && response.AppUsage is null
+                ? null : IpcState.MalformedResponse,
+            "GetAppUsageRange" => response.Capabilities is null && response.Snapshot is null && ValidAppUsage(response.AppUsage)
                 ? null : IpcState.MalformedResponse,
             _ => IpcState.MalformedResponse
         };
+    }
+
+    private static bool ValidAppUsage(AppUsageQueryResult? usage)
+    {
+        if (usage is null || !Enum.IsDefined(usage.Range) || !Enum.IsDefined(usage.Availability)
+            || usage.StartLocalDate != AppUsageRangeRules.GetStartLocalDate(usage.Range, usage.EndLocalDate)
+            || usage.TrackedApplicationCount != usage.Applications.Count
+            || usage.TotalDownloadBytes < 0 || usage.TotalUploadBytes < 0 || usage.LogicalTotalBytes < 0)
+            return false;
+        if (usage.Availability == AppUsageAvailability.Available ? usage.Diagnostic is not null
+            : string.IsNullOrWhiteSpace(usage.Diagnostic) || usage.Diagnostic.Length > 512) return false;
+        var identities = new HashSet<string>(StringComparer.Ordinal);
+        long download = 0, upload = 0;
+        AppUsageApplication? previous = null;
+        foreach (var application in usage.Applications)
+        {
+            if (string.IsNullOrWhiteSpace(application.ApplicationIdentity) || string.IsNullOrWhiteSpace(application.DisplayName)
+                || !identities.Add(application.ApplicationIdentity) || application.DownloadBytes < 0 || application.UploadBytes < 0
+                || application.TotalBytes <= 0 || application.TotalBytes != Sum(application.DownloadBytes, application.UploadBytes)
+                || application.IsSystem != (application.ApplicationIdentity == "system")
+                || application.IsUnknown != (application.ApplicationIdentity == "unknown")
+                || previous is not null && (previous.TotalBytes < application.TotalBytes
+                    || previous.TotalBytes == application.TotalBytes
+                        && StringComparer.Ordinal.Compare(previous.ApplicationIdentity, application.ApplicationIdentity) >= 0))
+                return false;
+            download = Sum(download, application.DownloadBytes);
+            upload = Sum(upload, application.UploadBytes);
+            previous = application;
+        }
+        return download == usage.TotalDownloadBytes && upload == usage.TotalUploadBytes
+            && Sum(download, upload) == usage.LogicalTotalBytes
+            && (usage.Availability != AppUsageAvailability.Unavailable
+                || usage.Applications.Count == 0 && usage.LogicalTotalBytes == 0);
     }
 
     private bool ValidCapabilities(CollectorCapabilities? capabilities) => capabilities is not null
@@ -294,6 +346,7 @@ public sealed class IpcClient : IAsyncDisposable
     {
         IpcState.IncompatibleProtocol => "The collector protocol version is incompatible.",
         IpcState.AccessDenied => "Diagnostic shutdown is disabled by the collector.",
+        IpcState.OperationUnsupported => "The collector does not support persisted app usage queries.",
         _ => "The collector response does not satisfy the summary protocol."
     };
 

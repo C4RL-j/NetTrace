@@ -659,7 +659,7 @@ Five-second checkpoints write aggregate batches through the 004.1 store;
 failed batches remain pending for later retries. A final bounded flush drains
 accepted events after capture is quiesced, and retention runs once at service
 startup. Internal persistence health and bounded logs support diagnostic
-validation; the UI and named-pipe protocol keep their existing behavior.
+validation; the production UI keeps its existing behavior.
 
 Forced termination can lose usage since the latest successful checkpoint,
 normally roughly the latest five-second window while storage is healthy.
@@ -674,3 +674,32 @@ The explicit validation workflow temporarily runs the development service as
 LocalSystem, collects small controlled IPv4/IPv6 traffic and passive application
 evidence, verifies restart persistence, then removes its owned service, trace,
 pipe and validation database. See the [service documentation](tools/NetTrace.AppUsageService/README.md).
+
+## App Usage 004.3 — read-only usage queries
+
+The authenticated local service pipe adds `GetAppUsageRange` to service protocol
+2. Its typed request accepts only Today, 7D or 30D: today and the previous
+0, 6 or 29 local calendar dates, inclusive. Existing App Usage 002/003 operations
+retain their wire format and protocol versions.
+
+The service reads persisted history through the storage library with independent
+read-only SQLite connections. It aggregates by historical application identity,
+omits zero-use applications and sorts by total bytes descending, then identity
+ascending. Results retain executable metadata, System/Unknown rows and normal
+NetMod logical usage, with download, upload and logical totals. A valid empty
+history returns zero totals; failed reads return typed unavailable state, and
+readable history with unhealthy persistence returns degraded state. Query reads,
+waiting work and response frames are bounded; no query changes checkpoint data.
+
+The existing diagnostic client exposes these queries without elevation:
+
+```powershell
+dotnet run --project tools/AppUsageDiagnosticClient -- --service --app-usage Today
+dotnet run --project tools/AppUsageDiagnosticClient -- --service --app-usage-all
+dotnet run --project tests/NetTrace.AppUsageQueryTests/NetTrace.AppUsageQueryTests.csproj
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File tools/NetTrace.AppUsageService/Validate-UsageQueries.ps1
+```
+
+The explicit validation uses protected isolated storage and passive traffic,
+checks normal-client reads and service restart recovery, then removes its owned
+service, ETW session, pipe and database. See [004.3 validation](tools/NetTrace.AppUsageService/VALIDATION0043.md).

@@ -11,6 +11,7 @@ public sealed class IpcServer : IAsyncDisposable
     private readonly Func<NamedPipeServerStream, bool> verifyClient;
     private readonly int protocolVersion;
     private readonly bool authenticateAfterFirstRead;
+    private readonly Func<AppUsageRange, CancellationToken, Task<AppUsageQueryResult>>? appUsageQuery;
     private readonly CancellationTokenSource stopping = new();
     private Task? running;
     private int disposed;
@@ -21,7 +22,8 @@ public sealed class IpcServer : IAsyncDisposable
 
     public IpcServer(string pipeName, Func<CollectorCapabilities> capabilities, Func<CollectorSnapshot> snapshot,
         Action? shutdownForTest = null, Func<NamedPipeServerStream, bool>? clientVerifier = null,
-        ServicePipeSecurity? serviceSecurity = null, int protocolVersion = Protocol.Version)
+        ServicePipeSecurity? serviceSecurity = null, int protocolVersion = Protocol.Version,
+        Func<AppUsageRange, CancellationToken, Task<AppUsageQueryResult>>? appUsageQuery = null)
     {
         this.capabilities = capabilities ?? throw new ArgumentNullException(nameof(capabilities));
         this.snapshot = snapshot ?? throw new ArgumentNullException(nameof(snapshot));
@@ -31,6 +33,9 @@ public sealed class IpcServer : IAsyncDisposable
         if (serviceSecurity is not null && (shutdownForTest is not null || protocolVersion != Protocol.ServiceVersion))
             throw new ArgumentException("Service pipes require service protocol and disallow diagnostic shutdown.");
         this.protocolVersion = protocolVersion;
+        if (appUsageQuery is not null && protocolVersion != Protocol.ServiceVersion)
+            throw new ArgumentException("Persisted usage queries require the service protocol.", nameof(appUsageQuery));
+        this.appUsageQuery = appUsageQuery;
         authenticateAfterFirstRead = serviceSecurity is not null && clientVerifier is null;
         // Test-only hook is never exposed as a protocol or CLI option. Default authentication is real.
         verifyClient = clientVerifier ?? (pipe => serviceSecurity is null
@@ -93,9 +98,20 @@ public sealed class IpcServer : IAsyncDisposable
                         if (!verifyClient(pipe)) { Interlocked.Increment(ref rejectedClients); break; }
                         authenticated = true; Interlocked.Increment(ref accepted);
                     }
-                    var response = IpcProtocol.Dispatch(request, handshaken, capabilities, snapshot,
-                        shutdownForTest is not null, protocolVersion);
-                    await IpcProtocol.WriteResponseAsync(pipe, response, requestTimeout.Token).ConfigureAwait(false);
+                    var response = await IpcProtocol.DispatchAsync(request, handshaken, capabilities, snapshot,
+                        shutdownForTest is not null, protocolVersion, appUsageQuery, requestTimeout.Token).ConfigureAwait(false);
+                    try
+                    {
+                        await IpcProtocol.WriteResponseAsync(pipe, response, requestTimeout.Token).ConfigureAwait(false);
+                    }
+                    catch (IpcProtocolException) when (response.AppUsage is not null)
+                    {
+                        // Serialization validates the frame size before writing its
+                        // header. Oversized history keeps a usable typed response.
+                        response = new(protocolVersion, "Ok",
+                            AppUsage: AppUsageRangeRules.Unavailable(request.AppUsageQuery!.Range));
+                        await IpcProtocol.WriteResponseAsync(pipe, response, requestTimeout.Token).ConfigureAwait(false);
+                    }
                     if (response.Status != "Ok")
                     {
                         Interlocked.Increment(ref rejectedRequests);

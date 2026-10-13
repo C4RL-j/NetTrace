@@ -82,6 +82,30 @@ internal static class AppUsageSchema
         transaction.Commit();
     }
 
+    // Read-only callers validate the existing schema in their query snapshot.
+    // Version zero is unavailable rather than a request to create or migrate.
+    internal static void ValidateReadOnly(SqliteConnection connection,
+        SqliteTransaction transaction, string databasePath)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        var version = Integer(command, "PRAGMA user_version;");
+        var applicationId = Integer(command, "PRAGMA application_id;");
+        if (version != DailyAppUsageStore.CurrentSchemaVersion || applicationId != ApplicationId)
+            throw Incompatible(databasePath, "The existing daily application usage schema is unavailable or incompatible.");
+
+        ValidateDefinition(command, databasePath, "table", "daily_app_usage", TableSql);
+        ValidateDefinition(command, databasePath, "index", "ix_daily_app_usage_application_date", IndexSql);
+        command.Parameters.Clear();
+        command.CommandText = """
+            SELECT COUNT(*) FROM sqlite_schema
+            WHERE name NOT GLOB 'sqlite_*'
+                AND name NOT IN ('daily_app_usage', 'ix_daily_app_usage_application_date');
+            """;
+        if (Convert.ToInt64(command.ExecuteScalar()) != 0)
+            throw Incompatible(databasePath, "The existing database contains unexpected schema objects.");
+    }
+
     private static long Integer(SqliteCommand command, string sql)
     {
         command.CommandText = sql;

@@ -11,9 +11,11 @@ public static class Protocol
     public static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(2);
 }
 
-public sealed record PipeRequest(int ProtocolVersion, string Operation);
+public sealed record PipeRequest(int ProtocolVersion, string Operation,
+    AppUsageQueryRequest? AppUsageQuery = null);
 public sealed record PipeResponse(int ProtocolVersion, string Status,
-    CollectorCapabilities? Capabilities = null, CollectorSnapshot? Snapshot = null, string? Error = null);
+    CollectorCapabilities? Capabilities = null, CollectorSnapshot? Snapshot = null, string? Error = null,
+    AppUsageQueryResult? AppUsage = null);
 
 public sealed record CollectorCapabilities(bool CollectorElevated, bool Ipv4, bool Ipv6,
     bool LoopbackClassification, bool LostEventCountAvailable, bool CumulativeSinceStart,
