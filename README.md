@@ -10,10 +10,7 @@ NetTrace V1.1 establishes the NetTrace identity and safely migrates local histor
 - Live download/upload traffic with adaptive byte-rate primary and Mbps secondary
 - Persistent daily peaks from passive traffic observations
 - Download/upload totals for the current app session
-- Today total
-- Last 7 days total
-- Last 30 days total
-- Download vs upload breakdown
+- Dashboard Data Usage summary with a compact cycling range selector and download/upload breakdown
 - Adapter type, IPv4 address, and local Wi-Fi/Ethernet link rate
 - Local SQLite history
 - Connection profiles with Telco / ISP and Device names
@@ -34,6 +31,10 @@ Live Traffic watches existing traffic and generates no speed-test traffic. The s
 **Peak today** is the highest sampled download/upload traffic NetTrace observed across monitored adapters during the local calendar day. Peaks are saved about every 30 seconds and on normal exit, survive restarts, and begin at zero on a new day. They are observations while NetTrace runs, not guaranteed maximum internet throughput. Earlier usage totals cannot reconstruct old traffic peaks, so peak recording begins with this build. A sudden termination can lose the most recent unsaved peak.
 
 **Wi-Fi link rate** describes the local PC-to-router/hotspot link; Ethernet and other adapters are labeled accordingly. It is not measured internet speed. The status indicator describes monitoring activity. Raw ICMP measurements run in the background and the Health page shows the latest completed cycle. Active internet speed tests remain future work.
+
+**Dashboard Data Usage** defaults to Today. Its compact attached cyan selector cycles Today → Last 7 Days → Last 30 Days → Today when clicked or activated with the keyboard. The same left summary card shows the existing total/download/upload values, and the selected range stays while navigating between pages in the same window. Range switching uses the existing usage totals query and quantity formatter; usage accounting is unchanged.
+
+The right half shows a native WPF rolling **live traffic** graph for Download and Upload over the last 60 seconds, using the same raw bytes-per-second samples as the Live Traffic cards and their adaptive B/s, KB/s, MB/s and GB/s formatting. The existing monitoring sampler keeps at most 61 one-second observations in memory while monitoring is active, including when Dashboard is hidden, minimized or closed. Immutable raw snapshots are cached separately from chart projection. Only a visible Dashboard builds chart data and draws; returning immediately shows the already-collected recent minute. Hover shows the local sample time, each direction and combined speed. Idle samples remain zero; unavailable measurements and real sampling interruptions create gaps, while Dashboard visibility does not. Changing the monitored adapter starts a new trace. The compact selector continues to select accumulated summary totals while the graph stays live. It adds no sampler, timer, worker, database query or persisted speed history.
 
 ## Important limitation
 
@@ -635,6 +636,20 @@ Run the isolated migration checks without touching your application data:
 ```powershell
 dotnet run --project tests\NetTrace.RegressionTests\NetTrace.RegressionTests.csproj
 dotnet run --project tests\NetTrace.WpfTests\NetTrace.WpfTests.csproj
+```
+
+Focused Dashboard checks cover the compact Today → 7D → 30D selector cycle,
+existing date boundaries and summary values, retained selection through navigation,
+continuous background traffic samples, genuine unavailable gaps, hidden rendering
+suppression and the 760×600 minimum. The WPF checks save isolated layout previews.
+
+```powershell
+dotnet run --project tests\NetTrace.RegressionTests -- --dashboard-usage-checks
+dotnet run --project tests\NetTrace.WpfTests -- --dashboard-usage-checks
+dotnet run --project tests\NetTrace.RegressionTests -- --dashboard-speed-checks
+dotnet run --project tests\NetTrace.WpfTests -- --dashboard-speed-checks
+dotnet run --project tests\NetTrace.RegressionTests -- --dashboard-traffic-checks
+dotnet run --project tests\NetTrace.WpfTests -- --dashboard-traffic-checks
 ```
 
 ## App Usage 004.1 — daily usage storage foundation

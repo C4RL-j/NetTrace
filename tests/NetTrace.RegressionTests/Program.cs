@@ -229,7 +229,8 @@ var tests = new (string Name, Action Run)[]
     .Concat(ConnectionDetailsTests.Cases).Concat(ProfileManagementTests.Cases)
     .Concat(RouteAwarenessTests.Cases).Concat(TransportAwarenessTests.Cases)
     .Concat(WifiRadioTests.Cases).Concat(HistoryOverviewTests.Cases)
-    .Concat(HistoryUsageTests.Cases).Concat(DashboardSpeedTests.Cases).ToArray();
+    .Concat(HistoryUsageTests.Cases).Concat(DashboardSpeedTests.Cases)
+    .Concat(DashboardUsageTests.Cases).Concat(DashboardTrafficTests.Cases).ToArray();
 
 if (args.Length > 0 && args[0] == "--wifi-radio-checks")
     tests = WifiRadioTests.Cases;
@@ -242,6 +243,12 @@ if (args.Length > 0 && args[0] == "--history-usage-checks")
 
 if (args.Length > 0 && args[0] == "--dashboard-speed-checks")
     tests = DashboardSpeedTests.Cases;
+
+if (args.Length > 0 && args[0] == "--dashboard-usage-checks")
+    tests = DashboardUsageTests.Cases;
+
+if (args.Length > 0 && args[0] == "--dashboard-traffic-checks")
+    tests = DashboardTrafficTests.Cases;
 
 var failed = 0;
 foreach (var (name, run) in tests)
@@ -5143,9 +5150,13 @@ sealed class FakeBandwidthMonitor : INetworkMonitor
         Interlocked.Increment(ref _captures);
         lock (_gate) return _snapshots.GetValueOrDefault(adapterId);
     }
-    public void SetSnapshot(string adapterId, NetworkSnapshot snapshot)
+    public void SetSnapshot(string adapterId, NetworkSnapshot? snapshot)
     {
-        lock (_gate) _snapshots[adapterId] = snapshot;
+        lock (_gate)
+        {
+            if (snapshot is null) _snapshots.Remove(adapterId);
+            else _snapshots[adapterId] = snapshot;
+        }
     }
 }
 

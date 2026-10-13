@@ -20,8 +20,8 @@ internal static class DashboardSpeedChecks
 {
     private const BindingFlags PrivateInstance = BindingFlags.NonPublic | BindingFlags.Instance;
     private static readonly string[] PreservedLabels =
-    ["DownloadPeakText", "UploadPeakText", "DownloadSessionText", "UploadSessionText", "TodayTotalText", "TodayBreakdownText",
-        "WeekTotalText", "WeekBreakdownText", "MonthTotalText", "MonthBreakdownText", "DashboardProfileText", "DashboardNetworkText"];
+    ["DownloadPeakText", "UploadPeakText", "DownloadSessionText", "UploadSessionText", "DashboardUsageTitleText",
+        "DashboardUsageTotalText", "DashboardUsageBreakdownText", "DashboardProfileText", "DashboardNetworkText"];
 
     public static void Run(string root, Action<bool, string> check)
     {
@@ -199,10 +199,14 @@ internal static class DashboardSpeedChecks
                 Text(window, "UploadSessionText") == "App session ↑ " + ByteFormatter.Format(2_000_000) &&
                 Text(window, "DownloadPeakText") == "Peak today ↓ 40.00 Mbps" && Text(window, "UploadPeakText") == "Peak today ↑ 8.00 Mbps",
                 "Adaptive live units preserve physical/app session byte accounting and existing Mbps peak presentation");
-            check(new[] { "TodayTotalText", "WeekTotalText", "MonthTotalText" }.All(name => Text(window, name) == ByteFormatter.Format(12_000_000)) &&
-                new[] { "TodayBreakdownText", "WeekBreakdownText", "MonthBreakdownText" }.All(name =>
-                    Text(window, name) == "↓ " + ByteFormatter.Format(10_000_000) + "   ↑ " + ByteFormatter.Format(2_000_000)),
-                "Dashboard Today/7-day/30-day cards remain cumulative byte quantities rather than live speed units");
+            foreach (var rangeTitle in new[] { "TODAY", "LAST 7 DAYS", "LAST 30 DAYS" })
+            {
+                check(Text(window, "DashboardUsageRangeText") == rangeTitle &&
+                    Text(window, "DashboardUsageTotalText") == ByteFormatter.Format(12_000_000) &&
+                    Text(window, "DashboardUsageBreakdownText") == "↓ " + ByteFormatter.Format(10_000_000) + "   ↑ " + ByteFormatter.Format(2_000_000),
+                    $"Dashboard {rangeTitle} summary remains a cumulative byte quantity rather than live speed units");
+                typeof(Button).GetMethod("OnClick", PrivateInstance)!.Invoke(Control<Button>(window, "DashboardUsageSelectorButton"), null);
+            }
             HistoryOverviewChecks.SavePreview(window, System.IO.Path.Combine(previews, "760x600-owned-same-sample.png"));
             var reads = counters.Reads;
             var viewTimer = Field<object>(window, "_timer");

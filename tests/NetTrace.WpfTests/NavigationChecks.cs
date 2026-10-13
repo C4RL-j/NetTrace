@@ -79,7 +79,7 @@ internal static class NavigationChecks
             "Each navigation entry accepts hit tests in its header padding, not only over the text");
 
         check(OnPage(tabs[0], Control<TextBlock>(window, "DownloadRateText")) &&
-            OnPage(tabs[0], Control<TextBlock>(window, "TodayTotalText")) &&
+            OnPage(tabs[0], Control<TextBlock>(window, "DashboardUsageTotalText")) &&
             OnPage(tabs[0], Control<TextBlock>(window, "DashboardProfileText")),
             "Dashboard retains live traffic, data usage and the compact current-connection summary");
         check(OnPage(tabs[2], Control<ComboBox>(window, "AdapterComboBox")) &&

@@ -178,6 +178,34 @@
             </Setter>
         </Style>
 
+        <Style x:Key="DashboardUsageSelectorStyle" TargetType="Button">
+            <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
+            <Setter Property="Padding" Value="10,6"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="RangeSelectorSurface" Background="{StaticResource CardBrush}"
+                                BorderBrush="{StaticResource AccentBrush}" BorderThickness="1,1,1,0"
+                                CornerRadius="8,8,0,0" Padding="{TemplateBinding Padding}">
+                            <Grid>
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                  TextElement.FontSize="11" TextElement.FontWeight="SemiBold"/>
+                                <Border x:Name="RangeFocusBorder" BorderBrush="Transparent" BorderThickness="1" CornerRadius="2"/>
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="RangeSelectorSurface" Property="Background" Value="#172036"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="RangeFocusBorder" Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style x:Key="NavigationTabStyle" TargetType="TabItem">
             <Setter Property="Foreground" Value="{StaticResource SubtleBrush}"/>
             <Setter Property="Padding" Value="10,10"/>
@@ -304,45 +332,49 @@
                             </Border>
                         </Grid>
 
-                        <Grid Margin="0,18,0,0">
+                        <Grid x:Name="DashboardUsageSection" Margin="0,18,0,0">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
                             </Grid.RowDefinitions>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="12"/>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="12"/>
+                                <ColumnDefinition Width="14"/>
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
 
-                            <TextBlock Text="DATA USAGE" Grid.ColumnSpan="5" Style="{StaticResource MutedText}" Margin="0,0,0,8"
+                            <TextBlock Text="DATA USAGE" Grid.ColumnSpan="3" Style="{StaticResource MutedText}" Margin="0,0,0,8"
                                        ToolTip="Recorded data quantities in bytes, MB and GB. These are usage totals, not traffic rates."/>
 
-                            <Border Grid.Row="1" Grid.Column="0" Style="{StaticResource CardStyle}">
-                                <StackPanel>
-                                    <TextBlock Text="TODAY" Style="{StaticResource MutedText}"/>
-                                    <TextBlock x:Name="TodayTotalText" Text="0 B" FontSize="25" FontWeight="SemiBold" Margin="0,7,0,0"/>
-                                    <TextBlock x:Name="TodayBreakdownText" Text="↓ 0 B   ↑ 0 B" Style="{StaticResource MutedText}" Margin="0,6,0,0"/>
-                                </StackPanel>
-                            </Border>
-
-                            <Border Grid.Row="1" Grid.Column="2" Style="{StaticResource CardStyle}">
-                                <StackPanel>
-                                    <TextBlock Text="LAST 7 DAYS" Style="{StaticResource MutedText}"/>
-                                    <TextBlock x:Name="WeekTotalText" Text="0 B" FontSize="25" FontWeight="SemiBold" Margin="0,7,0,0"/>
-                                    <TextBlock x:Name="WeekBreakdownText" Text="↓ 0 B   ↑ 0 B" Style="{StaticResource MutedText}" Margin="0,6,0,0"/>
-                                </StackPanel>
-                            </Border>
-
-                            <Border Grid.Row="1" Grid.Column="4" Style="{StaticResource CardStyle}">
-                                <StackPanel>
-                                    <TextBlock Text="LAST 30 DAYS" Style="{StaticResource MutedText}"/>
-                                    <TextBlock x:Name="MonthTotalText" Text="0 B" FontSize="25" FontWeight="SemiBold" Margin="0,7,0,0"/>
-                                    <TextBlock x:Name="MonthBreakdownText" Text="↓ 0 B   ↑ 0 B" Style="{StaticResource MutedText}" Margin="0,6,0,0"/>
-                                </StackPanel>
-                            </Border>
+                            <Grid x:Name="DashboardUsageSummary" Grid.Row="1" Grid.Column="0">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <Button x:Name="DashboardUsageSelectorButton" Grid.Row="0" HorizontalAlignment="Left"
+                                        MinWidth="105" Padding="10,6" Style="{StaticResource DashboardUsageSelectorStyle}"
+                                        Click="DashboardUsageSelector_OnClick" ToolTip="Next: Last 7 Days"
+                                        AutomationProperties.Name="Change data usage range">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock x:Name="DashboardUsageRangeText" Text="TODAY" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="1" Text="›" FontSize="18" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                                    </Grid>
+                                </Button>
+                                <Border x:Name="DashboardUsageCard" Grid.Row="1" Style="{StaticResource CardStyle}" CornerRadius="0,14,14,14">
+                                    <StackPanel>
+                                        <TextBlock x:Name="DashboardUsageTitleText" Text="TODAY" Style="{StaticResource MutedText}"/>
+                                        <TextBlock x:Name="DashboardUsageTotalText" Text="0 B" FontSize="25" FontWeight="SemiBold" Margin="0,7,0,0"/>
+                                        <TextBlock x:Name="DashboardUsageBreakdownText" Text="↓ 0 B   ↑ 0 B" Style="{StaticResource MutedText}" Margin="0,6,0,0"/>
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
+                            <controls:DashboardTrafficChart x:Name="DashboardTrafficChart" Grid.Row="1" Grid.Column="2"
+                                                            Height="152" VerticalAlignment="Top"
+                                                            AutomationProperties.Name="Live download and upload traffic over the last 60 seconds"/>
                         </Grid>
 
                         <Border Style="{StaticResource CardStyle}" Margin="0,18,0,0">

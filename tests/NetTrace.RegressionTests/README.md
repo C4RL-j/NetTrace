@@ -242,4 +242,47 @@ Run only these deterministic Dashboard 001 groups with:
 dotnet run --project tests/NetTrace.RegressionTests/NetTrace.RegressionTests.csproj -- --dashboard-speed-checks
 ```
 
+Dashboard's usage selector has 11 deterministic groups in `DashboardUsageTests.cs`.
+Distinct existing Today, seven-day and
+thirty-day totals verify the selected title, combined quantity and download/upload
+breakdown without changing accounting. The cases cover the default Today enum,
+empty values, unchanged binary quantity formatting and display culture, immutable
+refreshed snapshots and rejection of unsupported ranges. Dashboard Polish 003 adds
+the compact selector's repeatable Today → Last 7 Days → Last 30 Days → Today cycle,
+the unchanged quantities at each step, and rejection of unsupported selector ranges.
+Actual selector interaction, navigation retention and compact window layout are
+covered by the WPF harness.
+
+Run only the Dashboard usage selector groups with:
+
+```powershell
+dotnet run --project tests/NetTrace.RegressionTests/NetTrace.RegressionTests.csproj -- --dashboard-usage-checks
+```
+
+Dashboard's live Download/Upload graph has 42 groups in
+`DashboardTrafficTests.cs`, bringing the console suite to 704 groups. The rolling
+60-second graph uses existing sampled byte rates and the same adaptive formatter
+as the live speed cards. Tests cover independent download/upload geometry,
+inclusive window bounds, readable automatic scales, known idle zeros, unavailable
+and unobserved gaps, local hover values and English/French display cultures.
+The timeline checks one position per UTC second, redundant refresh reuse,
+replacement rather than summation, bounded memory, stale-sample rejection,
+card-matching normalization, real measurement gaps, adapter changes and immutable
+snapshots. Raw snapshots are cached; background collection builds no chart geometry
+until a presentation reads it. Dashboard visibility creates no artificial break.
+
+Seven headless service groups use an owned temporary database, injected counter
+source and controlled clock without constructing any Dashboard or WPF window. The
+existing sampler is stopped in the fixture so each manual measurement is controlled.
+They verify accepted raw-rate/timestamp parity, one counter capture per measurement,
+unchanged pending/session/daily totals, continuous bounded recent history, passive
+cached snapshot reads, the existing single sampling timer, real unavailable capture
+and sleep gaps, shutdown, and a fresh in-memory timeline for a new monitoring owner.
+
+Run only the deterministic Dashboard live graph groups with:
+
+```powershell
+dotnet run --project tests/NetTrace.RegressionTests/NetTrace.RegressionTests.csproj -- --dashboard-traffic-checks
+```
+
 Both harnesses use owned temporary databases and injected network/VPN/ICMP evidence. They do not open real application data or change Windows network settings.

@@ -283,7 +283,7 @@ Today/chart definitions consistent. An unfinished stored session's persisted byt
 are included once on its local start day; current unflushed process counters remain
 unavailable. Session/event row hashes must remain unchanged after every view.
 
-Dashboard 001 adds 32 checks in `DashboardSpeedChecks.cs` and runs with the full suite:
+Dashboard 001 has 34 checks in `DashboardSpeedChecks.cs` and runs with the full suite:
 
 ```powershell
 dotnet run --project tests/NetTrace.WpfTests/NetTrace.WpfTests.csproj -- --dashboard-speed-checks
@@ -311,6 +311,49 @@ NetTrace database. It renders exact observed raw pairs in a separate empty owned
 UI store and reports which adaptive traffic conditions occurred. If ordinary
 background traffic never reaches MB/s, that live condition is reported as
 unavailable; deterministic MB/s coverage remains part of the owned WPF checks.
+
+Dashboard Data Usage 001 and Dashboard Polish 003 use the summary checks in
+`DashboardUsageChecks.cs`, included in the full suite:
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests/NetTrace.WpfTests.csproj -- --dashboard-usage-checks
+```
+
+Owned date buckets distinguish Today, seven-day and thirty-day totals, including
+the existing inclusive boundaries and exclusion of future days. The compact attached
+selector cycles Today → Last 7 Days → Last 30 Days → Today with the existing cyan
+style. Checks refresh each range and retain 7D/30D selection across all five other
+navigation pages. Keyboard focus and Space cycling, removal of the separate tabs
+and old cards, the native graph as the right column's only control, readable zero/GB
+values and compact flush selector/card geometry are verified at 760×600, with
+resizing and vertical access to Current Connection preserved.
+Previews are saved under `dashboard-usage-previews` in the owned test directory.
+
+Dashboard Data Usage 002 and Dashboard Polish 003 use rolling live Download/Upload
+graph checks in `DashboardTrafficChecks.cs`, included in the full suite:
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests/NetTrace.WpfTests.csproj -- --dashboard-traffic-checks
+```
+
+An injected clock and owned physical counters verify that the native speed curves
+use the same raw snapshot as the existing live cards, preserve asymmetric KB/s and
+MB/s values, advance the 60-second timeline and expire old samples and peaks. Idle
+zero rates and unavailable intervals stay distinct and hoverable. Tooltips show
+local sample time and directional rates; a stationary popup updates to the sample
+beneath its pointer as the graph moves. Summary range selection preserves the live
+graph and physical accounting, and repeated same-second updates do not duplicate
+samples, samplers or timers. Navigation, hiding and minimizing each continue more
+than a minute of source sampling while freezing chart data and native drawing and
+clearing hover. The cached immutable source remains bounded to 61 chronological
+one-second observations. Returning immediately renders that already-collected
+continuous recent minute without a visibility gap; genuine unavailable measurements
+still split both curves. Source collection uses one existing adapter capture per
+monitoring sample and preserves the existing worker and timer identities.
+Native drawing, legend, axis and tooltip bounds are checked at 760×600 and after
+resizing. Synthetic previews are saved under `dashboard-traffic-previews`. These
+checks do not open the user's database, require an App Usage service or generate
+network traffic.
 
 App Usage 004.4.1 adds focused Today presentation and WPF checks in
 `AppUsageTodayChecks.cs`, included in the full suite:

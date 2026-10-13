@@ -35,6 +35,10 @@ internal static class Program
             return PassiveHistoryValidation.Run();
         if (args.Length > 0 && args[0] == "--dashboard-speed-checks")
             return RunDashboardSpeedTarget();
+        if (args.Length > 0 && args[0] == "--dashboard-usage-checks")
+            return RunDashboardUsageTarget();
+        if (args.Length > 0 && args[0] == "--dashboard-traffic-checks")
+            return RunDashboardTrafficTarget();
         if (args.Length > 0 && args[0] == "--dashboard-live-validation")
             return PassiveDashboardValidation.Run();
         if (args.Length > 0 && args[0] == "--app-usage-today-checks")
@@ -335,6 +339,8 @@ internal static class Program
             HistoryOverviewChecks.Run(ownedRoot, Check);
             HistoryUsageChecks.Run(ownedRoot, Check);
             DashboardSpeedChecks.Run(ownedRoot, Check);
+            DashboardUsageChecks.Run(ownedRoot, Check);
+            DashboardTrafficChecks.Run(ownedRoot, Check);
             AppUsageTodayChecks.Run(ownedRoot, Check);
             AppUsageRangeChecks.Run(ownedRoot, Check);
             AppUsageRowIconChecks.Run(ownedRoot, Check);
@@ -423,6 +429,42 @@ internal static class Program
         catch (Exception exception)
         {
             Console.Error.WriteLine($"FAIL after {_passed} targeted History usage checks: {exception}");
+            return 1;
+        }
+        finally { Application.Current?.Shutdown(); }
+    }
+
+    private static int RunDashboardUsageTarget()
+    {
+        var ownedRoot = System.IO.Path.Combine(AppContext.BaseDirectory, "owned-dashboard-usage-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            _ = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+            DashboardUsageChecks.Run(ownedRoot, Check);
+            Console.WriteLine($"{_passed}/{_passed} targeted Dashboard usage WPF checks passed. Isolated data: {ownedRoot}");
+            return 0;
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"FAIL after {_passed} targeted Dashboard usage checks: {exception}");
+            return 1;
+        }
+        finally { Application.Current?.Shutdown(); }
+    }
+
+    private static int RunDashboardTrafficTarget()
+    {
+        var ownedRoot = System.IO.Path.Combine(AppContext.BaseDirectory, "owned-dashboard-traffic-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            _ = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+            DashboardTrafficChecks.Run(ownedRoot, Check);
+            Console.WriteLine($"{_passed}/{_passed} targeted Dashboard traffic WPF checks passed. Isolated data: {ownedRoot}");
+            return 0;
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"FAIL after {_passed} targeted Dashboard traffic checks: {exception}");
             return 1;
         }
         finally { Application.Current?.Shutdown(); }

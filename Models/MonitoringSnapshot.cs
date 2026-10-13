@@ -1,3 +1,5 @@
+using NetTrace.Presentation;
+
 namespace NetTrace.Models;
 
 public sealed record MonitoringSnapshot(
@@ -17,6 +19,7 @@ public sealed record MonitoringSnapshot(
     DateOnly PendingDay,
     string? PersistenceMessage)
 {
+    public IReadOnlyList<DashboardTrafficSample> TrafficSamples { get; init; } = Array.Empty<DashboardTrafficSample>();
     public NetworkAdapterDetails? SelectedAdapterDetails { get; init; }
     public VpnRouteSnapshot VpnRoute { get; init; } = VpnRouteSnapshot.Unknown;
     public DateOnly PeakDay { get; init; }

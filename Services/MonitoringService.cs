@@ -53,6 +53,7 @@ public sealed class MonitoringService : IDisposable
     private string _status = "Monitoring";
     private double _downloadRate;
     private double _uploadRate;
+    private readonly DashboardTrafficTimeline _trafficTimeline = new();
     private readonly Dictionary<DateOnly, (double DownloadBytesPerSecond, double UploadBytesPerSecond)> _trafficPeaks = new();
     private readonly HashSet<DateOnly> _dirtyTrafficPeakDays = new();
 
@@ -185,6 +186,7 @@ public sealed class MonitoringService : IDisposable
                 _pendingDownloaded, _pendingUploaded, _pendingDay,
                 _historyPersistenceMessage ?? _trafficPeaksPersistenceMessage ?? _usagePersistenceMessage)
             {
+                TrafficSamples = _trafficTimeline.Samples,
                 SelectedAdapterDetails = _selectedAdapterDetails,
                 VpnRoute = _vpnSessions.LatestRouteSnapshot,
                 PeakDay = today,
@@ -369,6 +371,8 @@ public sealed class MonitoringService : IDisposable
         lock (_gate)
         {
             if (!_started || _stopping || _disposed || _suspended) return;
+            DateTimeOffset? sampledAtUtc = null;
+            var measured = false;
             try
             {
                 if (_selectedAdapter is null)
@@ -405,6 +409,8 @@ public sealed class MonitoringService : IDisposable
                 }
                 _downloadRate = delta is null ? 0 : delta.DownloadBytes / delta.ElapsedSeconds;
                 _uploadRate = delta is null ? 0 : delta.UploadBytes / delta.ElapsedSeconds;
+                sampledAtUtc = current.Timestamp.ToUniversalTime();
+                measured = true;
                 if (delta is not null) RecordTrafficPeaks(today, _downloadRate, _uploadRate);
                 if (!pendingPhysicalChange && _sessions.Current is { } session
                     && latest.Network is { } network && network.NetworkType == session.NetworkType
@@ -416,6 +422,13 @@ public sealed class MonitoringService : IDisposable
                 PersistWhenDue();
             }
             catch (Exception exception) { ReportUsageFailure(exception); }
+            finally
+            {
+                // Retain the same accepted raw rates even with no dashboard window.
+                // Capture failures are real gaps; UI visibility never enters this path.
+                _trafficTimeline.Record(sampledAtUtc ?? _timeProvider.GetUtcNow(), _downloadRate, _uploadRate,
+                    measured, _selectedAdapter?.Id);
+            }
         }
     }
 

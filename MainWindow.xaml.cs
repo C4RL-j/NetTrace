@@ -19,6 +19,7 @@ public partial class MainWindow : Window
     private IWindowsStartupRegistration? _startupRegistration;
     private volatile bool _closed;
     private bool _loadingAdapters = true;
+    private DashboardUsageRange _selectedDashboardUsageRange = DashboardUsageRange.Today;
     private bool _chartInitialized;
     private IcmpProbeResult? _lastChartMeasurement;
     private IcmpQualitySummary? _qualitySummary;
@@ -147,7 +148,8 @@ public partial class MainWindow : Window
 
     private void DashboardContent_OnVisibilityChanged(object sender, DependencyPropertyChangedEventArgs args)
     {
-        if (!_closed && DashboardContent.IsVisible) RefreshDashboard();
+        if (_closed) return;
+        if (DashboardContent.IsVisible) RefreshDashboard();
     }
 
     private void SettingsContent_OnVisibilityChanged(object sender, DependencyPropertyChangedEventArgs args)
@@ -349,13 +351,17 @@ public partial class MainWindow : Window
         AssignProfileButton.Visibility = state.CanAssign ? Visibility.Visible : Visibility.Collapsed;
         SessionMessageText.Text = snapshot.PersistenceMessage ?? "";
         RefreshCurrentSession(snapshot);
+        if (IsVisible && DashboardContent.IsVisible && WindowState != WindowState.Minimized)
+            DashboardTrafficChart.UpdateSamples(snapshot.TrafficSamples);
         if (!DashboardTab.IsSelected) return;
+        RefreshDashboardUsageSelector();
         try
         {
             var totals = _monitoring.GetUsageTotals();
-            UpdateUsageCard(TodayTotalText, TodayBreakdownText, totals.Today.Downloaded, totals.Today.Uploaded);
-            UpdateUsageCard(WeekTotalText, WeekBreakdownText, totals.Week.Downloaded, totals.Week.Uploaded);
-            UpdateUsageCard(MonthTotalText, MonthBreakdownText, totals.Month.Downloaded, totals.Month.Uploaded);
+            var usage = DashboardUsagePresentation.Create(_selectedDashboardUsageRange, totals.Today, totals.Week, totals.Month);
+            DashboardUsageTitleText.Text = usage.TitleText;
+            DashboardUsageTotalText.Text = usage.TotalText;
+            DashboardUsageBreakdownText.Text = usage.BreakdownText;
         }
         catch (Exception exception)
         {
@@ -518,9 +524,27 @@ public partial class MainWindow : Window
 
     private Brush StatusBrush(string resourceKey) => (Brush)FindResource(resourceKey);
 
-    private static void UpdateUsageCard(TextBlock total, TextBlock breakdown, long downloaded, long uploaded)
+    private void RefreshDashboardUsageSelector()
     {
-        total.Text = ByteFormatter.Format(downloaded + uploaded);
-        breakdown.Text = $"↓ {ByteFormatter.Format(downloaded)}   ↑ {ByteFormatter.Format(uploaded)}";
+        DashboardUsageRangeText.Text = _selectedDashboardUsageRange switch
+        {
+            DashboardUsageRange.Today => "TODAY",
+            DashboardUsageRange.SevenDays => "LAST 7 DAYS",
+            _ => "LAST 30 DAYS"
+        };
+        var next = DashboardUsagePresentation.NextRange(_selectedDashboardUsageRange) switch
+        {
+            DashboardUsageRange.Today => "Today",
+            DashboardUsageRange.SevenDays => "Last 7 Days",
+            _ => "Last 30 Days"
+        };
+        DashboardUsageSelectorButton.ToolTip = $"Next: {next}";
+    }
+
+    private void DashboardUsageSelector_OnClick(object sender, RoutedEventArgs args)
+    {
+        if (_loadingAdapters || _closed) return;
+        _selectedDashboardUsageRange = DashboardUsagePresentation.NextRange(_selectedDashboardUsageRange);
+        RefreshDashboard();
     }
 }
