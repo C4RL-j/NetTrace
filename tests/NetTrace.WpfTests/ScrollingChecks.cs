@@ -24,7 +24,7 @@ internal static class ScrollingChecks
             vpnVerifier: new(new VpnDetectionService(new NoTunnel()), new NoRoutes()),
             icmpMonitor: new(new OwnedPing()), reachabilityMonitor: TestReachability.Create());
         using var radio = new WifiRadioService(new NoRadio());
-        var shell = new MainWindow(monitoring, new OwnedStartup(), radio)
+        var shell = new MainWindow(monitoring, new OwnedStartup(), radio, new AppUsageTodayChecks.UnavailableClient())
             { ShowActivated = false, ShowInTaskbar = false, Opacity = 0 };
         Window? host = null;
         try
@@ -36,7 +36,7 @@ internal static class ScrollingChecks
                 "NetTrace opens at 760 DIP wide and retains its minimum size and normal resizing");
             shell.Height = 600;
             var style = (Style)shell.FindResource("PageScrollViewerStyle");
-            var pages = new[] { "Dashboard", "Health", "Connections", "History", "Settings" };
+            var pages = new[] { "Dashboard", "Health", "Connections", "History", "AppUsage", "Settings" };
             var pagesValid = true;
             foreach (var name in pages)
             {
@@ -49,7 +49,7 @@ internal static class ScrollingChecks
                     page.VerticalScrollBarVisibility == ScrollBarVisibility.Auto &&
                     page.HorizontalScrollBarVisibility == ScrollBarVisibility.Disabled && page.ScrollableWidth < 0.01;
             }
-            check(pagesValid, "All five pages use the compact scrolling style without horizontal overflow at 760x600");
+            check(pagesValid, "All six pages use the compact scrolling style without horizontal overflow at 760x600");
 
             var content = new StackPanel();
             for (var i = 0; i < 100; i++)

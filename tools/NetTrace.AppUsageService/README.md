@@ -2,11 +2,12 @@
 
 This is a separate, headless Windows Service prototype. It owns metadata-only
 Kernel-Network ETW capture, in-memory application counters and local named-pipe
-snapshots. Normal NetTrace has no dependency on the service: its UI, startup,
-monitoring, physical adapter accounting, desktop database and permissions are
-unchanged. No App Usage production page is added. The explicit development
-service now persists qualifying event deltas through the separate 004.1 daily
-application store.
+snapshots. App Usage 004.4.1 adds a Today-only page to normal NetTrace through
+authenticated read-only IPC. Normal launch remains available without this
+service and calmly displays `App tracking unavailable.` on that page. Startup,
+monitoring, physical adapter accounting, desktop database and permissions remain
+unchanged. The explicit development service persists qualifying event deltas
+through the separate 004.1 daily application store.
 
 App Usage 004.2 checkpoints pending non-loopback event bytes every five seconds
 in one storage batch. RX is download and TX is upload. The pending key combines
@@ -73,6 +74,22 @@ against controlled fixtures. The worker removes the owned registration and entir
 isolated data root in `finally`, after verifying SCM 1060, no collector process,
 no exact owned ETW session and no stale pipe. JSON evidence remains in the ignored
 `bin/AppUsage0043Verification` folder; no validation SQLite copy is retained.
+
+The Today-page live workflow uses the same protected temporary-service pattern:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\tools\NetTrace.AppUsageService\Validate-TodayPage.ps1
+```
+
+It runs a visible, normal-token real WPF page with the production Today IPC
+client, checks exact summary/row binding and naturally growing totals, then
+verifies an eight-second hidden-page window starts no Today queries and returning
+refreshes the page. Compact 760×600 renders and scrolling checks accompany the
+typed evidence. Physical-monitoring fixtures are isolated; no intentional traffic
+is generated. Only the temporary SCM worker requests UAC. It removes its exact
+owned service, session and isolated data before a final unavailable-page probe.
+See [004.4.1 validation](VALIDATION00441.md) for validation-only icon overrides and
+the evidence boundaries.
 
 Run the separate 004.2 workflow from a **normal terminal**:
 

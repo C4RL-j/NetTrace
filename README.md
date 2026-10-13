@@ -175,7 +175,7 @@ Windows runs the entry when this user signs in. Keep the executable at a stable 
 
 ## Top navigation (UI Foundation 001)
 
-The existing dark window now has five pages, with a horizontal navigation bar and
+The existing dark window now has six pages, with a horizontal navigation bar and
 an underline on the active page:
 
 | Page | Contents |
@@ -184,12 +184,14 @@ an underline on the active page:
 | Health | Internet reachability, latest ICMP measurements, recent ICMP quality, latency/jitter chart and packet-loss history |
 | Connections | Current connection, monitored adapter/details, Profiles and Assign profile |
 | History | Today's connection totals, 7D/30D daily data usage, newest four sessions and View full history |
+| App Usage | Today's tracked applications, cumulative download/upload and logical usage from the service |
 | Settings | Start NetTrace with Windows and the local database location |
 
 WPF's native tab control owns page selection and retains each page's controls.
 Navigation does not create, restart or reset monitoring, counters or sessions.
-The window still has one refresh timer; usage-total queries run only while Dashboard
-is selected. Settings rereads the actual startup registration when opened.
+The window still has one refresh timer; physical usage-total queries run only while
+Dashboard is selected. App Usage reads Today through IPC every four seconds while
+visible. Settings rereads the actual startup registration when opened.
 Closing the window and reopening it through the tray keeps the existing monitoring
 service; a recreated window starts on Dashboard.
 
@@ -703,3 +705,30 @@ powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File tools/NetTrace.App
 The explicit validation uses protected isolated storage and passive traffic,
 checks normal-client reads and service restart recovery, then removes its owned
 service, ETW session, pipe and database. See [004.3 validation](tools/NetTrace.AppUsageService/VALIDATION0043.md).
+
+## App Usage 004.4.1 — Today page
+
+**App Usage** appears between History and Settings. The native dark page shows
+Today's tracked app count, download, upload and logical total, followed by the
+ordered application rows returned by service protocol 2. Existing cumulative
+byte formatting is shared with the other pages. System, Unknown and NetMod rows
+remain ordinary logical usage; these totals do not reconcile Dashboard usage.
+
+The existing view timer refreshes Today approximately every four seconds while
+the page is visible, with one request at a time. Opening or returning to the page
+shows loading and starts a fresh asynchronous read. Navigation away, window hide,
+minimize and close cancel presentation work and discard late results. Empty
+history shows **No app network usage recorded today.**; an absent service,
+incompatible protocol or unavailable storage shows **App tracking unavailable.**
+
+The desktop client uses only authenticated IPC for this page. Normal launch
+requires no App Usage service and never installs, starts or elevates one. There
+are no range selectors, charts or application icons in this phase.
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests -- --app-usage-today-checks
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File tools/NetTrace.AppUsageService/Validate-TodayPage.ps1
+```
+
+See [Today page validation](tools/NetTrace.AppUsageService/VALIDATION00441.md) for
+the explicit temporary-service workflow and its cleanup evidence.

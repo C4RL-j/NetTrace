@@ -762,6 +762,92 @@
                 </ScrollViewer>
             </TabItem>
 
+            <TabItem x:Name="AppUsageTab" Header="App Usage">
+                <ScrollViewer x:Name="AppUsageScrollViewer" Style="{StaticResource PageScrollViewerStyle}">
+                    <StackPanel x:Name="AppUsageContent">
+                        <Border Style="{StaticResource CardStyle}">
+                            <StackPanel>
+                                <TextBlock Text="APP USAGE" Style="{StaticResource MutedText}"/>
+                                <TextBlock Text="See which applications are using network traffic."
+                                           Style="{StaticResource MutedText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                                <TextBlock Text="TODAY" Style="{StaticResource MutedText}" Margin="0,16,0,0"/>
+                                <TextBlock x:Name="AppUsageStateText" Text="Loading app usage..."
+                                           TextWrapping="Wrap" Margin="0,12,0,0"/>
+                                <TextBlock x:Name="AppUsageDetailText" Text="" Visibility="Collapsed"
+                                           Style="{StaticResource MutedText}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                <UniformGrid x:Name="AppUsageSummaryPanel" Columns="4" Visibility="Collapsed" Margin="0,8,0,0">
+                                    <StackPanel Margin="0,0,12,0">
+                                        <TextBlock Text="Tracked apps" Style="{StaticResource MutedText}"/>
+                                        <TextBlock x:Name="AppUsageTrackedAppsText" Text="0" FontSize="20" FontWeight="SemiBold"
+                                                   TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,12,0">
+                                        <TextBlock Text="Download" Style="{StaticResource MutedText}"/>
+                                        <TextBlock x:Name="AppUsageDownloadText" Text="0 B" FontSize="20" FontWeight="SemiBold"
+                                                   TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,12,0">
+                                        <TextBlock Text="Upload" Style="{StaticResource MutedText}"/>
+                                        <TextBlock x:Name="AppUsageUploadText" Text="0 B" FontSize="20" FontWeight="SemiBold"
+                                                   TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                    </StackPanel>
+                                    <StackPanel>
+                                        <TextBlock Text="Logical total" Style="{StaticResource MutedText}"/>
+                                        <TextBlock x:Name="AppUsageLogicalTotalText" Text="0 B" FontSize="20" FontWeight="SemiBold"
+                                                   TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                    </StackPanel>
+                                </UniformGrid>
+                            </StackPanel>
+                        </Border>
+                        <Border x:Name="AppUsageApplicationsPanel" Style="{StaticResource CardStyle}" Visibility="Collapsed" Margin="0,14,0,0">
+                            <StackPanel>
+                                <TextBlock Text="TOP APPLICATIONS" Style="{StaticResource MutedText}"/>
+                                <ItemsControl x:Name="AppUsageApplications" Margin="0,4,0,0">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Padding="0,12">
+                                                <StackPanel>
+                                                    <TextBlock Text="{Binding DisplayName}" ToolTip="{Binding DisplayName}"
+                                                               FontSize="15" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                                                    <TextBlock Text="{Binding ExecutableName}" ToolTip="{Binding ExecutableName}"
+                                                               TextTrimming="CharacterEllipsis" Margin="0,2,0,0">
+                                                        <TextBlock.Style>
+                                                            <Style TargetType="TextBlock" BasedOn="{StaticResource MutedText}">
+                                                                <Setter Property="FontSize" Value="12"/>
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding HasExecutableName}" Value="False">
+                                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </TextBlock.Style>
+                                                    </TextBlock>
+                                                    <UniformGrid Columns="3" Margin="0,8,0,0">
+                                                        <StackPanel Margin="0,0,12,0">
+                                                            <TextBlock Text="Download" Style="{StaticResource MutedText}" FontSize="11"/>
+                                                            <TextBlock Text="{Binding DownloadText}" FontSize="15" TextWrapping="Wrap" Margin="0,2,0,0"/>
+                                                        </StackPanel>
+                                                        <StackPanel Margin="0,0,12,0">
+                                                            <TextBlock Text="Upload" Style="{StaticResource MutedText}" FontSize="11"/>
+                                                            <TextBlock Text="{Binding UploadText}" FontSize="15" TextWrapping="Wrap" Margin="0,2,0,0"/>
+                                                        </StackPanel>
+                                                        <StackPanel>
+                                                            <TextBlock Text="Total" Style="{StaticResource MutedText}" FontSize="11"/>
+                                                            <TextBlock Text="{Binding TotalText}" FontSize="15" FontWeight="SemiBold"
+                                                                       TextWrapping="Wrap" Margin="0,2,0,0"/>
+                                                        </StackPanel>
+                                                    </UniformGrid>
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
             <TabItem x:Name="SettingsTab" Header="Settings">
                 <ScrollViewer Style="{StaticResource PageScrollViewerStyle}">
                     <StackPanel x:Name="SettingsContent">

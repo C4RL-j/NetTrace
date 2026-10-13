@@ -37,6 +37,10 @@ internal static class Program
             return RunDashboardSpeedTarget();
         if (args.Length > 0 && args[0] == "--dashboard-live-validation")
             return PassiveDashboardValidation.Run();
+        if (args.Length > 0 && args[0] == "--app-usage-today-checks")
+            return RunAppUsageTodayTarget();
+        if (args.Length > 0 && args[0] == "--app-usage-today-live-validation")
+            return AppUsageTodayLiveValidation.Run(args.Skip(1).ToArray());
         if (args.Length > 0 && args[0] == "--passive-wifi-validation")
             return PassiveWifiValidation.Run();
         if (args.Length > 0 && args[0] == "--passive-vpn-validation")
@@ -307,6 +311,7 @@ internal static class Program
             HistoryOverviewChecks.Run(ownedRoot, Check);
             HistoryUsageChecks.Run(ownedRoot, Check);
             DashboardSpeedChecks.Run(ownedRoot, Check);
+            AppUsageTodayChecks.Run(ownedRoot, Check);
             Console.WriteLine($"{_passed}/{_passed} WPF integration checks passed. Isolated data: {ownedRoot}");
             return 0;
         }
@@ -405,6 +410,24 @@ internal static class Program
         catch (Exception exception)
         {
             Console.Error.WriteLine($"FAIL after {_passed} targeted Dashboard speed checks: {exception}");
+            return 1;
+        }
+        finally { Application.Current?.Shutdown(); }
+    }
+
+    private static int RunAppUsageTodayTarget()
+    {
+        var ownedRoot = System.IO.Path.Combine(AppContext.BaseDirectory, "owned-app-usage-today-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            _ = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+            AppUsageTodayChecks.Run(ownedRoot, Check);
+            Console.WriteLine($"{_passed}/{_passed} targeted App Usage Today checks passed. Isolated data: {ownedRoot}");
+            return 0;
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"FAIL after {_passed} targeted App Usage Today checks: {exception}");
             return 1;
         }
         finally { Application.Current?.Shutdown(); }

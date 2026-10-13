@@ -40,7 +40,7 @@ internal static class NavigationChecks
             dashboardFactory: service =>
             {
                 windowsCreated++;
-                return new MainWindow(service, startup)
+                return new MainWindow(service, startup, appUsageClient: new AppUsageTodayChecks.UnavailableClient())
                     { ShowActivated = false, ShowInTaskbar = false, Opacity = 0 };
             }, shutdownAction: () => exits++);
 
@@ -52,12 +52,12 @@ internal static class NavigationChecks
         window.RefreshDashboard();
         Pump();
         var navigation = Control<TabControl>(window, "MainNavigation");
-        var names = new[] { "Dashboard", "Health", "Connections", "History", "Settings" };
-        var tabs = names.Select(name => Control<TabItem>(window, name + "Tab")).ToArray();
+        var names = new[] { "Dashboard", "Health", "Connections", "History", "App Usage", "Settings" };
+        var tabs = names.Select(name => Control<TabItem>(window, name.Replace(" ", "", StringComparison.Ordinal) + "Tab")).ToArray();
         var content = tabs.Select(tab => tab.Content).ToArray();
 
-        check(navigation.Items.Count == 5 && tabs.Select(tab => tab.Header?.ToString()).SequenceEqual(names),
-            "Navigation exposes Dashboard, Health, Connections, History and Settings in the expected order");
+        check(navigation.Items.Count == 6 && tabs.Select(tab => tab.Header?.ToString()).SequenceEqual(names),
+            "Navigation exposes Dashboard, Health, Connections, History, App Usage and Settings in the expected order");
         check(ReferenceEquals(navigation.SelectedItem, tabs[0]) && tabs[0].IsSelected,
             "A newly created dashboard defaults to the Dashboard page");
 
@@ -88,8 +88,8 @@ internal static class NavigationChecks
             "Connections retains adapter selection, profile management, assignment and local link-rate details");
         check(OnPage(tabs[3], Control<Button>(window, "ViewHistoryButton")),
             "History retains the existing connection-history action");
-        check(OnPage(tabs[4], Control<CheckBox>(window, "StartWithWindowsCheckBox")) &&
-            OnPage(tabs[4], Control<TextBlock>(window, "DatabasePathText")),
+        check(OnPage(tabs[5], Control<CheckBox>(window, "StartWithWindowsCheckBox")) &&
+            OnPage(tabs[5], Control<TextBlock>(window, "DatabasePathText")),
             "Settings contains startup registration and the existing local database path");
         check(OnPage(tabs[1], Control<StackPanel>(window, "HealthContent")) &&
             new[] { "InternetReachabilityText", "IcmpQualityText", "IcmpTargetText", "IcmpLatencyText", "IcmpJitterText", "IcmpPacketLossText", "IcmpRepliesText", "IcmpLastSampleText" }
@@ -143,7 +143,7 @@ internal static class NavigationChecks
         check(startup.EnableCalls == 0 && startup.DisableCalls == 0 && !startup.Enabled,
             "Visiting Settings reads startup state without changing registration");
 
-        navigation.SelectedItem = tabs[4];
+        navigation.SelectedItem = tabs[5];
         var checkbox = Control<CheckBox>(window, "StartWithWindowsCheckBox");
         checkbox.IsChecked = true;
         checkbox.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
@@ -155,12 +155,12 @@ internal static class NavigationChecks
             "The Settings startup checkbox retains immediate disable behavior");
         navigation.SelectedItem = tabs[0];
         startup.Enabled = true; // Simulate another settings UI changing registration.
-        navigation.SelectedItem = tabs[4];
+        navigation.SelectedItem = tabs[5];
         Pump();
         var externalEnableVisible = checkbox.IsChecked == true;
         navigation.SelectedItem = tabs[0];
         startup.Enabled = false;
-        navigation.SelectedItem = tabs[4];
+        navigation.SelectedItem = tabs[5];
         Pump();
         check(externalEnableVisible && checkbox.IsChecked == false && startup.EnableCalls == 1 && startup.DisableCalls == 1,
             "Returning to Settings reads externally changed startup state without writing it back");

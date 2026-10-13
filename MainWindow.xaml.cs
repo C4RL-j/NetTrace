@@ -25,13 +25,14 @@ public partial class MainWindow : Window
     private InternetReachabilityResult? _lastReachabilityMeasurement;
 
     public MainWindow(MonitoringService monitoring, IWindowsStartupRegistration? startupRegistration = null,
-        WifiRadioService? wifiRadio = null)
+        WifiRadioService? wifiRadio = null, IAppUsageTodayClient? appUsageClient = null)
     {
         ArgumentNullException.ThrowIfNull(monitoring);
         _monitoring = monitoring;
         _wifiRadio = wifiRadio ?? new WifiRadioService();
         _startupRegistration = startupRegistration;
         InitializeComponent();
+        InitializeAppUsageToday(appUsageClient);
         _loadingAdapters = false;
         HistoryUsage7DButton.IsChecked = monitoring.SelectedHistoryUsageRange == HistoryUsageRange.SevenDays;
         HistoryUsage30DButton.IsChecked = monitoring.SelectedHistoryUsageRange == HistoryUsageRange.ThirtyDays;
@@ -63,10 +64,12 @@ public partial class MainWindow : Window
         if (WindowState == WindowState.Minimized)
         {
             _timer.Stop();
+            UpdateAppUsageVisibility();
             InvalidateWifiRadio();
         }
         else if (IsVisible)
         {
+            UpdateAppUsageVisibility();
             RefreshDashboard();
             RefreshHistoryOverview();
             if (HealthContent.IsVisible)
@@ -117,6 +120,7 @@ public partial class MainWindow : Window
     private void OnVisibilityChanged(object sender, DependencyPropertyChangedEventArgs args)
     {
         if (_closed) return;
+        UpdateAppUsageVisibility();
         if (IsVisible && WindowState != WindowState.Minimized)
         {
             RefreshDashboard();
@@ -265,6 +269,7 @@ public partial class MainWindow : Window
     private void OnClosed(object? sender, EventArgs args)
     {
         _closed = true;
+        _ = DisposeAppUsageTodayAsync();
         _timer.Stop();
         _timer.Tick -= Timer_OnTick;
         _monitoring.Changed -= Monitoring_OnChanged;
@@ -294,7 +299,11 @@ public partial class MainWindow : Window
         }));
     }
 
-    private void Timer_OnTick(object? sender, EventArgs args) => RefreshDashboard();
+    private void Timer_OnTick(object? sender, EventArgs args)
+    {
+        RefreshDashboard();
+        _appUsageToday?.Tick();
+    }
 
     public void RefreshDashboard()
     {

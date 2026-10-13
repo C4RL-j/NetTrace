@@ -311,3 +311,34 @@ NetTrace database. It renders exact observed raw pairs in a separate empty owned
 UI store and reports which adaptive traffic conditions occurred. If ordinary
 background traffic never reaches MB/s, that live condition is reported as
 unavailable; deterministic MB/s coverage remains part of the owned WPF checks.
+
+App Usage 004.4.1 adds focused Today presentation and WPF checks in
+`AppUsageTodayChecks.cs`, included in the full suite:
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests/NetTrace.WpfTests.csproj -- --app-usage-today-checks
+```
+
+Typed fake IPC responses cover the Today summaries and service ordering, normal
+System/Unknown/NetMod rows, optional executable names, existing cumulative byte
+formatting, loading, empty and safe unavailable states. Cancellation-resistant
+controlled requests and an owned clock verify four-second scheduling, dispatcher
+responsiveness, no overlapping requests, generation discard, rapid navigation,
+failure recovery and disposal. Actual six-page navigation, hide/minimize/restore
+and close behavior retain the existing single UI timer. Long application metadata
+and GB totals render at 760×600 with ellipsis and vertical access to the final row;
+synthetic screenshots are saved under `app-usage-today-previews`. The six-page
+navigation and scrolling groups also inject unavailable Today clients. Ordinary
+tests never require or install the App Usage Windows Service.
+
+The explicitly requested live target is separate from the ordinary suite:
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests/NetTrace.WpfTests.csproj -- --app-usage-today-live-validation --output <json-path> --screenshots <directory>
+```
+
+It uses the normal authenticated IPC client against an already-running temporary
+development service. Service creation and cleanup belong to the separate temporary
+validation script; the WPF target never installs or starts a service and never
+opens the App Usage database directly. `--absent` performs a short unavailable
+page check after that service has been removed.
