@@ -1,7 +1,9 @@
 using AppUsageStorage;
 using Microsoft.Data.Sqlite;
 
-var tests = StorageTests.Cases.Concat(SchemaFailureTests.Cases).ToArray();
+var tests = (args.Contains("--clear-history-checks", StringComparer.Ordinal)
+    ? ClearHistoryTests.Cases
+    : StorageTests.Cases.Concat(SchemaFailureTests.Cases).Concat(ClearHistoryTests.Cases)).ToArray();
 var failures = 0;
 foreach (var (name, run) in tests)
 {

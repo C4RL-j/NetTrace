@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Threading;
 using AppUsageIpc;
@@ -182,7 +183,8 @@ internal static class AppUsageTodayChecks
         var previews = System.IO.Path.Combine(root, "app-usage-today-previews");
         using var monitoring = HistoryOverviewChecks.CreateMonitoring(new UsageStore(System.IO.Path.Combine(root, "app-usage-today")));
         var client = new ControlledClient();
-        var window = new MainWindow(monitoring, new OwnedStartup(), appUsageClient: client)
+        var window = new MainWindow(monitoring, new OwnedStartup(), appUsageClient: client,
+            appTrackingSetupService: new AppUsageSetupChecks.RunningSetupService())
             { ShowActivated = false, ShowInTaskbar = false, Opacity = 0, Width = 760, Height = 600 };
         try
         {
@@ -223,9 +225,11 @@ internal static class AppUsageTodayChecks
             check(rowText.Any(text => text.Text == "System") && rowText.Any(text => text.Text == "Unknown / Unattributed") &&
                 rowText.Any(text => text.Text == "NetMod"), "System, Unknown and NetMod all render normally on the actual Today page");
             var pageText = Descendants(Control<FrameworkElement>(window, "AppUsageContent")).OfType<TextBlock>().Select(text => text.Text).ToArray();
-            check(pageText.Contains("APP USAGE") && pageText.Contains("TODAY") && pageText.Contains("TOP APPLICATIONS") &&
-                !Descendants(Control<FrameworkElement>(window, "AppUsageContent")).OfType<Button>().Any(),
-                "App Usage uses the requested header, static Today label and application section without range switches or action buttons");
+            check(pageText.Contains("APP USAGE") && pageText.Contains("TOP APPLICATIONS") &&
+                Control<ToggleButton>(window, "AppUsageTodayButton").IsChecked == true &&
+                Control<ToggleButton>(window, "AppUsage7DButton").IsChecked == false &&
+                Control<ToggleButton>(window, "AppUsage30DButton").IsChecked == false,
+                "App Usage retains its header and application section with Today selected by default");
             check(!new[] { "AppUsageDownloadText", "AppUsageUploadText", "AppUsageLogicalTotalText" }.Select(name => Control<TextBlock>(window, name).Foreground)
                     .Any(brush => ReferenceEquals(brush, window.FindResource("StatusPositiveBrush")) || ReferenceEquals(brush, window.FindResource("StatusNegativeBrush"))),
                 "Usage measurements use normal technical styling without good or bad status colors");
@@ -388,7 +392,7 @@ internal static class AppUsageTodayChecks
 
     internal sealed class UnavailableClient : IAppUsageTodayClient
     {
-        public Task<IpcResult<AppUsageQueryResult>> GetTodayAsync(CancellationToken cancellationToken) =>
+        public Task<IpcResult<AppUsageQueryResult>> GetAppUsageRangeAsync(AppUsageRange range, CancellationToken cancellationToken) =>
             Task.FromResult(new IpcResult<AppUsageQueryResult>(IpcState.CollectorUnavailable, null));
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
@@ -404,7 +408,7 @@ internal static class AppUsageTodayChecks
         public int Active { get { lock (_gate) return _active; } }
         public int MaxActive { get { lock (_gate) return _maxActive; } }
         public bool Disposed { get { lock (_gate) return _disposed; } }
-        public Task<IpcResult<AppUsageQueryResult>> GetTodayAsync(CancellationToken cancellationToken)
+        public Task<IpcResult<AppUsageQueryResult>> GetAppUsageRangeAsync(AppUsageRange range, CancellationToken cancellationToken)
         {
             var completion = new TaskCompletionSource<IpcResult<AppUsageQueryResult>>(TaskCreationOptions.RunContinuationsAsynchronously);
             lock (_gate)

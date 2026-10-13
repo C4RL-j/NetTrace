@@ -45,8 +45,10 @@ internal static class AppUsageTodayLiveValidation
             _ = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
             var owned = Path.Combine(Path.GetDirectoryName(output)!, "OwnedPhysicalShell");
             monitoring = HistoryOverviewChecks.CreateMonitoring(new UsageStore(owned));
-            client = new ObservedTodayClient(new AppUsageTodayClient());
-            window = new MainWindow(monitoring, appUsageClient: client)
+            client = new ObservedTodayClient(new AppUsageTodayClient(ServicePipeSecurity.DefaultServiceName));
+            window = new MainWindow(monitoring, appUsageClient: client,
+                appTrackingSetupService: new AppTrackingSetupService(
+                    stateReader: new WindowsAppTrackingServiceStateReader(ServicePipeSecurity.DefaultServiceName)))
             {
                 Width = 760, Height = 600, ShowActivated = true,
                 WindowStartupLocation = WindowStartupLocation.CenterScreen
@@ -58,7 +60,7 @@ internal static class AppUsageTodayLiveValidation
 
             if (absent)
             {
-                Wait(() => Text(window, "AppUsageStateText") == "App tracking unavailable.", TimeSpan.FromSeconds(12));
+                Wait(() => Text(window, "AppUsageStateText") == "App tracking is not installed.", TimeSpan.FromSeconds(12));
                 report.UnavailableDisplayed = true;
                 report.QueryCount = client.QueryCount;
                 report.Success = true;
@@ -245,7 +247,7 @@ internal static class AppUsageTodayLiveValidation
         public int CompletedCount => Volatile.Read(ref completed);
         public int MaximumConcurrent => Volatile.Read(ref maximum);
         public AppUsageQueryResult? LatestAvailable => Volatile.Read(ref latest);
-        public async Task<IpcResult<AppUsageQueryResult>> GetTodayAsync(CancellationToken cancellationToken)
+        public async Task<IpcResult<AppUsageQueryResult>> GetAppUsageRangeAsync(AppUsageRange range, CancellationToken cancellationToken)
         {
             lock (starts) starts.Add(new(clock.Elapsed.TotalSeconds, cancellationToken.IsCancellationRequested));
             Interlocked.Increment(ref queries);
@@ -253,7 +255,7 @@ internal static class AppUsageTodayLiveValidation
             if (concurrency > maximum) Interlocked.Exchange(ref maximum, concurrency);
             try
             {
-                var result = await inner.GetTodayAsync(cancellationToken).ConfigureAwait(false);
+                var result = await inner.GetAppUsageRangeAsync(range, cancellationToken).ConfigureAwait(false);
                 if (result.State == IpcState.Connected && result.Value?.Availability == AppUsageAvailability.Available)
                     Volatile.Write(ref latest, result.Value);
                 Interlocked.Increment(ref completed);

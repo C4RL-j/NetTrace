@@ -161,7 +161,7 @@ Normal shutdown stops and joins the VPN observer, flushes pending usage and clos
 
 Closing the dashboard destroys that view and stops its refresh timer. `MonitoringService` continues sampling, batched persistence, physical sessions, profile recognition and VPN tracking without any dashboard or WPF dispatcher. The tray menu provides **Open NetTrace** and **Exit**; double-click also opens NetTrace. Open recreates a dashboard from the current service state, or restores the existing window. App totals, selected adapter, sampling baseline and current session IDs survive dashboard recreation.
 
-The application explicitly shuts down only on tray Exit or Windows session ending. Exit stops and joins native observers, flushes pending usage, closes VPN/physical intervals with their existing shutdown behavior, disposes the tray icon/power listener and releases database ownership. Background mode performs no dashboard refresh or history-total rendering queries. The tray uses the NetTrace globe icon and the standard Windows menu; no Windows service is installed.
+The application explicitly shuts down only on tray Exit or Windows session ending. Exit stops and joins native observers, flushes pending usage, closes VPN/physical intervals with their existing shutdown behavior, disposes the tray icon/power listener and releases database ownership. Background mode performs no dashboard refresh or history-total rendering queries. The tray uses the NetTrace globe icon and the standard Windows menu. Tray startup does not install a Windows service; App Usage installation is a separate explicit administrative operation.
 
 ## Windows startup and background launch (Task 005B)
 
@@ -184,14 +184,15 @@ an underline on the active page:
 | Health | Internet reachability, latest ICMP measurements, recent ICMP quality, latency/jitter chart and packet-loss history |
 | Connections | Current connection, monitored adapter/details, Profiles and Assign profile |
 | History | Today's connection totals, 7D/30D daily data usage, newest four sessions and View full history |
-| App Usage | Today's tracked applications, cumulative download/upload and logical usage from the service |
+| App Usage | Today/7D/30D tracked applications, cumulative download/upload and logical usage from the service |
 | Settings | Start NetTrace with Windows and the local database location |
 
 WPF's native tab control owns page selection and retains each page's controls.
 Navigation does not create, restart or reset monitoring, counters or sessions.
 The window still has one refresh timer; physical usage-total queries run only while
-Dashboard is selected. App Usage reads Today through IPC every four seconds while
-visible. Settings rereads the actual startup registration when opened.
+Dashboard is selected. App Usage reads its selected Today/7D/30D range through IPC
+every four seconds while visible. Settings rereads the actual startup registration
+when opened.
 Closing the window and reopening it through the tray keeps the existing monitoring
 service; a recreated window starts on Dashboard.
 
@@ -708,7 +709,7 @@ service, ETW session, pipe and database. See [004.3 validation](tools/NetTrace.A
 
 ## App Usage 004.4.1 — Today page
 
-**App Usage** appears between History and Settings. The native dark page shows
+**App Usage** appears between History and Settings. The original Today page shows
 Today's tracked app count, download, upload and logical total, followed by the
 ordered application rows returned by service protocol 2. Existing cumulative
 byte formatting is shared with the other pages. System, Unknown and NetMod rows
@@ -722,8 +723,8 @@ history shows **No app network usage recorded today.**; an absent service,
 incompatible protocol or unavailable storage shows **App tracking unavailable.**
 
 The desktop client uses only authenticated IPC for this page. Normal launch
-requires no App Usage service and never installs, starts or elevates one. There
-are no range selectors, charts or application icons in this phase.
+requires no App Usage service and never automatically installs or elevates one. Range
+selectors are added by 004.4.2 below; there are no charts or application icons.
 
 ```powershell
 dotnet run --project tests/NetTrace.WpfTests -- --app-usage-today-checks
@@ -732,3 +733,239 @@ powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File tools/NetTrace.App
 
 See [Today page validation](tools/NetTrace.AppUsageService/VALIDATION00441.md) for
 the explicit temporary-service workflow and its cleanup evidence.
+
+## App Usage 004.4.2 — Today / 7D / 30D range switching
+
+The App Usage page starts with **Today** selected. Selecting **7D** or **30D**
+immediately reads that range through the existing IPC v2 `GetAppUsageRange`
+operation. Navigation away and back, including reopening the window from the tray,
+retains the selected range during the app session. A new app session starts on
+Today. The existing four-second refresh reads the selected range only while
+the page is visible, with one request at a time. Switching ranges shows loading;
+cancelled or older responses cannot replace the newly selected range's data.
+
+The summary, application rows and unavailable state remain the same. An empty
+result uses the selected range's message:
+
+| Range | Empty message |
+| --- | --- |
+| Today | No app network usage recorded today. |
+| 7D | No app network usage recorded in the last 7 days. |
+| 30D | No app network usage recorded in the last 30 days. |
+
+Hidden pages send no refresh requests. The range controls use the existing dark
+radio-button style and do not affect History's separate range selection.
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests -- --app-usage-range-checks
+dotnet run --project tests/NetTrace.WpfTests -- --app-usage-today-checks
+```
+
+## App Usage 005.1 — Production service installation
+
+The separate [App Usage installer](tools/NetTrace.AppUsageInstaller/README.md)
+registers **NetTraceAppUsageCollector** as a LocalSystem Windows Service with
+**Automatic (Delayed Start)**. Build its service package and installer from a
+normal terminal:
+
+```powershell
+dotnet publish tools/NetTrace.AppUsageService -c Release -o bin/AppUsageService
+dotnet publish tools/NetTrace.AppUsageInstaller -c Release -o bin/AppUsageInstaller
+```
+
+Run installation or uninstall from an elevated terminal under the intended
+Windows account. The tool requires elevation and never requests it automatically:
+
+```powershell
+.\bin\AppUsageInstaller\NetTrace.AppUsageInstaller.exe install --source (Resolve-Path .\bin\AppUsageService).Path
+.\bin\AppUsageInstaller\NetTrace.AppUsageInstaller.exe uninstall
+```
+
+Installation stages protected versioned binaries under Program Files, validates
+ownership before updating an existing registration, configures SCM recovery and
+verifies authenticated IPC readiness. Failure recovery restarts after 5, 15 and
+60 seconds, then takes no further action until the failure count resets after
+24 hours without a failure. Failed updates restore the previous protected
+version when it can be verified safely.
+
+Normal NetTrace stays unelevated and continues using the existing Today/7D/30D
+page. Installation uses the separate administrative tool; 005.2 adds an explicit
+desktop action to launch that tool. Uninstall stops and removes
+the service, cleans only the exact owned ETW session, and preserves
+`%ProgramData%\NetTrace\app-usage.db` and its history. Protected binary versions
+are also retained. Persistence, five-second checkpoints, 90-day retention and
+IPC v2 query behavior are unchanged.
+
+See [005.1 validation](tools/NetTrace.AppUsageService/VALIDATION0051.md) for the
+explicit install/update, unelevated page recovery and database preservation checks.
+
+## App Usage 005.2 — App tracking setup
+
+When the production service is missing, App Usage displays **App tracking is not
+installed.**, **Track network usage by application in the background.**, and an
+**Install App Tracking** button. An installed but stopped service shows a concise
+stopped state without an install button. Running service queries keep their
+existing Today/7D/30D summary, application list and four-second visible-page refresh.
+
+Clicking **Install App Tracking** explicitly opens the existing production
+installer through Windows UAC. Only that installer child runs elevated; NetTrace
+keeps its normal permissions. The app never launches installation or requests
+elevation automatically at startup or when opening App Usage. A cancelled UAC
+prompt or failed install returns to the setup state with a short inline error.
+There is no uninstall action on the page.
+
+After successful installation and service start, the page reconnects automatically
+and loads the range already selected. Today/7D/30D selection survives installation,
+navigation and reconnect within the app session. Hidden pages keep sending no
+refresh requests. The existing installer and service packages are included beneath
+`AppTracking/Installer` and `AppTracking/Service` in build and publish output.
+Service configuration, ETW capture, persistence, accounting and IPC v2 are unchanged.
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests -- --app-usage-setup-checks
+dotnet run --project tests/NetTrace.WpfTests -- --app-usage-range-checks
+dotnet run --project tests/NetTrace.WpfTests -- --app-usage-today-checks
+```
+
+## App Usage 005.3 — App tracking management in Settings
+
+Settings includes **APP TRACKING**, with the current production service status:
+**Running**, **Stopped** or **Not installed**. **Uninstall App Tracking** is
+available only for an installed service. Status is checked when Settings opens
+and approximately every four seconds while it is visible, using the existing
+window timer. No installer launches automatically.
+
+Uninstall first asks for confirmation, with **No** selected by default and a
+reminder that recorded usage history is kept. Confirming explicitly launches the
+existing installer with `uninstall` through UAC. Only that child runs elevated;
+NetTrace retains its normal permissions. Cancellation or failure shows a short
+inline error and allows retry once the current service status is known.
+
+Successful uninstall immediately changes Settings to **Not installed** and
+returns App Usage to its existing missing-service setup state without restarting
+NetTrace. The selected Today/7D/30D range survives; old query responses cannot
+restore removed service data, and hidden App Usage sends no refresh requests.
+The existing tool preserves `%ProgramData%\NetTrace\app-usage.db` and recorded
+history. This phase adds no Start/Stop controls; history clearing is described
+below. The 005.3 change leaves service configuration, ETW, persistence,
+accounting, IPC and installer semantics unchanged.
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests -- --app-tracking-settings-checks
+```
+
+See [005.3 validation](tools/NetTrace.AppUsageService/VALIDATION0053.md) for the
+owned UI checks, build commands and live-validation boundaries.
+
+## App Usage 005.4 — Clear App Usage History
+
+Settings → App Tracking includes **Clear App Usage History**. It becomes enabled
+when App Usage storage is present. If Windows protects the storage from a normal
+presence check, the confirmed elevated tool checks it before clearing. Known
+missing storage disables the action. Opening Settings never requests elevation.
+
+Confirmation defaults to No. A confirmed click elevates only the bundled
+installer's fixed `clear-history` command; NetTrace remains unelevated. The tool
+deletes only the recognized App Usage rows in a SQLite transaction, preserving
+the database, schema, unrelated files and service configuration. Dashboard,
+connection History and physical accounting retain their existing data.
+
+The running collector clears its old pending batches together with persisted
+history through a separate administrator-only management endpoint. Buffered
+pre-clear events cannot restore deleted usage. Tracking continues through the
+same collector, and new events accumulate through normal checkpoints. The
+read-only IPC v2 queries remain unchanged. Existing storage can also be cleared
+when tracking is stopped or uninstalled, using an exclusive storage lease and
+service-state checks without starting or stopping a collector.
+
+Success immediately invalidates old App Usage responses and clears its cached
+rows while preserving Today/7D/30D selection. A visible page refreshes its selected
+range immediately; a hidden page sends no requests. Cancellation or failure
+shows short retry feedback. A collector installed before 005.4 must first be
+updated with **Update App Tracking** in Settings or through the existing
+production installer; clear never upgrades or
+restarts it automatically.
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests -- --app-usage-history-clear-checks
+dotnet run --project tests/NetTrace.AppUsageStorageTests -- --clear-history-checks
+dotnet run --project tests/NetTrace.AppUsageCheckpointTests -- --clear-history-checks
+```
+
+See [005.4 validation](tools/NetTrace.AppUsageService/VALIDATION0054.md).
+
+## App Usage 005.5 — Installed collector update / repair
+
+Settings → App Tracking checks the installed production collector against the
+bundled service kit. Its status is **Running**, **Stopped**, **Update available**
+or **Not installed**. An installed collector with a different package version
+shows **Update App Tracking**. Matching versions keep the existing status and
+do not request an update.
+
+The production installer identifies a version by the SHA-256 of its complete,
+sorted service-file inventory, including PDBs. The desktop uses the same algorithm
+for the bundled kit and reads the installed identity from the owned SCM service
+command's protected `Versions/<hash>` path. This distinguishes builds whose
+assembly version remains `1.0.0.0`; it compares package equality rather than
+ordering content hashes. Status checks never open the protected database or
+request elevation.
+
+Only an explicit **Update App Tracking** click launches the existing bundled
+installer through UAC with its `install --source ... --client-sid ...` invocation.
+NetTrace remains unelevated. The installer switches the stopped owned service
+to its new staged protected binaries and restarts it, preserving `app-usage.db`, its
+schema and existing App Usage history. The production configuration remains
+Automatic (Delayed Start), LocalSystem, with the existing restart recovery
+policy. Its existing rollback protects a previously valid installation when
+an update fails. Cancelled UAC or failure shows a short inline error and allows
+retry; the application never installs or updates automatically at startup.
+
+After the updated service passes its running/IPC checks, App Usage reconnects
+automatically using the already selected Today/7D/30D range. Hidden App Usage
+continues sending zero refresh requests. Updating a collector installed before
+005.4 makes its clear-history management capability available without clearing
+history. Dashboard, connection History, physical accounting, ETW, storage and
+read-only IPC semantics are unchanged.
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests -- --app-tracking-update-checks
+dotnet run --project tests/NetTrace.WpfTests -- --app-tracking-settings-checks
+dotnet run --project tests/NetTrace.WpfTests -- --app-usage-range-checks
+```
+
+See [005.5 validation](tools/NetTrace.AppUsageService/VALIDATION0055.md) for
+verification results and the explicit update of the installed older collector.
+
+## App Usage 005.6 — Lifecycle hardening
+
+Closed or broken query connections now release their native pipe instances
+before reuse. This fixes a Running collector becoming unreachable after its
+three listeners were exhausted. Authentication, protocol, ETW, accounting and
+storage behavior remain unchanged.
+
+Real production update, SCM restart, forced SCM recovery and S3 sleep/resume
+are observed through the existing App Usage refresh timer with the selected
+range retained. History integrity, small non-loopback traffic, exact captured
+versus persisted deltas and owned process/session cleanup are verified separately.
+See [005.6 validation](tools/NetTrace.AppUsageService/VALIDATION0056.md) for the
+explicit elevated worker, unelevated UI, evidence and reboot limitations.
+
+## App Usage 006.1 — Application row icons and names
+
+App Usage rows show a small application icon alongside their title. Local
+executable icons load in the background and are cached by normalized,
+case-insensitive path for the app session, including failed extractions. A
+generic application icon appears immediately and remains when a path or icon is
+unavailable. System and Unknown / Unattributed have distinct fallback icons.
+
+The title uses the friendly display name when present, otherwise the executable
+name. The executable subtitle appears only when it differs from the title,
+ignoring case and surrounding spaces. Long names retain ellipsis and tooltips.
+Today, 7D and 30D retain their existing totals, selection and refresh behavior.
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests -- --app-usage-row-icon-checks
+```
+
+See [006.1 validation](tests/NetTrace.WpfTests/VALIDATION0061.md) for cache,
+native-icon and compact-window checks.

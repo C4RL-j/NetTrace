@@ -12,10 +12,12 @@ public sealed record ServicePipeSecurity(string AllowedClientSid,
     string ServiceName = ServicePipeSecurity.DefaultServiceName)
 {
     public const string DefaultServiceName = "NetTraceAppUsageCollectorDev";
+    public const string ProductionServiceName = "NetTraceAppUsageCollector";
     public static string DefaultPipeName => "NetTrace.AppUsage003.Service.938F90CEB2A34EF7A67BA5A43521EE77";
     public static void ValidateServiceName(string name)
     {
-        if (name != DefaultServiceName) throw new ArgumentException("Only the development collector service is supported.");
+        if (name is not (DefaultServiceName or ProductionServiceName))
+            throw new ArgumentException("Only the known NetTrace collector services are supported.");
     }
     public static string ServiceSid(string name)
     {

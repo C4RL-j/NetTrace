@@ -117,3 +117,16 @@ boundaries, fallback identities, nonnegative values, atomic rollback, retention,
 historical metadata and a many-app/many-day size fixture. Existing service and WPF
 tests continue to use their established fake sources and owned data. None of
 these commands installs the service or enables service-to-database live writes.
+
+App Usage 005.4 adds `OpenExistingWritable()` and `ClearHistory()`. The former
+never creates storage or migrates its schema. Clear validates the exact App Usage
+application ID, version and table/index definitions inside a writable SQLite
+transaction, then deletes only `daily_app_usage` rows. The database file, schema
+and unrelated files remain. Unknown, corrupt, missing or read-only stores fail
+without adopting or deleting them. The live collector serializes this operation
+with checkpointing and discards pre-clear pending usage; privileged offline clear
+requires exclusive ownership. Run the isolated focused checks with:
+
+```powershell
+dotnet run --project tests/NetTrace.AppUsageStorageTests -- --clear-history-checks
+```

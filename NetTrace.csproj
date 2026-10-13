@@ -13,6 +13,12 @@
 
   <ItemGroup>
     <ProjectReference Include="tools/AppUsageIpc/AppUsageIpc.csproj" />
+    <ProjectReference Include="tools/NetTrace.AppUsageService/NetTrace.AppUsageService.csproj"
+                      ReferenceOutputAssembly="false" Private="false"
+                      GlobalPropertiesToRemove="OutputPath;OutDir;TargetDir;PublishDir;ApplicationIcon;ApprovedBaselineIcon;CustomBeforeMicrosoftCommonTargets" />
+    <ProjectReference Include="tools/NetTrace.AppUsageInstaller/NetTrace.AppUsageInstaller.csproj"
+                      ReferenceOutputAssembly="false" Private="false"
+                      GlobalPropertiesToRemove="OutputPath;OutDir;TargetDir;PublishDir;ApplicationIcon;ApprovedBaselineIcon;CustomBeforeMicrosoftCommonTargets" />
     <FrameworkReference Include="Microsoft.WindowsDesktop.App.WindowsForms" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.11" />
     <Compile Remove="tests\**\*.cs" />
@@ -20,4 +26,43 @@
     <Resource Include="assets\Network Globe Icon.png" />
     <Resource Include="assets\NetTrace.ico" />
   </ItemGroup>
+
+  <!-- Keep complete, separate tool kits beside the unelevated desktop app.
+       Project references include tool dependencies in a fresh SDK restore graph
+       without adding their assemblies to the desktop's runtime dependencies. -->
+  <Target Name="BundleAppTrackingTools" AfterTargets="Build"
+          Condition="'$(DesignTimeBuild)' != 'true'">
+    <MSBuild Projects="$(MSBuildProjectDirectory)/tools/NetTrace.AppUsageService/NetTrace.AppUsageService.csproj"
+             Targets="Publish"
+             RemoveProperties="OutputPath;OutDir;TargetDir;TargetFramework;RuntimeIdentifier;SelfContained;ApplicationIcon;ApprovedBaselineIcon;CustomBeforeMicrosoftCommonTargets"
+             Properties="Configuration=$(Configuration);PublishDir=$(TargetDir)AppTracking/Service/" />
+    <MSBuild Projects="$(MSBuildProjectDirectory)/tools/NetTrace.AppUsageInstaller/NetTrace.AppUsageInstaller.csproj"
+             Targets="Publish"
+             RemoveProperties="OutputPath;OutDir;TargetDir;TargetFramework;RuntimeIdentifier;SelfContained;ApplicationIcon;ApprovedBaselineIcon;CustomBeforeMicrosoftCommonTargets"
+             Properties="Configuration=$(Configuration);PublishDir=$(TargetDir)AppTracking/Installer/" />
+  </Target>
+
+  <Target Name="ExposeAppTrackingToolsForProjectReferences"
+          BeforeTargets="GetCopyToOutputDirectoryItems;_GetCopyToOutputDirectoryItemsFromThisProject"
+          DependsOnTargets="BundleAppTrackingTools"
+          Condition="'$(DesignTimeBuild)' != 'true'">
+    <ItemGroup>
+      <_AppTrackingCopyFile Include="$(TargetDir)AppTracking/**/*" />
+      <ContentWithTargetPath Include="@(_AppTrackingCopyFile)">
+        <TargetPath>AppTracking/%(_AppTrackingCopyFile.RecursiveDir)%(_AppTrackingCopyFile.Filename)%(_AppTrackingCopyFile.Extension)</TargetPath>
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <CopyToPublishDirectory>Never</CopyToPublishDirectory>
+      </ContentWithTargetPath>
+    </ItemGroup>
+  </Target>
+
+  <Target Name="PublishAppTrackingTools" AfterTargets="Publish"
+          Condition="'$(DesignTimeBuild)' != 'true'">
+    <ItemGroup>
+      <_AppTrackingPublishedFile Include="$(TargetDir)AppTracking/**/*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_AppTrackingPublishedFile)"
+          DestinationFiles="@(_AppTrackingPublishedFile->'$(PublishDir)AppTracking/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
 </Project>

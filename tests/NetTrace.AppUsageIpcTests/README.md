@@ -20,3 +20,10 @@ Accounting checks distinguish send/receive, address families, loopback,
 non-loopback, known local traffic, and unclassified observations. Executable
 grouping preserves individual process lifetimes. Snapshots remain cumulative
 for one collector instance and start fresh for a new instance.
+
+App Usage 005.6 adds three real Windows native-pipe lifecycle cases to this
+suite. Run `dotnet run --project tests/NetTrace.AppUsageIpcTests --
+--pipe-lifecycle-checks` for focused validation. The tests reproduce listener
+exhaustion after EOF, exercise 30 fresh service-protocol query connections,
+and verify that abrupt or malformed clients cannot prevent later connections.
+Unique test pipes and test-only identity seams never touch the production pipe.

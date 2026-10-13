@@ -17,11 +17,11 @@ public sealed class CollectorServiceHost : ServiceBase
     public CollectorServiceHost(ServiceOptions options, string identityName, BoundedLifecycleLog log)
     {
         this.log = log;
-        ServiceName = ServicePipeSecurity.DefaultServiceName;
+        ServiceName = options.ServiceName;
         CanStop = true; CanShutdown = true; CanHandlePowerEvent = true; AutoLog = false;
         // The capture and SQLite deadlines fit inside one finite SCM stop budget.
         lifecycle = new(() => new CollectorServiceWorker(options, identityName, log), Fatal,
-            stopTimeout: TimeSpan.FromSeconds(20));
+            startTimeout: TimeSpan.FromSeconds(50), stopTimeout: TimeSpan.FromSeconds(20));
     }
     protected override void OnStart(string[] args)
     {
@@ -84,6 +84,8 @@ internal sealed class CollectorServiceWorker : IServiceWorker
     private readonly TaskCompletionSource ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private CollectorRuntime? runtime;
     private IpcServer? server;
+    private AppUsageHistoryManagementServer? historyManagement;
+    private AppUsageHistoryLease? historyLease;
     private EtwCaptureResult? result;
     private Task<EtwCaptureResult>? captureTask;
     private UsagePersistence? persistence;
@@ -91,6 +93,7 @@ internal sealed class CollectorServiceWorker : IServiceWorker
     private Task? checkpointTask;
     private bool finalCheckpointComplete;
     private bool captureQuiesced;
+    private bool storageQuiesced = true;
     public Task Ready => ready.Task;
     public CollectorServiceWorker(ServiceOptions options, string identityName, BoundedLifecycleLog log)
     { this.options = options; this.identityName = identityName; this.log = log; }
@@ -101,6 +104,7 @@ internal sealed class CollectorServiceWorker : IServiceWorker
         using var checkpointStopping = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         Task<EtwCaptureResult>? capture = null;
         Task? serving = null;
+        Task? managingHistory = null;
         string? error = null;
         Exception? cleanupFailure = null;
         try
@@ -108,8 +112,15 @@ internal sealed class CollectorServiceWorker : IServiceWorker
             var schema = ProviderSchema.Discover();
             if (!schema.ProviderAvailable || schema.Events.Count == 0 || schema.KeywordMask == 0)
                 throw new InvalidOperationException(schema.Error ?? "The installed Kernel-Network provider has no supported transfer schema.");
+            // Before any SQLite access, coordinate the entire service lifetime
+            // with an elevated offline clear. This does not change ETW ownership.
+            historyLease = await AppUsageHistoryLease.AcquireAsync(options.CommonDataRoot
+                ?? Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                TimeSpan.FromSeconds(15), stopping.Token,
+                requireProtectedDirectory: options.ServiceName == ServicePipeSecurity.ProductionServiceName).ConfigureAwait(false);
             persistenceStore = new(options.CommonDataRoot);
             persistence = new(persistenceStore, diagnostic: log.Write);
+            storageQuiesced = false;
             // Retention runs once at startup. Failure leaves the service accepting pending deltas.
             await persistence.CheckpointAsync(stopping.Token).ConfigureAwait(false);
             runtime = new(schema, privileged: true, identityName: identityName,
@@ -119,13 +130,20 @@ internal sealed class CollectorServiceWorker : IServiceWorker
             log.Write($"ETW ready; session={SessionOwnership.SessionName}; recovered stale session={runtime.ReclaimedStaleSession}.");
             var appUsageQueries = AppUsageQueryService.ForDatabase(options.CommonDataRoot, () => persistence.Health);
             server = new(options.PipeName, runtime.GetCapabilities, () => runtime.GetSnapshot(),
-                serviceSecurity: new(options.ClientSid), protocolVersion: Protocol.ServiceVersion,
+                serviceSecurity: new(options.ClientSid, options.ServiceName), protocolVersion: Protocol.ServiceVersion,
                 appUsageQuery: appUsageQueries.QueryAsync);
             serving = server.RunAsync(stopping.Token);
+            if (options.ServiceName == ServicePipeSecurity.ProductionServiceName)
+            {
+                historyManagement = new(token => persistence.ClearHistoryAsync(token));
+                managingHistory = historyManagement.RunAsync(stopping.Token);
+                log.Write("History management ready; local-only elevated-administrator access.");
+            }
             log.Write($"Pipe ready; local-only authenticated service protocol={Protocol.ServiceVersion}.");
             checkpointTask = persistence.RunAsync(checkpointStopping.Token);
             ready.TrySetResult();
-            var completed = await Task.WhenAny(capture, serving, checkpointTask).ConfigureAwait(false);
+            var completed = await Task.WhenAny(capture, serving, checkpointTask,
+                managingHistory ?? Task.Delay(Timeout.Infinite, stopping.Token)).ConfigureAwait(false);
             if (!cancellationToken.IsCancellationRequested)
             {
                 if (completed == capture)
@@ -135,7 +153,8 @@ internal sealed class CollectorServiceWorker : IServiceWorker
                 }
                 await completed.ConfigureAwait(false);
                 throw new InvalidOperationException(completed == serving
-                    ? "IPC listeners ended unexpectedly." : "Persistence checkpoint worker ended unexpectedly.");
+                    ? "IPC listeners ended unexpectedly." : completed == managingHistory
+                    ? "History management listener ended unexpectedly." : "Persistence checkpoint worker ended unexpectedly.");
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
@@ -153,6 +172,8 @@ internal sealed class CollectorServiceWorker : IServiceWorker
             // Begin pipe disposal alongside native capture cleanup, rather than adding their deadlines.
             var pipeCleanup = server is null ? Task.CompletedTask
                 : server.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(4));
+            var historyCleanup = historyManagement is null ? Task.CompletedTask
+                : historyManagement.DisposeAsync().AsTask();
             captureQuiesced = capture is null;
             if (capture is not null)
             {
@@ -173,6 +194,12 @@ internal sealed class CollectorServiceWorker : IServiceWorker
                 cleanupFailure ??= exception;
                 error ??= $"Pipe cleanup: {exception.GetType().Name}: {exception.Message}";
             }
+            try { await historyCleanup.ConfigureAwait(false); }
+            catch (Exception exception)
+            {
+                cleanupFailure ??= exception;
+                error ??= $"History management cleanup: {exception.GetType().Name}: {exception.Message}";
+            }
             if (persistence is not null && captureQuiesced)
             {
                 // Drain accepted ETW callbacks before sealing; no event can slip in after the final flush.
@@ -184,7 +211,27 @@ internal sealed class CollectorServiceWorker : IServiceWorker
             {
                 try { await checkpointTask.WaitAsync(TimeSpan.FromMilliseconds(250)).ConfigureAwait(false); }
                 catch (OperationCanceledException) when (checkpointStopping.IsCancellationRequested) { }
-                catch (System.TimeoutException) { log.Write("Persistence transaction still pending at the bounded stop deadline; it is not replayed or disposed concurrently."); }
+                catch (System.TimeoutException exception)
+                {
+                    log.Write("Persistence transaction still pending at the bounded stop deadline; it is not replayed or disposed concurrently.");
+                    // Keep the history lease until process death, so an offline
+                    // clear cannot overlap this unfinished storage transaction.
+                    cleanupFailure ??= exception;
+                }
+            }
+            if (persistence is not null && captureQuiesced)
+            {
+                using var idleTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+                try
+                {
+                    await persistence.WaitForStorageIdleAsync(idleTimeout.Token).ConfigureAwait(false);
+                    storageQuiesced = true;
+                }
+                catch (Exception exception)
+                {
+                    cleanupFailure ??= exception;
+                    error ??= $"Storage ownership cleanup: {exception.GetType().Name}: {exception.Message}";
+                }
             }
             if (!ready.Task.IsCompleted) ready.TrySetCanceled();
             result ??= runtime?.FinalCaptureResult;
@@ -226,8 +273,14 @@ internal sealed class CollectorServiceWorker : IServiceWorker
     public async ValueTask DisposeAsync()
     {
         if (server is not null) await server.DisposeAsync().ConfigureAwait(false);
+        if (historyManagement is not null) await historyManagement.DisposeAsync().ConfigureAwait(false);
         if (captureTask is not null && !captureQuiesced)
             throw new InvalidOperationException("Cannot dispose process identity resources before clean ETW quiescence is confirmed.");
         runtime?.Dispose();
+        if (checkpointTask is not null && !checkpointTask.IsCompleted)
+            throw new InvalidOperationException("Cannot release history storage ownership while a checkpoint is still running.");
+        if (!storageQuiesced)
+            throw new InvalidOperationException("Cannot release history storage ownership before all admitted SQLite operations have finished.");
+        historyLease?.Dispose();
     }
 }

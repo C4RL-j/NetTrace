@@ -25,14 +25,18 @@ public partial class MainWindow : Window
     private InternetReachabilityResult? _lastReachabilityMeasurement;
 
     public MainWindow(MonitoringService monitoring, IWindowsStartupRegistration? startupRegistration = null,
-        WifiRadioService? wifiRadio = null, IAppUsageTodayClient? appUsageClient = null)
+        WifiRadioService? wifiRadio = null, IAppUsageTodayClient? appUsageClient = null,
+        AppUsageRangeSelection? appUsageRangeSelection = null, IAppTrackingSetupService? appTrackingSetupService = null,
+        Func<bool>? confirmAppTrackingUninstall = null, Func<bool>? confirmAppUsageHistoryClear = null)
     {
         ArgumentNullException.ThrowIfNull(monitoring);
         _monitoring = monitoring;
         _wifiRadio = wifiRadio ?? new WifiRadioService();
         _startupRegistration = startupRegistration;
         InitializeComponent();
-        InitializeAppUsageToday(appUsageClient);
+        appTrackingSetupService ??= new AppTrackingSetupService();
+        InitializeAppUsageToday(appUsageClient, appUsageRangeSelection, appTrackingSetupService);
+        InitializeAppTrackingSettings(appTrackingSetupService, confirmAppTrackingUninstall, confirmAppUsageHistoryClear);
         _loadingAdapters = false;
         HistoryUsage7DButton.IsChecked = monitoring.SelectedHistoryUsageRange == HistoryUsageRange.SevenDays;
         HistoryUsage30DButton.IsChecked = monitoring.SelectedHistoryUsageRange == HistoryUsageRange.ThirtyDays;
@@ -54,7 +58,11 @@ public partial class MainWindow : Window
     protected override void OnActivated(EventArgs args)
     {
         base.OnActivated(args);
-        if (!_closed) RefreshStartupSetting();
+        if (!_closed)
+        {
+            RefreshStartupSetting();
+            UpdateAppTrackingSettingsVisibility();
+        }
     }
 
     protected override void OnStateChanged(EventArgs args)
@@ -65,11 +73,13 @@ public partial class MainWindow : Window
         {
             _timer.Stop();
             UpdateAppUsageVisibility();
+            UpdateAppTrackingSettingsVisibility();
             InvalidateWifiRadio();
         }
         else if (IsVisible)
         {
             UpdateAppUsageVisibility();
+            UpdateAppTrackingSettingsVisibility();
             RefreshDashboard();
             RefreshHistoryOverview();
             if (HealthContent.IsVisible)
@@ -121,6 +131,7 @@ public partial class MainWindow : Window
     {
         if (_closed) return;
         UpdateAppUsageVisibility();
+        UpdateAppTrackingSettingsVisibility();
         if (IsVisible && WindowState != WindowState.Minimized)
         {
             RefreshDashboard();
@@ -142,6 +153,7 @@ public partial class MainWindow : Window
     private void SettingsContent_OnVisibilityChanged(object sender, DependencyPropertyChangedEventArgs args)
     {
         if (!_closed && SettingsContent.IsVisible) RefreshStartupSetting();
+        UpdateAppTrackingSettingsVisibility();
     }
 
     private void HealthContent_OnVisibilityChanged(object sender, DependencyPropertyChangedEventArgs args)
@@ -270,6 +282,7 @@ public partial class MainWindow : Window
     {
         _closed = true;
         _ = DisposeAppUsageTodayAsync();
+        if (_appTrackingSettings is not null) _ = _appTrackingSettings.DisposeAsync();
         _timer.Stop();
         _timer.Tick -= Timer_OnTick;
         _monitoring.Changed -= Monitoring_OnChanged;
@@ -303,6 +316,7 @@ public partial class MainWindow : Window
     {
         RefreshDashboard();
         _appUsageToday?.Tick();
+        _appTrackingSettings?.Tick();
     }
 
     public void RefreshDashboard()

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Windows;
+using NetTrace.Presentation;
 
 namespace NetTrace.Services;
 
@@ -11,6 +12,8 @@ public sealed class TrayApplicationContext : IDisposable
     private readonly WindowsPowerLifecycle _powerLifecycle;
     private readonly Func<MonitoringService, MainWindow> _createDashboard;
     private readonly Action _shutdown;
+    private readonly AppUsageRangeSelection _appUsageRangeSelection = new();
+    private readonly IAppTrackingSetupService _appTrackingSetupService = new AppTrackingSetupService();
     private bool _disposed;
 
     public MonitoringService Monitoring { get; }
@@ -25,7 +28,8 @@ public sealed class TrayApplicationContext : IDisposable
         _application = application;
         _application.ShutdownMode = ShutdownMode.OnExplicitShutdown;
         Monitoring = monitoring;
-        _createDashboard = dashboardFactory ?? (service => new MainWindow(service));
+        _createDashboard = dashboardFactory ?? (service => new MainWindow(service,
+            appUsageRangeSelection: _appUsageRangeSelection, appTrackingSetupService: _appTrackingSetupService));
         _shutdown = shutdownAction ?? (() => application.Shutdown());
         _powerLifecycle = new WindowsPowerLifecycle();
         _powerLifecycle.Suspending += PowerLifecycle_OnSuspending;

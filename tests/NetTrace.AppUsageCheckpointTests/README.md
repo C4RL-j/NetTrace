@@ -9,3 +9,13 @@ Coverage includes parser-to-persistence attribution, RX/TX, IPv4/IPv6 locality,
 midnight and new collector lifetimes, atomic batched deltas, slow I/O concurrency,
 failure/retry, cancellation and bounded final flush, startup retention, health,
 pending bounds, and a manually advanced five-second timer.
+
+App Usage 005.6 lifecycle persistence checks run with
+`dotnet run --project tests/NetTrace.AppUsageCheckpointTests -- --lifecycle-checks`.
+They exercise real isolated SQLite through the production event mapper across
+graceful and repeated restarts, a discarded crash checkpoint window, sleep-time
+and local-midnight gaps, PID reuse, and older event timestamps. They verify exact
+small byte increments, unchanged retained history, schema identity, and SQLite
+integrity. A forced process death can lose the last uncheckpointed memory window;
+these checks verify committed history survives without inventing a replay.
+Real SCM, ETW, sleep/resume, and reboot observations remain separate live checks.

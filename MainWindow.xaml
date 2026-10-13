@@ -770,11 +770,22 @@
                                 <TextBlock Text="APP USAGE" Style="{StaticResource MutedText}"/>
                                 <TextBlock Text="See which applications are using network traffic."
                                            Style="{StaticResource MutedText}" TextWrapping="Wrap" Margin="0,6,0,0"/>
-                                <TextBlock Text="TODAY" Style="{StaticResource MutedText}" Margin="0,16,0,0"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                                    <RadioButton x:Name="AppUsageTodayButton" Content="Today" GroupName="AppUsageRange"
+                                                 Style="{StaticResource HistoryUsageRangeStyle}" Checked="AppUsageRange_OnChecked"/>
+                                    <RadioButton x:Name="AppUsage7DButton" Content="7D" GroupName="AppUsageRange"
+                                                 Style="{StaticResource HistoryUsageRangeStyle}" Checked="AppUsageRange_OnChecked"/>
+                                    <RadioButton x:Name="AppUsage30DButton" Content="30D" GroupName="AppUsageRange"
+                                                 Style="{StaticResource HistoryUsageRangeStyle}" Checked="AppUsageRange_OnChecked"/>
+                                </StackPanel>
                                 <TextBlock x:Name="AppUsageStateText" Text="Loading app usage..."
                                            TextWrapping="Wrap" Margin="0,12,0,0"/>
                                 <TextBlock x:Name="AppUsageDetailText" Text="" Visibility="Collapsed"
                                            Style="{StaticResource MutedText}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                <Button x:Name="AppUsageInstallButton" Content="Install App Tracking" Click="AppUsageInstall_OnClick"
+                                        Visibility="Collapsed" HorizontalAlignment="Left" Padding="12,6" Margin="0,12,0,0"/>
+                                <TextBlock x:Name="AppUsageSetupErrorText" Text="" Visibility="Collapsed"
+                                           Style="{StaticResource MutedText}" TextWrapping="Wrap" Margin="0,8,0,0"/>
                                 <UniformGrid x:Name="AppUsageSummaryPanel" Columns="4" Visibility="Collapsed" Margin="0,8,0,0">
                                     <StackPanel Margin="0,0,12,0">
                                         <TextBlock Text="Tracked apps" Style="{StaticResource MutedText}"/>
@@ -807,21 +818,32 @@
                                         <DataTemplate>
                                             <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Padding="0,12">
                                                 <StackPanel>
-                                                    <TextBlock Text="{Binding DisplayName}" ToolTip="{Binding DisplayName}"
-                                                               FontSize="15" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
-                                                    <TextBlock Text="{Binding ExecutableName}" ToolTip="{Binding ExecutableName}"
-                                                               TextTrimming="CharacterEllipsis" Margin="0,2,0,0">
-                                                        <TextBlock.Style>
-                                                            <Style TargetType="TextBlock" BasedOn="{StaticResource MutedText}">
-                                                                <Setter Property="FontSize" Value="12"/>
-                                                                <Style.Triggers>
-                                                                    <DataTrigger Binding="{Binding HasExecutableName}" Value="False">
-                                                                        <Setter Property="Visibility" Value="Collapsed"/>
-                                                                    </DataTrigger>
-                                                                </Style.Triggers>
-                                                            </Style>
-                                                        </TextBlock.Style>
-                                                    </TextBlock>
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="24"/>
+                                                            <ColumnDefinition Width="10"/>
+                                                            <ColumnDefinition Width="*"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <Image x:Name="AppUsageRowIcon" Source="{Binding Icon}" Width="24" Height="24"
+                                                               Stretch="Uniform" VerticalAlignment="Center"/>
+                                                        <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                                                            <TextBlock x:Name="AppUsageRowTitle" Text="{Binding DisplayName}" ToolTip="{Binding DisplayName}"
+                                                                       FontSize="15" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                                                            <TextBlock x:Name="AppUsageRowSubtitle" Text="{Binding ExecutableName}" ToolTip="{Binding ExecutableName}"
+                                                                       TextTrimming="CharacterEllipsis" Margin="0,2,0,0">
+                                                                <TextBlock.Style>
+                                                                    <Style TargetType="TextBlock" BasedOn="{StaticResource MutedText}">
+                                                                        <Setter Property="FontSize" Value="12"/>
+                                                                        <Style.Triggers>
+                                                                            <DataTrigger Binding="{Binding HasExecutableName}" Value="False">
+                                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                                            </DataTrigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </TextBlock.Style>
+                                                            </TextBlock>
+                                                        </StackPanel>
+                                                    </Grid>
                                                     <UniformGrid Columns="3" Margin="0,8,0,0">
                                                         <StackPanel Margin="0,0,12,0">
                                                             <TextBlock Text="Download" Style="{StaticResource MutedText}" FontSize="11"/>
@@ -863,6 +885,28 @@
                                            FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"/>
                                 <TextBlock Text="Launch in the system tray when you sign in. Open the dashboard from the tray when needed."
                                            Style="{StaticResource MutedText}" TextWrapping="Wrap" Margin="0,10,0,0"/>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Style="{StaticResource CardStyle}" Margin="0,18,0,0">
+                            <StackPanel>
+                                <TextBlock Text="APP TRACKING" Style="{StaticResource MutedText}"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                    <TextBlock Text="Status: " Foreground="#CBD5E1" FontSize="13"/>
+                                    <TextBlock x:Name="SettingsAppTrackingStatusText" Text="Checking..."
+                                               Foreground="#CBD5E1" FontSize="13"/>
+                                </StackPanel>
+                                <Button x:Name="SettingsAppTrackingUninstallButton" Content="Uninstall App Tracking"
+                                        Click="SettingsAppTrackingUninstall_OnClick" HorizontalAlignment="Left"
+                                        Padding="14,7" Margin="0,12,0,0" Visibility="Collapsed" IsEnabled="False"/>
+                                <Button x:Name="SettingsAppTrackingUpdateButton" Content="Update App Tracking"
+                                        Click="SettingsAppTrackingUpdate_OnClick" HorizontalAlignment="Left"
+                                        Padding="14,7" Margin="0,12,0,0" Visibility="Collapsed" IsEnabled="False"/>
+                                <Button x:Name="SettingsAppUsageHistoryClearButton" Content="Clear App Usage History"
+                                        Click="SettingsAppUsageHistoryClear_OnClick" HorizontalAlignment="Left"
+                                        Padding="14,7" Margin="0,12,0,0" IsEnabled="False"/>
+                                <TextBlock x:Name="SettingsAppTrackingErrorText" Text="" Foreground="#FBBF24"
+                                           FontSize="11" TextWrapping="Wrap" Margin="0,8,0,0" Visibility="Collapsed"/>
                             </StackPanel>
                         </Border>
 

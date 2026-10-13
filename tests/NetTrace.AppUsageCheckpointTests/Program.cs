@@ -1,11 +1,16 @@
-var tests = EventPersistenceTests.Cases.Concat(CheckpointTests.Cases).ToArray();
+var focusedLifecycle = args.SequenceEqual(["--lifecycle-checks"]);
+var tests = (focusedLifecycle ? LifecyclePersistenceTests.Cases
+    : args.Contains("--clear-history-checks", StringComparer.Ordinal)
+    ? ClearHistoryTests.Cases
+    : EventPersistenceTests.Cases.Concat(CheckpointTests.Cases).Concat(ClearHistoryTests.Cases)
+        .Concat(LifecyclePersistenceTests.Cases)).ToArray();
 var failures = 0;
 foreach (var (name, run) in tests)
 {
     try { await run().WaitAsync(TimeSpan.FromSeconds(12)); Console.WriteLine($"PASS {name}"); }
     catch (Exception ex) { failures++; Console.Error.WriteLine($"FAIL {name}: {ex.GetType().Name}: {ex.Message}"); }
 }
-Console.WriteLine($"App Usage 004.2 checkpoints: {tests.Length - failures}/{tests.Length} passed.");
+Console.WriteLine($"App Usage {(focusedLifecycle ? "005.6 lifecycle persistence" : "004.2/005.6 checkpoints")}: {tests.Length - failures}/{tests.Length} passed.");
 return failures == 0 ? 0 : 1;
 
 internal static class Check

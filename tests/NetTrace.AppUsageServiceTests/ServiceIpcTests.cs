@@ -3,6 +3,7 @@ using System.IO.Pipes;
 using System.Security.AccessControl;
 using System.Text;
 using AppUsageIpc;
+using NetTrace.AppUsageService;
 
 internal static class ServiceIpcTests
 {
@@ -25,6 +26,11 @@ internal static class ServiceIpcTests
         ("Default service peer verification rejects a pipe unrelated to the registered SCM service", RejectUnregisteredPeer),
         ("Reconnect delays back off to a finite maximum and reset after successful connection", Check.Sync(Backoff)),
         ("Cancellation interrupts a scheduled reconnect delay without a tight retry loop", CancelBackoff),
+        ("Only the exact production and development collector identities are accepted", Check.Sync(KnownServiceIdentities)),
+        ("Production pipe ACL grants the production service SID and intended user only", Check.Sync(ProductionServiceAcl)),
+        ("Service options retain an explicit production name and preserve the development default", Check.Sync(ServiceOptionsIdentity)),
+        ("Unsupported service names and malformed service options are rejected", Check.Sync(InvalidServiceOptions)),
+        ("Production peer verification rejects a pipe unrelated to the registered production service", RejectUnregisteredProductionPeer),
     ];
 
     private static IpcClient Client(string name, int version = Protocol.ServiceVersion) =>
@@ -282,6 +288,72 @@ internal static class ServiceIpcTests
         var backoff = new ReconnectBackoff(); using var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(30));
         await Check.ThrowsAsync<OperationCanceledException>(() => Task.Delay(backoff.NextDelay(), cancel.Token),
             "stop cancels backoff instead of waiting for the next retry");
+    }
+    private static void KnownServiceIdentities()
+    {
+        Check.Equal("NetTraceAppUsageCollector", ServicePipeSecurity.ProductionServiceName, "stable production service name");
+        Check.Equal("NetTraceAppUsageCollectorDev", ServicePipeSecurity.DefaultServiceName, "development identity remains separate");
+        ServicePipeSecurity.ValidateServiceName(ServicePipeSecurity.ProductionServiceName);
+        ServicePipeSecurity.ValidateServiceName(ServicePipeSecurity.DefaultServiceName);
+        string productionSid = ServicePipeSecurity.ServiceSid(ServicePipeSecurity.ProductionServiceName);
+        Check.True(productionSid.StartsWith("S-1-5-80-", StringComparison.Ordinal), "production gets a service SID");
+        Check.True(productionSid != ServicePipeSecurity.ServiceSid(ServicePipeSecurity.DefaultServiceName), "development SID cannot substitute for production");
+        foreach (string name in new[] { "", "OtherService", "nettraceappusagecollector", "NetTraceAppUsageCollector ", "NetTraceAppUsageCollector; command" })
+        {
+            bool rejected = false;
+            try { ServicePipeSecurity.ValidateServiceName(name); }
+            catch (ArgumentException) { rejected = true; }
+            Check.True(rejected, "an arbitrary SCM name cannot become a trusted collector identity");
+        }
+    }
+    private static void ProductionServiceAcl()
+    {
+        string user = NativePipeSecurity.CurrentUserSid();
+        string productionSid = ServicePipeSecurity.ServiceSid(ServicePipeSecurity.ProductionServiceName);
+        var descriptor = new RawSecurityDescriptor(NativePipeSecurity.ServiceSecurityDescriptorSddl(user, "S-1-5-18", productionSid));
+        var allowed = descriptor.DiscretionaryAcl!.Cast<GenericAce>().OfType<CommonAce>().ToArray();
+        Check.True((descriptor.ControlFlags & ControlFlags.DiscretionaryAclProtected) != 0, "production DACL is protected");
+        Check.True(allowed.Select(ace => ace.SecurityIdentifier.Value).ToHashSet().SetEquals(new[] { "S-1-5-18", productionSid, user }), "only SYSTEM, production service SID, and intended client have pipe access");
+        Check.True(allowed.All(ace => ace.AceQualifier == AceQualifier.AccessAllowed), "no ambiguous production ACE order");
+        Check.Equal(0, allowed.Single(ace => ace.SecurityIdentifier.Value == user).AccessMask & (0x4 | 0x10000 | 0x40000 | 0x80000 | 0x10000000), "normal client cannot create pipe instances or change security");
+    }
+    private static void ServiceOptionsIdentity()
+    {
+        string user = NativePipeSecurity.CurrentUserSid();
+        var development = ServiceOptions.Parse(["--client-sid", user]);
+        Check.Equal(ServicePipeSecurity.DefaultServiceName, development.ServiceName, "existing development tools retain their identity");
+        var production = ServiceOptions.Parse(["--client-sid", user, "--service-name", ServicePipeSecurity.ProductionServiceName]);
+        Check.Equal(ServicePipeSecurity.ProductionServiceName, production.ServiceName, "SCM host and pipe ACL can use production identity");
+        Check.Equal(ServicePipeSecurity.DefaultPipeName, production.PipeName, "IPC endpoint and protocol are preserved");
+        Check.Equal(user, production.ClientSid, "explicit intended user is preserved");
+    }
+    private static void InvalidServiceOptions()
+    {
+        string user = NativePipeSecurity.CurrentUserSid();
+        foreach (string[] args in new[]
+        {
+            new[] { "--client-sid", user, "--service-name", "UnownedCollector" },
+            new[] { "--client-sid", user, "--service-name" },
+            new[] { "--client-sid", user, "--service-name", ServicePipeSecurity.ProductionServiceName, "--service-name", ServicePipeSecurity.DefaultServiceName },
+            new[] { "--client-sid", user, "--data-root", "relative\\database" },
+            new[] { "--client-sid", "S-1-5-18", "--service-name", ServicePipeSecurity.ProductionServiceName },
+            new[] { "--client-sid", user, "--execute", "private-sentinel" }
+        })
+        {
+            bool rejected = false;
+            try { ServiceOptions.Parse(args); }
+            catch (ArgumentException) { rejected = true; }
+            Check.True(rejected, "invalid host invocation cannot enter SCM startup");
+        }
+    }
+    private static async Task RejectUnregisteredProductionPeer()
+    {
+        string name = Fixtures.PipeName();
+        await using var server = new IpcServer(name, () => Fixtures.Capabilities, ServiceSnapshot,
+            protocolVersion: Protocol.ServiceVersion);
+        _ = server.RunAsync();
+        await using var client = new IpcClient(name, serviceName: ServicePipeSecurity.ProductionServiceName);
+        Check.Equal(IpcState.PeerRejected, (await client.ConnectAsync()).State, "ordinary local pipe cannot impersonate production SYSTEM service");
     }
     private static byte[] Header(int length) { byte[] bytes = new byte[4]; BinaryPrimitives.WriteInt32LittleEndian(bytes, length); return bytes; }
     private static byte[] Frame(string json) { byte[] bytes = Encoding.UTF8.GetBytes(json); return Header(bytes.Length).Concat(bytes).ToArray(); }

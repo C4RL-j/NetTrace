@@ -40,7 +40,8 @@ internal static class NavigationChecks
             dashboardFactory: service =>
             {
                 windowsCreated++;
-                return new MainWindow(service, startup, appUsageClient: new AppUsageTodayChecks.UnavailableClient())
+                return new MainWindow(service, startup, appUsageClient: new AppUsageTodayChecks.UnavailableClient(),
+                    appTrackingSetupService: new AppUsageSetupChecks.RunningSetupService())
                     { ShowActivated = false, ShowInTaskbar = false, Opacity = 0 };
             }, shutdownAction: () => exits++);
 

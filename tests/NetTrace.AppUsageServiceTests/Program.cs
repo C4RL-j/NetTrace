@@ -6,15 +6,17 @@ if (EtwCapture.IsElevated)
     return 2;
 }
 
-var tests = AggregationLifecycleTests.Cases.Concat(ServiceLifecycleTests.Cases)
-    .Concat(ProcessCacheTests.Cases).Concat(SessionOwnershipTests.Cases).Concat(ServiceIpcTests.Cases).ToArray();
+var focusedClear = args.SequenceEqual(["--history-management-checks"]);
+var tests = focusedClear ? HistoryManagementTests.Cases : AggregationLifecycleTests.Cases.Concat(ServiceLifecycleTests.Cases)
+    .Concat(ProcessCacheTests.Cases).Concat(SessionOwnershipTests.Cases).Concat(ServiceIpcTests.Cases)
+    .Concat(HistoryManagementTests.Cases).ToArray();
 var failures = 0;
 foreach (var (name, run) in tests)
 {
     try { await run().WaitAsync(TimeSpan.FromSeconds(12)); Console.WriteLine($"PASS {name}"); }
     catch (Exception ex) { failures++; Console.Error.WriteLine($"FAIL {name}: {ex.GetType().Name}: {ex.Message}"); }
 }
-Console.WriteLine($"App Usage 003: {tests.Length - failures}/{tests.Length} passed.");
+Console.WriteLine($"App Usage {(focusedClear ? "005.4 management" : "003/005.4 service")}: {tests.Length - failures}/{tests.Length} passed.");
 return failures == 0 ? 0 : 1;
 
 internal static class Check

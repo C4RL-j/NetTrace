@@ -10,6 +10,9 @@ service host lifecycle, bounded cancellation/disposal, suspend/resume design,
 fresh counter lifetimes, bounded process cache and PID reuse, exact stale-session
 eligibility, protocol 1/2 compatibility, health/loss serialization, malformed and
 unauthorized peers, disconnect/reconnect and finite backoff.
+The production cases additionally check the exact production/development service
+identity boundary, production service SID and pipe ACL, host option propagation,
+invalid host options, and rejection of an unrelated pipe as a production peer.
 
 It does not install or control a service, start native ETW, stop any trace session,
 change system permissions, or suspend the machine. Real SCM operations, built-in

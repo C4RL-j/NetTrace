@@ -328,8 +328,27 @@ failure recovery and disposal. Actual six-page navigation, hide/minimize/restore
 and close behavior retain the existing single UI timer. Long application metadata
 and GB totals render at 760×600 with ellipsis and vertical access to the final row;
 synthetic screenshots are saved under `app-usage-today-previews`. The six-page
-navigation and scrolling groups also inject unavailable Today clients. Ordinary
+navigation and scrolling groups also inject unavailable range clients. Ordinary
 tests never require or install the App Usage Windows Service.
+
+App Usage 004.4.2 adds focused range-switching checks in `AppUsageRangeChecks.cs`,
+included in the full suite:
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests/NetTrace.WpfTests.csproj -- --app-usage-range-checks
+```
+
+Typed responses cover Today, 7D and 30D summaries, exact empty messages,
+unavailable/degraded states and response-range mismatch rejection. An owned clock
+and cancellation-resistant requests verify immediate selection, the four-second
+refresh of the selected range, retained selection across navigation, zero hidden
+queries and generation discard during rapid range changes, including Today to 7D
+to Today. Real controls verify exclusive selection, application-list updates,
+loading/empty/unavailable states, hidden-window behavior and shared app-session
+selection after view recreation. A synthetic `760x600-30d.png` preview beneath
+`app-usage-range-previews` verifies the controls fit the minimum width. These checks
+use injected clients and owned physical stores, require no service installation,
+and never open the service App Usage database.
 
 The explicitly requested live target is separate from the ordinary suite:
 
@@ -342,3 +361,133 @@ development service. Service creation and cleanup belong to the separate tempora
 validation script; the WPF target never installs or starts a service and never
 opens the App Usage database directly. `--absent` performs a short unavailable
 page check after that service has been removed.
+
+App Usage 005.1 adds `--app-usage-production-live-validation --output <absolute-json-path>`
+for the visible, unelevated real page against the installed production collector.
+Use it through `tools/NetTrace.AppUsageService/Validate-ProductionInstall.ps1`,
+which coordinates the separate elevated install/restart/uninstall worker. The
+page loads all three ranges, observes unavailable during a service stop and
+recovers the selected range after restart. Physical monitoring uses an owned
+fixture; app data comes from production IPC and the real retained ProgramData
+database. This explicit workflow is separate from the ordinary WPF suite.
+
+App Usage 005.2 adds `AppUsageSetupChecks.cs` to the full suite and a focused target:
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests/NetTrace.WpfTests.csproj -- --app-usage-setup-checks
+```
+
+Injected service states cover missing, running, stopped and unreadable collectors.
+Controlled installer results verify explicit setup, cancellation and failure
+feedback, a deliberate retry, automatic selected-range reconnection, no duplicate
+launch, zero hidden-page work, and close during installation. The platform tests
+inspect the fixed installer-only `runas` invocation and preserve the desktop
+identity and token. They never launch UAC, install a service or open its database.
+The actual 760x600 window saves setup and cancelled previews beneath
+`app-usage-setup-previews`. Existing App Usage window, navigation and scrolling
+checks inject a running setup service so the ordinary suite stays independent of
+the machine's service installation. Normal startup, status polling, navigation
+and window restoration are all checked to launch no installer automatically.
+
+App Usage 005.3 adds 73 deterministic checks in `AppTrackingSettingsChecks.cs` to
+the full suite and a focused Settings target:
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests -- --app-tracking-settings-checks
+```
+
+Injected management states cover Running, Stopped, Not installed and unavailable
+status, including uninstall button availability. Controlled confirmation and
+uninstall outcomes cover cancelled confirmation, explicit success, UAC
+cancellation, operational failure, retry and duplicate-launch suppression.
+The fixed elevated launch contains only the existing installer and its literal
+`uninstall` argument; it has no database deletion option and never relaunches
+NetTrace. Normal startup, navigation and refresh launch no installer.
+
+The actual MainWindow uses owned physical-monitoring fixtures and injected
+management services. Successful uninstall immediately updates Settings and
+invalidates App Usage's old data and late responses. Its missing-service setup
+state appears without restart and retains the selected range. Hidden App Usage
+does not issue IPC requests. Compact previews and layout checks use 760x600.
+Ordinary checks require no collector service, request no UAC and never open the
+protected production App Usage database. The unchanged 005.1 installer tests
+separately verify database/history preservation across uninstall outcomes.
+
+App Usage 005.4 adds `AppUsageHistoryClearChecks.cs` to the full suite:
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests -- --app-usage-history-clear-checks
+```
+
+The focused checks cover known/protected/missing storage, explicit confirmation,
+fixed installer-only elevation, cancelled UAC, failure and retry, collector-update
+feedback, shared-operation exclusion and no automatic launch. Real Settings
+controls exercise successful clear, retained 30D, immediate empty cached usage,
+zero hidden IPC, three empty ranges and subsequent new usage. Owned Dashboard,
+History and physical session values remain unchanged. Delayed responses and
+closed-window completions cannot restore stale rows or mutate disposed controls.
+
+These UI checks use injected management outcomes and owned data. Actual SQLite
+clear, buffered-event filtering, schema preservation and new usage are verified
+by storage/checkpoint suites; management authentication and unchanged service
+actions are verified by service/installer suites. Ordinary checks never clear
+the protected production database or launch UAC.
+
+App Usage 005.5 adds `AppTrackingUpdateChecks.cs` to the full suite:
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests -- --app-tracking-update-checks
+```
+
+The focused checks cover the shared SHA-256 inventory algorithm, exact owned
+SCM version-path parsing, matching packages with no update, update availability,
+the explicit fixed installer-only `runas` invocation, cancelled UAC, failure and
+retry. Controlled launchers also exercise shared operation exclusion, cancelled
+waiters and a second window observing the same update without duplicate elevation.
+Startup, polling and navigation never launch the installer automatically.
+
+Settings controls use injected update services to verify Update available and
+button availability, successful update, retained Today/7D/30D selection, automatic
+App Usage reconnection, zero hidden-page IPC and rejection of stale responses.
+Owned data checks retain recorded usage and Dashboard/History values. The desktop
+identity and elevation token remain unchanged. The ordinary suite neither updates
+the installed production service nor opens or clears its protected database.
+The existing installer suites separately verify update database/configuration
+preservation and rollback.
+
+Live validation is an explicit workflow documented in
+[005.5 validation](../../tools/NetTrace.AppUsageService/VALIDATION0055.md).
+
+App Usage 005.6 adds 62 focused lifecycle checks to the complete suite:
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests -- --app-usage-lifecycle-checks
+```
+
+The explicit `--app-usage-lifecycle-live-validation --directory ABSOLUTE_PATH
+--events Update,Restart,ForcedRecovery,Sleep --range 30D` mode observes actual
+external lifecycle actions using only the existing four-second window timer.
+It retains raw request and visibility diagnostics, validates fresh requests
+after completion markers, preserves the range and checks zero hidden requests.
+It never mutates the service or injects a synthetic reconnect notification.
+See [005.6 validation](../../tools/NetTrace.AppUsageService/VALIDATION0056.md).
+
+App Usage 006.1 adds 78 checks in `AppUsageRowIconChecks.cs` to the full suite:
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests -- --app-usage-row-icon-checks
+```
+
+The checks exercise friendly and executable names, case-insensitive duplicate
+subtitles, distinct application/System/Unknown fallbacks, unavailable paths,
+cached successes and failures, concurrent requests and the three-extractor
+limit. A blocked injected extractor verifies dispatcher responsiveness; native
+extraction also reads an existing local Windows executable without launching it.
+Extracted WPF images are frozen and row notifications return to the dispatcher.
+
+The actual 760x600 MainWindow checks icons, collapsed duplicate subtitles,
+long-name ellipsis and horizontal bounds across Today, 7D and 30D. Late icon
+completion during range switching cannot replace current rows or totals. Existing
+range checks retain periodic selected-range refresh and zero hidden-page requests.
+Owned fixtures never change the production collector, database or app permissions.
+See [006.1 validation](VALIDATION0061.md) for commands, totals and preview evidence.

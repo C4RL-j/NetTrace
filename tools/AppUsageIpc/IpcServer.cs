@@ -141,7 +141,11 @@ public sealed class IpcServer : IAsyncDisposable
             }
             finally
             {
-                try { if (pipe.IsConnected) pipe.Disconnect(); }
+                // EOF marks the managed stream Broken (IsConnected == false),
+                // but the native pipe instance still requires disconnect before
+                // accepting another client. Keep its guarded handle and reset
+                // both cleanly closed and broken connections for the next wait.
+                try { pipe.Disconnect(); }
                 catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException) { }
             }
         }

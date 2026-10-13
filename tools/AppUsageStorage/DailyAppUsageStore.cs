@@ -43,6 +43,12 @@ public sealed class DailyAppUsageStore
         new(commonApplicationDataDirectory
             ?? Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), readOnly: true);
 
+    // Privileged maintenance opens only an existing database. Unlike the public
+    // writer constructor, this never creates a directory or initializes a schema.
+    public static DailyAppUsageStore OpenExistingWritable(string? commonApplicationDataDirectory = null) =>
+        new(commonApplicationDataDirectory
+            ?? Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), readOnly: false);
+
     public static string GetDatabasePath(string commonApplicationDataDirectory)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(commonApplicationDataDirectory);
@@ -231,6 +237,30 @@ public sealed class DailyAppUsageStore
         {
             throw Failure(IsCorrupt(exception) ? AppUsageStorageFailure.CorruptDatabase
                 : AppUsageStorageFailure.TransactionFailed, "Retention cleanup was not committed.", exception);
+        }
+    }
+
+    // Validate the known App Usage schema inside the same write transaction as
+    // deletion. Keep the database, table, index and schema metadata intact.
+    public int ClearHistory()
+    {
+        EnsureWritable();
+        using var connection = Open();
+        try
+        {
+            using var transaction = connection.BeginTransaction();
+            AppUsageSchema.ValidateReadOnly(connection, transaction, DatabasePath);
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = "DELETE FROM daily_app_usage;";
+            var removed = command.ExecuteNonQuery();
+            transaction.Commit();
+            return removed;
+        }
+        catch (SqliteException exception)
+        {
+            throw Failure(IsCorrupt(exception) ? AppUsageStorageFailure.CorruptDatabase
+                : AppUsageStorageFailure.TransactionFailed, "Application usage history was not cleared.", exception);
         }
     }
 

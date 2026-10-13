@@ -1,13 +1,95 @@
-# App Usage service prototype (003 lifecycle, 004.2 persistence, 004.3 queries)
+# App Usage collector service (003 lifecycle, 004 persistence, 005 installation/setup)
 
-This is a separate, headless Windows Service prototype. It owns metadata-only
+This is a separate, headless Windows Service collector. It owns metadata-only
 Kernel-Network ETW capture, in-memory application counters and local named-pipe
-snapshots. App Usage 004.4.1 adds a Today-only page to normal NetTrace through
-authenticated read-only IPC. Normal launch remains available without this
-service and calmly displays `App tracking unavailable.` on that page. Startup,
+snapshots. App Usage 004.4.1 adds a page to normal NetTrace through authenticated
+read-only IPC, and 004.4.2 adds Today/7D/30D selection using the existing range
+queries. Normal launch remains available without this
+service. App Usage 005.2 shows an explicit setup action when the production service
+is missing, and a concise stopped state when it is installed but stopped. Startup,
 monitoring, physical adapter accounting, desktop database and permissions remain
-unchanged. The explicit development service persists qualifying event deltas
+unchanged. The collector persists qualifying event deltas
 through the separate 004.1 daily application store.
+
+App Usage 005.1 adds an explicit elevated [production installation tool](../NetTrace.AppUsageInstaller/README.md).
+It registers `NetTraceAppUsageCollector` under LocalSystem with Automatic (Delayed
+Start), protected Program Files binaries and bounded SCM restart recovery.
+Normal NetTrace remains unelevated and uses authenticated read-only IPC against
+that production name. The separate `NetTraceAppUsageCollectorDev` name remains
+available to the historical temporary validation workflows. These services share
+the existing exact collector identity and cannot run together.
+
+Production uninstall stops and removes the service, verifies exact ETW cleanup
+and leaves `%ProgramData%\NetTrace\app-usage.db` intact. Installation and uninstall
+never run automatically from the desktop application. See
+[005.1 live validation](VALIDATION0051.md) for installation, page recovery and
+database preservation evidence.
+
+App Usage 005.2 adds **Install App Tracking** to the missing-service setup state.
+Only an explicit click launches the existing production installer through UAC;
+NetTrace remains unelevated. Build and publish outputs include the companion
+installer and service packages in `AppTracking/Installer` and `AppTracking/Service`.
+A cancelled UAC prompt or failed installation returns to setup with a short error.
+After successful installation and start, the visible page reconnects and loads its
+selected Today/7D/30D range. Running-service behavior, hidden-page polling rules,
+ETW capture, storage, accounting, IPC and service configuration remain unchanged.
+The App Usage page has no uninstall action or automatic installation at startup.
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests -- --app-usage-setup-checks
+```
+
+App Usage 005.3 adds an **APP TRACKING** section to Settings. It shows Running,
+Stopped or Not installed for `NetTraceAppUsageCollector` and makes **Uninstall
+App Tracking** available only for an installed service. A confirmation defaults
+to No and explains that history is preserved. Only a confirmed click launches
+the existing production tool with `uninstall` through UAC; NetTrace stays
+unelevated. Cancellation or failure shows a short error and permits retry.
+
+Successful uninstall immediately updates Settings and clears App Usage's old
+presentation into its existing missing-service setup state without restarting
+the desktop. Range selection remains unchanged; hidden App Usage sends no IPC
+requests. The existing uninstall still preserves `app-usage.db` and history.
+The 005.3 phase adds no Start/Stop controls, service configuration changes or
+installer semantics. See [005.3 validation](VALIDATION0053.md).
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests -- --app-tracking-settings-checks
+```
+
+App Usage 005.4 adds **Clear App Usage History** in Settings with confirmation
+and installer-only UAC. A separate local SYSTEM/Administrator management pipe
+performs a running-service clear without stopping capture or changing the
+read-only v2 protocol. SQLite rows and old pending batches are cleared together;
+buffered old observations are filtered and new traffic continues accumulating.
+The schema, database file, unrelated data and service registration remain.
+Stopped/uninstalled storage uses an exclusive history lease with ownership and
+service-state checks. Older installed collectors return update-required feedback;
+clear never updates or restarts them. See [005.4 validation](VALIDATION0054.md).
+
+App Usage 005.5 adds **Update App Tracking** to Settings when the installed
+collector package differs from the bundled service kit. Settings shows Running,
+Stopped, Update available or Not installed. The comparison uses the installer's
+existing complete-file SHA-256 inventory, including PDBs, rather than the constant
+assembly version. Unelevated status checks read the installed identity from the
+owned SCM command's protected `Versions/<hash>` path and hash the bundled kit;
+they do not open protected collector files or the database.
+
+An explicit button click requests UAC for the existing installer's `install`
+update invocation. NetTrace stays unelevated, and no update runs automatically.
+The existing installer switches the stopped service to its staged protected package,
+retains the database, schema and history, restores Automatic (Delayed Start),
+LocalSystem and the existing recovery policy, then restarts and verifies IPC.
+Its rollback and ownership checks remain unchanged. Cancellation or failure
+shows retry feedback. App Usage reconnects with its selected Today/7D/30D range,
+and hidden App Usage still sends no refresh requests. A pre-005.4 collector gains
+clear-history capability after update without any history being cleared.
+ETW, accounting, persistence and query protocol semantics are unchanged. See
+[005.5 validation](VALIDATION0055.md).
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests -- --app-tracking-update-checks
+```
 
 App Usage 004.2 checkpoints pending non-loopback event bytes every five seconds
 in one storage batch. RX is download and TX is upload. The pending key combines
@@ -38,7 +120,7 @@ Storage failures return a bounded typed unavailable/degraded diagnostic without
 stack traces. Query requests accept no SQL, database paths, free-form dates or
 mutation commands; response rows retain historical executable metadata.
 
-From a **normal terminal**, the existing diagnostic client can request a range:
+From a **normal terminal**, the existing development-service diagnostic client can request a range:
 
 ```powershell
 dotnet run --project .\tools\AppUsageDiagnosticClient -- --service --app-usage Today --output .\bin\today-client.json
@@ -139,9 +221,11 @@ The wrapper builds Release service/client artifacts in the ignored verification
 directory and explicitly requests UAC for a separate administrative SCM worker.
 `RemoteSigned` applies to these PowerShell processes only; the script changes no
 machine execution policy.
-The diagnostic clients are launched by the original normal-token parent. The
-production NetTrace application never requests UAC, installs or starts a service.
-There is no production installer or automatic startup registration.
+The diagnostic clients are launched by the original normal-token parent. Normal
+NetTrace startup never requests UAC, installs or starts a service. Production
+installation uses the separate explicit 005.1 tool, including the 005.2 desktop
+button that launches it; this development
+wrapper retains its temporary demand-start configuration.
 
 The worker first tests LocalService using its existing privileges, including
 real ETW capture and attribution of a live normal user's executable path and
@@ -204,12 +288,16 @@ Suspend/resume is covered through deterministic lifecycle tests. Validation does
 not force the development machine to sleep. Real sleep/resume must be explicitly
 reported as untested until an actual suspend/resume run is performed.
 
-The eventual startup policy is selected from measured lifecycle/performance
-evidence. [Delayed automatic startup](https://learn.microsoft.com/en-us/windows/win32/api/winsvc/ns-winsvc-service_delayed_auto_start_info)
-reduces boot contention but has no guaranteed start time and misses attribution
-before capture starts; plain automatic startup favors earlier accounting. Neither
-automatic mode is installed by this prototype.
+Production 005.1 uses [delayed automatic startup](https://learn.microsoft.com/en-us/windows/win32/api/winsvc/ns-winsvc-service_delayed_auto_start_info).
+Windows chooses the delayed start time; attribution begins when capture starts.
+Historical development validation continues using demand start.
 
 References: [ETW session lifecycle](https://learn.microsoft.com/en-us/windows/win32/etw/configuring-and-starting-an-event-tracing-session),
 [service failure actions](https://learn.microsoft.com/en-us/windows/win32/api/winsvc/ns-winsvc-service_failure_actionsw),
 [service configuration](https://learn.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-changeserviceconfig2w).
+
+App Usage 005.6 repairs native query-pipe reuse after client EOF. The production
+service's existing identity, delayed startup, recovery, ETW and storage settings
+are preserved. [Lifecycle validation](VALIDATION0056.md) documents actual update,
+SCM restart/recovery and sleep/resume, read-only history checks, bounded remote
+traffic, automatic unelevated UI reconnect and the deferred reboot check.

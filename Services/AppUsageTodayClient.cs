@@ -6,11 +6,19 @@ public sealed class AppUsageTodayClient : IAppUsageTodayClient
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly CancellationTokenSource _stopping = new();
+    private readonly string _serviceName;
     private IpcClient? _client;
     private int _disposed;
 
-    public async Task<IpcResult<AppUsageQueryResult>> GetTodayAsync(CancellationToken cancellationToken)
+    public AppUsageTodayClient(string serviceName = ServicePipeSecurity.ProductionServiceName)
     {
+        ServicePipeSecurity.ValidateServiceName(serviceName);
+        _serviceName = serviceName;
+    }
+
+    public async Task<IpcResult<AppUsageQueryResult>> GetAppUsageRangeAsync(AppUsageRange range, CancellationToken cancellationToken)
+    {
+        if (!Enum.IsDefined(range)) throw new ArgumentOutOfRangeException(nameof(range));
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _stopping.Token);
         var entered = false;
         try
@@ -20,7 +28,7 @@ public sealed class AppUsageTodayClient : IAppUsageTodayClient
             if (Volatile.Read(ref _disposed) != 0) return Unavailable();
             if (_client is null)
             {
-                _client = new(ServicePipeSecurity.DefaultPipeName, serviceName: ServicePipeSecurity.DefaultServiceName);
+                _client = new(ServicePipeSecurity.DefaultPipeName, serviceName: _serviceName);
                 var connection = await _client.ConnectAsync(cancellation.Token).ConfigureAwait(false);
                 if (connection.State != IpcState.Connected)
                 {
@@ -28,7 +36,7 @@ public sealed class AppUsageTodayClient : IAppUsageTodayClient
                     return new(connection.State, null);
                 }
             }
-            var result = await _client.GetAppUsageRangeAsync(AppUsageRange.Today, cancellation.Token).ConfigureAwait(false);
+            var result = await _client.GetAppUsageRangeAsync(range, cancellation.Token).ConfigureAwait(false);
             // The pipe's existing idle deadline is shorter than this page's
             // four-second cadence. Each visible refresh gets a fresh handshake.
             await CloseClientAsync().ConfigureAwait(false);

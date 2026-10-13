@@ -11,6 +11,13 @@ public interface IUsageCheckpointStore
     Task<int> RetentionCleanupAsync(DateOnly cutoffDate, CancellationToken cancellationToken);
 }
 
+// History maintenance is optional and retains the same determinate transaction
+// contract as checkpoint writes. Existing checkpoint-only stores remain valid.
+public interface IUsageHistoryStore
+{
+    Task<int> ClearHistoryAsync(CancellationToken cancellationToken);
+}
+
 public sealed record UsagePersistenceHealth(
     bool PersistenceAvailable,
     DateTimeOffset? LastSuccessfulCheckpoint,
@@ -47,6 +54,7 @@ public sealed class UsagePersistence
     // Reference counts include active and retained/in-flight batches, so the
     // bound cannot be evaded while SQLite is slow or temporarily unavailable.
     private readonly Dictionary<UsageKey, int> pendingKeys = new();
+    private readonly HashSet<Task<bool>> flushOperations = new();
     private bool sealedAccumulator;
     private bool initialized;
     private bool retentionCompleted;
@@ -62,6 +70,7 @@ public sealed class UsagePersistence
     private long acceptedUploadBytes;
     private long committedDownloadBytes;
     private long committedUploadBytes;
+    private DateTimeOffset? historyClearedAt;
 
     public UsagePersistence(IUsageCheckpointStore store, TimeProvider? timeProvider = null,
         TimeZoneInfo? localTimeZone = null, Action<string>? diagnostic = null, int maximumPendingKeys = 10000)
@@ -102,6 +111,9 @@ public sealed class UsagePersistence
         lock (gate)
         {
             if (sealedAccumulator) throw new InvalidOperationException("The persistence accumulator has been sealed.");
+            // ETW may deliver buffered observations after clearing. They must
+            // not recreate usage from before the completed history boundary.
+            if (historyClearedAt is DateTimeOffset boundary && delta.LastSeen <= boundary) return;
             if (delta.DownloadBytes == 0 && delta.UploadBytes == 0) return;
             var hasActive = active.TryGetValue(key, out var existing);
             UsageDelta accumulated;
@@ -150,6 +162,49 @@ public sealed class UsagePersistence
     public void Seal()
     {
         lock (gate) sealedAccumulator = true;
+    }
+
+    public async Task<int> ClearHistoryAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (store is not IUsageHistoryStore historyStore)
+            throw new NotSupportedException("This checkpoint store does not support clearing application usage history.");
+        await checkpointGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            lock (gate)
+                if (sealedAccumulator) throw new InvalidOperationException("The persistence accumulator has been sealed.");
+
+            int removed;
+            try
+            {
+                // Once dispatched, cancellation cannot report failure while a
+                // transaction might still commit. Failed deletion preserves all
+                // active and retained batches for the existing checkpoint retry.
+                removed = await historyStore.ClearHistoryAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                SetFailure(exception);
+                throw;
+            }
+
+            DateTimeOffset clearedAt;
+            lock (gate)
+            {
+                clearedAt = timeProvider.GetUtcNow();
+                historyClearedAt = clearedAt;
+                active.Clear();
+                retained = null;
+                pendingKeys.Clear();
+                degraded = false;
+                lastError = null;
+            }
+            Report($"Application usage history cleared at {clearedAt:O}: rows={removed}.");
+            return removed;
+        }
+        finally { checkpointGate.Release(); }
     }
 
     public async Task<bool> CheckpointAsync(CancellationToken cancellationToken = default)
@@ -243,9 +298,11 @@ public sealed class UsagePersistence
         if (timeout <= TimeSpan.Zero || timeout == Timeout.InfiniteTimeSpan)
             throw new ArgumentOutOfRangeException(nameof(timeout));
         using var timeoutCancellation = new CancellationTokenSource(timeout);
+        var operation = FlushCoreAsync(timeoutCancellation.Token);
+        lock (gate) flushOperations.Add(operation);
         try
         {
-            return await FlushCoreAsync(timeoutCancellation.Token)
+            return await operation
                 .WaitAsync(timeoutCancellation.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (timeoutCancellation.IsCancellationRequested)
@@ -253,6 +310,30 @@ public sealed class UsagePersistence
             Report("Application usage final flush reached its bounded timeout.");
             return false;
         }
+        finally { _ = ObserveFlushCompletionAsync(operation); }
+    }
+
+    // The host calls this after producers are sealed and the periodic worker is
+    // joined. A bounded FlushAsync wait may have returned while its SQL operation
+    // still owns a batch; retain the service's history lease until that work ends.
+    public async Task WaitForStorageIdleAsync(CancellationToken cancellationToken = default)
+    {
+        Task<bool>[] flushing;
+        lock (gate) flushing = flushOperations.ToArray();
+        foreach (var operation in flushing)
+        {
+            try { await operation.WaitAsync(cancellationToken).ConfigureAwait(false); }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { }
+        }
+        await checkpointGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        checkpointGate.Release();
+    }
+
+    private async Task ObserveFlushCompletionAsync(Task<bool> operation)
+    {
+        try { await operation.ConfigureAwait(false); }
+        catch { /* The bounded flush/idle caller owns the outcome. Observe it for cleanup. */ }
+        finally { lock (gate) flushOperations.Remove(operation); }
     }
 
     private async Task<bool> FlushCoreAsync(CancellationToken cancellationToken)

@@ -4,7 +4,7 @@ namespace AppUsageCollectorCore;
 
 // This adapter only schedules the existing 004.1 synchronous operations away
 // from ETW callbacks. DailyAppUsageStore owns all SQL and nonpooled connections.
-public sealed class SqliteUsageCheckpointStore : IUsageCheckpointStore
+public sealed class SqliteUsageCheckpointStore : IUsageCheckpointStore, IUsageHistoryStore
 {
     private readonly object initializationGate = new();
     private readonly string commonDataRoot;
@@ -48,6 +48,16 @@ public sealed class SqliteUsageCheckpointStore : IUsageCheckpointStore
         {
             cancellationToken.ThrowIfCancellationRequested();
             return GetInitializedStore().RetentionCleanup(cutoffDate);
+        }, CancellationToken.None);
+    }
+
+    public Task<int> ClearHistoryAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.Run(() =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return GetInitializedStore().ClearHistory();
         }, CancellationToken.None);
     }
 

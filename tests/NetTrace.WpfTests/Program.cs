@@ -39,8 +39,32 @@ internal static class Program
             return PassiveDashboardValidation.Run();
         if (args.Length > 0 && args[0] == "--app-usage-today-checks")
             return RunAppUsageTodayTarget();
+        if (args.Length > 0 && args[0] == "--app-usage-range-checks")
+            return RunAppUsageRangeTarget();
+        if (args.Length > 0 && args[0] == "--app-usage-row-icon-checks")
+            return RunAppUsageRowIconTarget();
+        if (args.Length > 0 && args[0] == "--app-usage-setup-checks")
+            return RunAppUsageSetupTarget();
+        if (args.Length > 0 && args[0] == "--app-tracking-settings-checks")
+            return RunAppTrackingSettingsTarget();
+        if (args.Length > 0 && args[0] == "--app-usage-history-clear-checks")
+            return RunAppUsageHistoryClearTarget();
+        if (args.Length > 0 && args[0] == "--app-tracking-update-checks")
+            return RunAppTrackingUpdateTarget();
+        if (args.Length > 0 && args[0] == "--app-tracking-update-live-validation")
+            return AppTrackingUpdateLiveValidation.Run(args.Skip(1).ToArray());
+        if (args.Length > 0 && args[0] == "--app-tracking-update-observe-current")
+            return AppTrackingUpdateLiveValidation.RunObserveCurrent(args.Skip(1).ToArray());
+        if (args.Length > 0 && args[0] == "--app-usage-lifecycle-live-validation")
+            return AppUsageLifecycleLiveValidation.Run(args.Skip(1).ToArray());
+        if (args.Length > 0 && args[0] == "--app-usage-lifecycle-checks")
+            return RunAppUsageLifecycleTarget();
+        if (args.Length > 0 && args[0] == "--app-usage-setup-live-validation")
+            return AppUsageSetupLiveValidation.Run(args.Skip(1).ToArray());
         if (args.Length > 0 && args[0] == "--app-usage-today-live-validation")
             return AppUsageTodayLiveValidation.Run(args.Skip(1).ToArray());
+        if (args.Length > 0 && args[0] == "--app-usage-production-live-validation")
+            return AppUsageProductionLiveValidation.Run(args.Skip(1).ToArray());
         if (args.Length > 0 && args[0] == "--passive-wifi-validation")
             return PassiveWifiValidation.Run();
         if (args.Length > 0 && args[0] == "--passive-vpn-validation")
@@ -312,6 +336,13 @@ internal static class Program
             HistoryUsageChecks.Run(ownedRoot, Check);
             DashboardSpeedChecks.Run(ownedRoot, Check);
             AppUsageTodayChecks.Run(ownedRoot, Check);
+            AppUsageRangeChecks.Run(ownedRoot, Check);
+            AppUsageRowIconChecks.Run(ownedRoot, Check);
+            AppUsageSetupChecks.Run(ownedRoot, Check);
+            AppTrackingSettingsChecks.Run(ownedRoot, Check);
+            AppUsageHistoryClearChecks.Run(ownedRoot, Check);
+            AppTrackingUpdateChecks.Run(ownedRoot, Check);
+            AppUsageLifecycleChecks.Run(ownedRoot, Check);
             Console.WriteLine($"{_passed}/{_passed} WPF integration checks passed. Isolated data: {ownedRoot}");
             return 0;
         }
@@ -428,6 +459,132 @@ internal static class Program
         catch (Exception exception)
         {
             Console.Error.WriteLine($"FAIL after {_passed} targeted App Usage Today checks: {exception}");
+            return 1;
+        }
+        finally { Application.Current?.Shutdown(); }
+    }
+
+    private static int RunAppUsageRangeTarget()
+    {
+        var ownedRoot = System.IO.Path.Combine(AppContext.BaseDirectory, "owned-app-usage-range-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            _ = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+            AppUsageRangeChecks.Run(ownedRoot, Check);
+            Console.WriteLine($"{_passed}/{_passed} targeted App Usage range checks passed. Isolated data: {ownedRoot}");
+            return 0;
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"FAIL after {_passed} targeted App Usage range checks: {exception}");
+            return 1;
+        }
+        finally { Application.Current?.Shutdown(); }
+    }
+
+    private static int RunAppUsageSetupTarget()
+    {
+        var ownedRoot = System.IO.Path.Combine(AppContext.BaseDirectory, "owned-app-usage-setup-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            _ = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+            AppUsageSetupChecks.Run(ownedRoot, Check);
+            Console.WriteLine($"{_passed}/{_passed} targeted App Usage setup checks passed. Isolated data: {ownedRoot}");
+            return 0;
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"FAIL after {_passed} targeted App Usage setup checks: {exception}");
+            return 1;
+        }
+        finally { Application.Current?.Shutdown(); }
+    }
+
+    private static int RunAppTrackingSettingsTarget()
+    {
+        var ownedRoot = System.IO.Path.Combine(AppContext.BaseDirectory, "owned-app-tracking-settings-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            _ = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+            AppTrackingSettingsChecks.Run(ownedRoot, Check);
+            Console.WriteLine($"{_passed}/{_passed} targeted App Tracking Settings checks passed. Isolated data: {ownedRoot}");
+            return 0;
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"FAIL after {_passed} targeted App Tracking Settings checks: {exception}");
+            return 1;
+        }
+        finally { Application.Current?.Shutdown(); }
+    }
+
+    private static int RunAppUsageHistoryClearTarget()
+    {
+        var ownedRoot = System.IO.Path.Combine(AppContext.BaseDirectory, "owned-app-usage-clear-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            _ = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+            AppUsageHistoryClearChecks.Run(ownedRoot, Check);
+            Console.WriteLine($"{_passed}/{_passed} targeted App Usage history clear checks passed. Isolated data: {ownedRoot}");
+            return 0;
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"FAIL after {_passed} targeted App Usage history clear checks: {exception}");
+            return 1;
+        }
+        finally { Application.Current?.Shutdown(); }
+    }
+
+    private static int RunAppTrackingUpdateTarget()
+    {
+        var ownedRoot = System.IO.Path.Combine(AppContext.BaseDirectory, "owned-app-tracking-update-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            _ = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+            AppTrackingUpdateChecks.Run(ownedRoot, Check);
+            Console.WriteLine($"{_passed}/{_passed} targeted App Tracking update checks passed. Isolated data: {ownedRoot}");
+            return 0;
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"FAIL after {_passed} targeted App Tracking update checks: {exception}");
+            return 1;
+        }
+        finally { Application.Current?.Shutdown(); }
+    }
+
+    private static int RunAppUsageLifecycleTarget()
+    {
+        var ownedRoot = System.IO.Path.Combine(AppContext.BaseDirectory, "owned-app-usage-lifecycle-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            _ = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+            AppUsageLifecycleChecks.Run(ownedRoot, Check);
+            Console.WriteLine($"{_passed}/{_passed} targeted App Usage lifecycle checks passed. Isolated data: {ownedRoot}");
+            return 0;
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"FAIL after {_passed} targeted App Usage lifecycle checks: {exception}");
+            return 1;
+        }
+        finally { Application.Current?.Shutdown(); }
+    }
+
+    private static int RunAppUsageRowIconTarget()
+    {
+        var ownedRoot = System.IO.Path.Combine(AppContext.BaseDirectory, "owned-app-usage-row-icons-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            _ = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+            AppUsageRowIconChecks.Run(ownedRoot, Check);
+            Console.WriteLine($"{_passed}/{_passed} targeted App Usage row icon checks passed. Isolated data: {ownedRoot}");
+            return 0;
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"FAIL after {_passed} targeted App Usage row icon checks: {exception}");
             return 1;
         }
         finally { Application.Current?.Shutdown(); }

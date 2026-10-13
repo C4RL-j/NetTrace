@@ -24,7 +24,8 @@ internal static class ScrollingChecks
             vpnVerifier: new(new VpnDetectionService(new NoTunnel()), new NoRoutes()),
             icmpMonitor: new(new OwnedPing()), reachabilityMonitor: TestReachability.Create());
         using var radio = new WifiRadioService(new NoRadio());
-        var shell = new MainWindow(monitoring, new OwnedStartup(), radio, new AppUsageTodayChecks.UnavailableClient())
+        var shell = new MainWindow(monitoring, new OwnedStartup(), radio, new AppUsageTodayChecks.UnavailableClient(),
+            appTrackingSetupService: new AppUsageSetupChecks.RunningSetupService())
             { ShowActivated = false, ShowInTaskbar = false, Opacity = 0 };
         Window? host = null;
         try
