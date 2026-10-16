@@ -18,6 +18,7 @@ public sealed class TrayApplicationContext : IDisposable
 
     public MonitoringService Monitoring { get; }
     public MainWindow? Dashboard { get; private set; }
+    public TrayPopupWindow? Popup { get; private set; }
 
     public TrayApplicationContext(Application application, MonitoringService monitoring,
         Func<MonitoringService, MainWindow>? dashboardFactory = null, Action? shutdownAction = null)
@@ -34,7 +35,11 @@ public sealed class TrayApplicationContext : IDisposable
         _powerLifecycle = new WindowsPowerLifecycle();
         _powerLifecycle.Suspending += PowerLifecycle_OnSuspending;
         _powerLifecycle.Resuming += PowerLifecycle_OnResuming;
-        try { _trayIcon = new SystemTrayIcon(application.Dispatcher, ShowDashboard, Exit); }
+        try
+        {
+            _trayIcon = new SystemTrayIcon(application.Dispatcher, TogglePopup,
+                ShowDashboard, ShowSettings, ClosePopup, Exit);
+        }
         catch
         {
             _powerLifecycle.Dispose();
@@ -54,6 +59,7 @@ public sealed class TrayApplicationContext : IDisposable
     {
         _application.Dispatcher.VerifyAccess();
         if (_disposed || _application.Dispatcher.HasShutdownStarted) return;
+        ClosePopup();
         if (Dashboard is null)
         {
             var window = _createDashboard(Monitoring);
@@ -64,6 +70,55 @@ public sealed class TrayApplicationContext : IDisposable
         Dashboard.Show();
         if (Dashboard.WindowState == WindowState.Minimized) Dashboard.WindowState = WindowState.Normal;
         Dashboard.Activate();
+    }
+
+    public void ShowSettings()
+    {
+        ShowDashboard();
+        Dashboard?.ShowSettings();
+    }
+
+    public void TogglePopup()
+    {
+        _application.Dispatcher.VerifyAccess();
+        if (_disposed || _application.Dispatcher.HasShutdownStarted) return;
+        if (Popup is not null)
+        {
+            ClosePopup();
+            return;
+        }
+        var popup = new TrayPopupWindow(Monitoring);
+        popup.Closed += Popup_OnClosed;
+        Popup = popup;
+        try
+        {
+            TrayPopupPlacement.Show(popup, _trayIcon.PopupAnchor, _trayIcon.PopupTaskbarBounds);
+            if (ReferenceEquals(_application.MainWindow, popup)) _application.MainWindow = Dashboard;
+        }
+        catch
+        {
+            ClosePopup();
+            throw;
+        }
+    }
+
+    private void ClosePopup()
+    {
+        var popup = Popup;
+        Popup = null;
+        if (popup is null) return;
+        popup.Closed -= Popup_OnClosed;
+        if (ReferenceEquals(_application.MainWindow, popup)) _application.MainWindow = Dashboard;
+        popup.Close();
+    }
+
+    private void Popup_OnClosed(object? sender, EventArgs e)
+    {
+        if (sender is TrayPopupWindow popup) popup.Closed -= Popup_OnClosed;
+        if (ReferenceEquals(sender, Popup)) Popup = null;
+        // WPF temporarily assigns the first opened window as MainWindow on a
+        // background launch. The transient popup never owns the application.
+        if (ReferenceEquals(sender, _application.MainWindow)) _application.MainWindow = Dashboard;
     }
 
     private void PowerLifecycle_OnSuspending(object? sender, EventArgs e)
@@ -102,8 +157,12 @@ public sealed class TrayApplicationContext : IDisposable
         _disposed = true;
         try
         {
-            try { _powerLifecycle.Dispose(); }
-            finally { Monitoring.Dispose(); }
+            try { ClosePopup(); }
+            finally
+            {
+                try { _powerLifecycle.Dispose(); }
+                finally { Monitoring.Dispose(); }
+            }
         }
         finally
         {

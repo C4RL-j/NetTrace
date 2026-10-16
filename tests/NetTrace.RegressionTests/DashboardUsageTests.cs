@@ -18,9 +18,12 @@ internal static class DashboardUsageTests
         ("Dashboard usage honors the current quantity display culture", DisplayCulture),
         ("Refreshed Dashboard usage values do not mutate previous presentations", RefreshedValues),
         ("Unsupported Dashboard usage ranges cannot display a misleading range", UnsupportedRange),
-        ("The compact usage selector cycles Today seven days thirty days and back to Today", SelectorCycle),
-        ("Each compact selector cycle displays the unchanged selected usage quantities", SelectorValues),
-        ("The compact selector rejects unsupported ranges rather than inventing a selection", UnsupportedSelectorRange),
+        ("The cycling usage selector advances Today seven days thirty days and back to Today", SelectorCycle),
+        ("Each selector cycle displays the unchanged selected usage quantities", SelectorValues),
+        ("The cycling selector rejects unsupported ranges rather than inventing a selection", UnsupportedSelectorRange),
+        ("Each range exposes exact independent directional quantities for summary colors", DirectionalValues),
+        ("Directional summary quantities preserve zero and large byte totals", DirectionalSizes),
+        ("Directional summary quantities preserve the existing display culture", DirectionalCulture),
     ];
 
     private static void TodayDefault() => WithCulture("en-US", () =>
@@ -130,6 +133,49 @@ internal static class DashboardUsageTests
             throw new InvalidOperationException($"Unsupported selector range {invalid} was accepted.");
         }
     }
+
+    private static void DirectionalValues() => WithCulture("en-US", () =>
+    {
+        var expected = new[]
+        {
+            (DashboardUsageRange.Today, "↓ 1.00 GB", "↑ 512.0 MB"),
+            (DashboardUsageRange.SevenDays, "↓ 3.00 GB", "↑ 1.00 GB"),
+            (DashboardUsageRange.ThirtyDays, "↓ 10.00 GB", "↑ 2.00 GB")
+        };
+        foreach (var (range, download, upload) in expected)
+        {
+            var value = Create(range);
+            Equal(download, value.DownloadText, "selected range download value");
+            Equal(upload, value.UploadText, "selected range upload value");
+            Equal($"{download}   {upload}", value.BreakdownText, "combined directions stay unchanged");
+        }
+    });
+
+    private static void DirectionalSizes() => WithCulture("en-US", () =>
+    {
+        foreach (var range in Enum.GetValues<DashboardUsageRange>())
+        {
+            var empty = DashboardUsagePresentation.Create(range, (0, 0), (0, 0), (0, 0));
+            Equal("↓ 0 B", empty.DownloadText, "zero download remains visible");
+            Equal("↑ 0 B", empty.UploadText, "zero upload remains visible");
+            var large = DashboardUsagePresentation.Create(range,
+                (3_298_534_883_328, 1_099_511_627_776),
+                (3_298_534_883_328, 1_099_511_627_776),
+                (3_298_534_883_328, 1_099_511_627_776));
+            Equal("↓ 3.00 TB", large.DownloadText, "large download retains binary units");
+            Equal("↑ 1.00 TB", large.UploadText, "large upload retains binary units");
+            Equal("4.00 TB", large.TotalText, "directional presentation preserves the combined total");
+        }
+    });
+
+    private static void DirectionalCulture() => WithCulture("fr-FR", () =>
+    {
+        var value = Create(DashboardUsageRange.Today);
+        Equal("↓ 1,00 GB", value.DownloadText, "localized download quantity");
+        Equal("↑ 512,0 MB", value.UploadText, "localized upload quantity");
+        Equal($"{value.DownloadText}   {value.UploadText}", value.BreakdownText,
+            "localized paired quantities preserve the current breakdown");
+    });
 
     private static DashboardUsagePresentation Create(DashboardUsageRange range) =>
         DashboardUsagePresentation.Create(range, Today, Week, Month);

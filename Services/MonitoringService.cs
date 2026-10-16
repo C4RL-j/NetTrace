@@ -58,6 +58,7 @@ public sealed class MonitoringService : IDisposable
     private readonly HashSet<DateOnly> _dirtyTrafficPeakDays = new();
 
     public event EventHandler? Changed;
+    public event EventHandler? TrafficSampled;
     public UsageStore Usage => _store;
     public ProfileStore Profiles => _profiles;
     public ConnectionHistoryStore History => _history;
@@ -368,9 +369,24 @@ public sealed class MonitoringService : IDisposable
 
     public void SampleNow()
     {
+        if (!SampleCore()) return;
+        // Notify visible traffic views after releasing the sampling gate. This
+        // publishes the existing sample; it creates no extra sampling cadence
+        // and does not trigger the dashboard's broader recognition refresh.
+        var handlers = TrafficSampled;
+        if (handlers is null) return;
+        foreach (EventHandler handler in handlers.GetInvocationList())
+        {
+            try { handler(this, EventArgs.Empty); }
+            catch (Exception exception) { Trace.TraceWarning($"Traffic view update failed: {exception.Message}"); }
+        }
+    }
+
+    private bool SampleCore()
+    {
         lock (_gate)
         {
-            if (!_started || _stopping || _disposed || _suspended) return;
+            if (!_started || _stopping || _disposed || _suspended) return false;
             DateTimeOffset? sampledAtUtc = null;
             var measured = false;
             try
@@ -379,7 +395,7 @@ public sealed class MonitoringService : IDisposable
                 {
                     SetOffline("No adapter selected");
                     PersistWhenDue();
-                    return;
+                    return true;
                 }
                 var today = DateOnly.FromDateTime(_timeProvider.GetLocalNow().DateTime);
                 if (today != _pendingDay)
@@ -393,7 +409,7 @@ public sealed class MonitoringService : IDisposable
                     SetOffline("Adapter disconnected");
                     _previousSnapshot = null;
                     PersistWhenDue();
-                    return;
+                    return true;
                 }
                 _status = "Monitoring";
                 var latest = _profileMonitor.Current;
@@ -429,6 +445,7 @@ public sealed class MonitoringService : IDisposable
                 _trafficTimeline.Record(sampledAtUtc ?? _timeProvider.GetUtcNow(), _downloadRate, _uploadRate,
                     measured, _selectedAdapter?.Id);
             }
+            return true;
         }
     }
 

@@ -2,7 +2,7 @@
 
 Lightweight Windows network usage and diagnostics monitor.
 
-NetTrace V1.1 establishes the NetTrace identity and safely migrates local history from the previous Data Usage Monitor build (Task 001). Task 002 adds connection profiles and network mappings; Task 003 adds physical connection sessions and event history. Tasks 004C–004E persist VPN intervals, events and lifecycle boundaries. Tasks 005A–005B add the system tray, background monitoring and optional startup with Windows. Built with C#/.NET 8, WPF, and SQLite.
+NetTrace 0.2.0 is built with C#/.NET 8, WPF, and SQLite. It records local usage history, tracks physical and VPN connection sessions, and keeps monitoring from the system tray. See [the changelog](CHANGELOG.md) for release highlights and [GitHub Releases](https://github.com/C4RL-j/NetTrace/releases) for downloads.
 
 ## Current features
 
@@ -10,7 +10,9 @@ NetTrace V1.1 establishes the NetTrace identity and safely migrates local histor
 - Live download/upload traffic with adaptive byte-rate primary and Mbps secondary
 - Persistent daily peaks from passive traffic observations
 - Download/upload totals for the current app session
-- Dashboard Data Usage summary with a compact cycling range selector and download/upload breakdown
+- Dashboard Data Usage summary with a pill range selector and green download / blue upload breakdown
+- User-started, data-limited real download Speed Test with immediate cancellation
+- Small header key for confirmed active VPN/tunnel connections, including split tunnels
 - Adapter type, IPv4 address, and local Wi-Fi/Ethernet link rate
 - Local SQLite history
 - Connection profiles with Telco / ISP and Device names
@@ -30,11 +32,15 @@ Live Traffic watches existing traffic and generates no speed-test traffic. The s
 
 **Peak today** is the highest sampled download/upload traffic NetTrace observed across monitored adapters during the local calendar day. Peaks are saved about every 30 seconds and on normal exit, survive restarts, and begin at zero on a new day. They are observations while NetTrace runs, not guaranteed maximum internet throughput. Earlier usage totals cannot reconstruct old traffic peaks, so peak recording begins with this build. A sudden termination can lose the most recent unsaved peak.
 
-**Wi-Fi link rate** describes the local PC-to-router/hotspot link; Ethernet and other adapters are labeled accordingly. It is not measured internet speed. The status indicator describes monitoring activity. Raw ICMP measurements run in the background and the Health page shows the latest completed cycle. Active internet speed tests remain future work.
+**Wi-Fi link rate** describes the local PC-to-router/hotspot link; Ethernet and other adapters are labeled accordingly. It is not measured internet speed. The small global status indicator in the top-right app header describes monitoring activity. Raw ICMP measurements run in the background and the Health page shows the latest completed cycle.
 
-**Dashboard Data Usage** defaults to Today. Its compact attached cyan selector cycles Today → Last 7 Days → Last 30 Days → Today when clicked or activated with the keyboard. The same left summary card shows the existing total/download/upload values, and the selected range stays while navigating between pages in the same window. Range switching uses the existing usage totals query and quantity formatter; usage accounting is unchanged.
+**Speed Test** is an explicit real download from Cloudflare, separate from passive Live Traffic measurements. Choose a maximum download payload of 25, 50, 100 or 250 decimal MB (25 MB by default), then accept the pre-start real-data warning. Protocol overhead consumes additional data. All test traffic remains included in the ordinary adapter, Today, app-session and connection-session totals; the test never adds, subtracts or hides bytes itself. The monitored adapter must match the current physical connection. Ordinary counter samples immediately before and after the request capture even a download shorter than one monitoring tick.
 
-The right half shows a native WPF rolling **live traffic** graph for Download and Upload over the last 60 seconds, using the same raw bytes-per-second samples as the Live Traffic cards and their adaptive B/s, KB/s, MB/s and GB/s formatting. The existing monitoring sampler keeps at most 61 one-second observations in memory while monitoring is active, including when Dashboard is hidden, minimized or closed. Immutable raw snapshots are cached separately from chart projection. Only a visible Dashboard builds chart data and draws; returning immediately shows the already-collected recent minute. Hover shows the local sample time, each direction and combined speed. Idle samples remain zero; unavailable measurements and real sampling interruptions create gaps, while Dashboard visibility does not. Changing the monitored adapter starts a new trace. The compact selector continues to select accumulated summary totals while the graph stays live. It adds no sampler, timer, worker, database query or persisted speed history.
+The Speed Test card occupies the existing right-column gap above the graph at a fixed 52-DIP height. Idle, Running, Completed, Cancelled and Error use identical outer bounds; the graph retains its original 152-DIP height and 54-DIP top margin. Live cumulative Mbps measures received payload over body-transfer time, excluding DNS/TLS setup. Cancel interrupts the request/body immediately, and cancelling after at least 1 MB and 250 ms retains a partial measurement. Test Again starts only another explicitly confirmed request. Window closure, monitoring suspension, adapter changes and physical-session changes cancel an active download. The result is an estimate from one download rather than a multi-connection line-capacity measurement; VPNs, other traffic and the server path can affect it.
+
+**Dashboard Data Usage** defaults to Today. Its 240×44-DIP pill selector includes a calendar icon and chevron and cycles Today → Last 7 Days → Last 30 Days → Today when clicked or activated with the keyboard. The rounded gradient summary card below shows the existing selected range and a larger 32-point total, with green download and blue upload quantities. Long values wrap, and the selected range stays while navigating between pages in the same window. Range switching uses the existing usage totals query and quantity formatter; usage accounting is unchanged. The summary stays 240 DIP wide and the graph keeps the remaining horizontal space, aligned with the card. Download uses green (#22C55E) and Upload uses blue (#38BDF8) consistently across the summary, live traffic graph/legend, and Live Traffic direction labels and speed readings. Peak and app-session text retain their muted styling.
+
+The wider right side fills the remaining horizontal space with a native WPF rolling **live traffic** graph for Download and Upload over the last 130 seconds, using the same raw bytes-per-second samples as the Live Traffic cards and their adaptive B/s, KB/s, MB/s and GB/s formatting. The existing monitoring sampler keeps at most 130 one-second observations in memory while monitoring is active, including when Dashboard is hidden, minimized or closed. Samples exactly 130 seconds old expire; the X axis spans 130 seconds with 130s / 60s / Now labels. Immutable raw snapshots are cached separately from chart projection. Only a visible Dashboard builds chart data and draws; returning immediately shows the already-collected recent 130 seconds. Hover shows the local sample time, each direction and combined speed. Idle samples remain zero; unavailable measurements and real sampling interruptions create gaps, while Dashboard visibility does not. Changing the monitored adapter starts a new trace. The range selector continues to select accumulated summary totals while the graph stays live. It adds no sampler, timer, worker, database query or persisted speed history.
 
 ## Important limitation
 
@@ -43,6 +49,7 @@ Usage is recorded while the app runs. It does not import Windows Settings usage 
 ## Requirements
 
 - Windows 10 or Windows 11
+- .NET 8 Desktop Runtime (x64) for the published Windows x64 build
 - .NET 8 SDK for development
 
 ## Run from source
@@ -57,7 +64,7 @@ dotnet run
 ## Build a normal release
 
 ```powershell
-dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true
+dotnet publish NetTrace.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=false
 ```
 
 Output will be under:
@@ -65,6 +72,12 @@ Output will be under:
 ```text
 bin\Release\net8.0-windows\win-x64\publish\
 ```
+
+Keep the complete published folder, including `AppTracking/Service` and
+`AppTracking/Installer`, together. Extract the release ZIP to a writable folder
+and launch `NetTrace.exe`. App tracking setup requests elevation only when needed;
+the dashboard runs without administrator rights. User history stays in the local
+application data directory described below.
 
 ## Database location
 
@@ -160,9 +173,9 @@ Normal shutdown stops and joins the VPN observer, flushes pending usage and clos
 
 ## System tray and background monitoring (Task 005A)
 
-Closing the dashboard destroys that view and stops its refresh timer. `MonitoringService` continues sampling, batched persistence, physical sessions, profile recognition and VPN tracking without any dashboard or WPF dispatcher. The tray menu provides **Open NetTrace** and **Exit**; double-click also opens NetTrace. Open recreates a dashboard from the current service state, or restores the existing window. App totals, selected adapter, sampling baseline and current session IDs survive dashboard recreation.
+Closing the dashboard destroys that view and stops its refresh timer. `MonitoringService` continues sampling, batched persistence, physical sessions, profile recognition and VPN tracking without any dashboard or WPF dispatcher. Left-clicking the tray icon opens a compact, 340-DIP-wide popup above the notification area with current Download/Upload speeds, the last 60 seconds of traffic, Today total and Download/Upload breakdown, and monitoring status. Its header shows the same VPN key when the existing observer detects a connected tunnel. It reads the existing monitoring snapshots and usage totals; it adds no tracking or sampling timer. Click outside or press Escape to dismiss it. Single-click waits for the Windows double-click interval so double-clicking opens the main window directly. Right-click provides **Open NetTrace**, **Settings**, and **Exit**. Open recreates a dashboard from the current service state, or restores the existing window; Settings opens its Settings page. App totals, selected adapter, sampling baseline and current session IDs survive dashboard recreation.
 
-The application explicitly shuts down only on tray Exit or Windows session ending. Exit stops and joins native observers, flushes pending usage, closes VPN/physical intervals with their existing shutdown behavior, disposes the tray icon/power listener and releases database ownership. Background mode performs no dashboard refresh or history-total rendering queries. The tray uses the NetTrace globe icon and the standard Windows menu. Tray startup does not install a Windows service; App Usage installation is a separate explicit administrative operation.
+The application explicitly shuts down only on tray Exit or Windows session ending. Exit closes the popup, stops and joins native observers, flushes pending usage, closes VPN/physical intervals with their existing shutdown behavior, disposes the tray icon/power listener and releases database ownership. With both windows closed, background mode performs no dashboard refresh or history-total rendering queries. The tray uses the NetTrace globe icon and the standard Windows menu. Tray startup does not install a Windows service; App Usage installation is a separate explicit administrative operation.
 
 ## Windows startup and background launch (Task 005B)
 
@@ -221,7 +234,9 @@ or change physical/VPN sessions. The latest result is available in memory throug
 UI Foundation 001.1 displays that latest completed result on **Health**. It shows
 **Waiting for first measurement...** until a cycle completes, then displays the target,
 average successful-reply latency, packet loss, successful replies and local sample time.
-All-failed cycles show **Unavailable** latency and **100%** loss. The existing window
+All-failed cycles show **Unavailable** latency. Packet Loss is **Unavailable** when
+Internet reachability is Available or Limited; confirmed Unavailable reachability
+can still show **100%** loss. The existing window
 refresh timer reads the result within one second of completion; returning to Health
 reads it immediately. Page navigation never starts, stops or restarts probes, and the
 application-owned worker continues in tray-only mode.
@@ -260,8 +275,8 @@ Network Health 004 adds a compact **Packet Loss** strip inside Connection Stabil
 below the latency/jitter chart. Both controls share the exact same immutable
 presentation snapshot and completed-cycle positions. Purple bar height is the
 cycle's packet-loss percentage on a fixed 0–100% scale: zero is baseline-only,
-25% is quarter height, and 100% is full height, including when latency/jitter are
-unavailable. Arbitrary finite percentages are supported and clamped for display;
+25% is quarter height, and measurable 100% is full height, including when latency/jitter are
+unavailable and reachability does not establish available internet. Arbitrary finite percentages are supported and clamped for display;
 nonfinite inputs leave no bar rather than inventing a measurement. Empty history
 shows **Waiting for packet loss samples...**.
 
@@ -269,6 +284,22 @@ The strip uses native WPF drawing and the same visible-page update/restore lifec
 It creates no worker, timer or separate history source. These bars describe ICMP
 loss only; blocked ICMP replies cannot establish internet availability. History
 remains in memory and is cleared when NetTrace exits.
+
+Health Polish keeps the **Packet Loss** label and interprets both its value and
+chart using the latest independently measured Internet reachability. Available
+or Limited reachability with zero successful replies displays **Unavailable**;
+those cycles keep their chart slots but draw no loss bars. If every displayed
+loss value is unavailable, the strip shows **Packet loss can't be measured for
+these samples.** An active VPN adds **Ping replies may be blocked by the active
+VPN.** to the Health explanation. Partial replies still show measured loss
+(3/4 = 25%, 2/4 = 50%); Unavailable reachability with 0/4 can still show 100%.
+Checking retains the prior raw-loss display until reachability completes.
+
+Reachability-only changes refresh the packet-loss presentation immediately through
+the existing view refresh. Rolling ICMP results do not store historical reachability,
+so the current reachability context applies to the displayed history. Raw ICMP
+results, latency, jitter, quality evaluation, target/cadence, DNS/HTTPS probes and
+VPN detection remain unchanged.
 
 Network Health 005 adds **ICMP quality** to the upper NETWORK HEALTH card. It evaluates
 only the newest 12 completed cycles from the existing history, in completion order,
@@ -984,3 +1015,21 @@ dotnet run --project tests/NetTrace.WpfTests -- --app-usage-row-icon-checks
 
 See [006.1 validation](tests/NetTrace.WpfTests/VALIDATION0061.md) for cache,
 native-icon and compact-window checks.
+
+## Header VPN key
+
+A small cyan key appears immediately left of the existing Monitoring indicator
+when Windows confirms a connected RAS VPN, or when an identified VPN/tunnel
+interface is Up with a valid assigned IP address and an active associated route.
+Split tunnels count without owning the default route. Installed/disconnected
+adapters and ordinary Ethernet, Wi-Fi and unrelated virtualization interfaces do
+not trigger the key. Its tooltip starts with `VPN Connected` and lists all
+available connected VPN/interface names.
+
+Connected-tunnel detection is independent of internet reachability and of the
+existing general-route classification used elsewhere in the app. The key does
+not verify encryption, security or that all internet traffic uses the tunnel.
+It reads the existing observer cache; network/address/route changes refresh that
+same observer. There is no extra poller, reachability probe or usage accounting.
+When connected evidence disappears, the key and any open tooltip hide without
+changing the Monitoring dot/text or dashboard layout.

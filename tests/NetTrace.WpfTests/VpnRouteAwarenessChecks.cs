@@ -136,11 +136,14 @@ internal static class VpnRouteAwarenessChecks
         var quality = Field<object>(window, "_qualitySummary");
         fixture.SetRoute(Scenario.ActiveMixed);
         check(Text(window, "InternetReachabilityText") == "Available" && Text(window, "HealthVpnStatusText") == "Active" &&
-            Text(window, "IcmpQualityText") == "Unavailable" && Text(window, "IcmpPacketLossText") == "100%" &&
+            Text(window, "IcmpQualityText") == "Unavailable" && Text(window, "IcmpPacketLossText") == "Unavailable" &&
+            loss.Data.PacketLossPoints.TakeLast(12).All(point => point.Percent is null) &&
             Semantic(window, "InternetReachabilityText", "StatusPositiveBrush") && Semantic(window, "HealthVpnStatusText", "StatusInfoBrush") &&
             Semantic(window, "IcmpQualityText", "StatusNeutralBrush") && VpnDisclaimer(window) &&
-            Text(window, "HealthDisclaimerText").Contains("available", StringComparison.OrdinalIgnoreCase),
-            "Health case B keeps Available internet positive, Active VPN informational and unavailable full-loss ICMP neutral with a qualified VPN explanation");
+            Text(window, "HealthDisclaimerText").Contains("available", StringComparison.OrdinalIgnoreCase) &&
+            Text(window, "HealthDisclaimerText").Contains("Packet loss can't be measured for these samples.", StringComparison.Ordinal) &&
+            Text(window, "HealthDisclaimerText").Contains("Ping replies may be blocked by the active VPN.", StringComparison.Ordinal),
+            "Health case B shows unavailable packet loss without false bars for Available internet and an active VPN, with a qualified blocked-ping explanation");
         check(ReferenceEquals(rawIcmp, fixture.Monitoring.LatestIcmpMeasurement) && rawSamples.SequenceEqual(fixture.Monitoring.RollingIcmpSamples) &&
             ReferenceEquals(chartData, line.Data) && ReferenceEquals(line.Data, loss.Data) &&
             ReferenceEquals(quality, Field<object>(window, "_qualitySummary")),
@@ -155,6 +158,7 @@ internal static class VpnRouteAwarenessChecks
         fixture.CompleteReachability(false, false);
         window.RefreshDashboard();
         check(Text(window, "InternetReachabilityText") == "Unavailable" && Text(window, "HealthVpnStatusText") == "Active" &&
+            Text(window, "IcmpPacketLossText") == "100%" && loss.Data.PacketLossPoints.TakeLast(12).All(point => point.Percent == 100) &&
             Text(window, "IcmpQualityText") == "Unavailable" && Semantic(window, "InternetReachabilityText", "StatusNegativeBrush") &&
             Semantic(window, "HealthVpnStatusText", "StatusInfoBrush") && Semantic(window, "IcmpQualityText", "StatusNeutralBrush") &&
             !Text(window, "HealthDisclaimerText").Contains("remains available", StringComparison.OrdinalIgnoreCase),

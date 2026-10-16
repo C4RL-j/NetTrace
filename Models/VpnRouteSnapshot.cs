@@ -19,6 +19,11 @@ public sealed record VpnRouteSnapshot(
     public VpnTransportFamily TransportFamily { get; init; } = VpnTransportFamily.Unknown;
     public string TransportReason { get; init; } = "The VPN outer transport has not been established.";
 
+    // Connected tunnels include private/split routes and connected RAS sessions.
+    // This is independent of general internet-route ownership and reachability.
+    public IReadOnlyList<string> ConnectedTunnelNames { get; init; } = Array.Empty<string>();
+    public bool HasActiveTunnel => ConnectedTunnelNames.Count > 0;
+
     public static VpnRouteSnapshot Unknown { get; } = new(VpnTunnelStatus.Unknown,
         InternetRouteKind.Unknown, null, null, null, "Local internet routing has not been checked.");
 }

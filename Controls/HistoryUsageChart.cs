@@ -1,9 +1,11 @@
 using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using NetTrace.Presentation;
+using NetTrace.Utils;
 
 namespace NetTrace.Controls;
 
@@ -15,8 +17,14 @@ public sealed class HistoryUsageChart : FrameworkElement
     private static readonly Brush LabelBrush = FrozenBrush("#94A3B8");
     private static readonly Pen GridPen = FrozenPen("#243244", 1);
     private static readonly Pen AxisPen = FrozenPen("#334155", 1);
+    private static readonly Pen HoverPen = FrozenPen("#FFFFFF", 1);
+    private static readonly Brush ToolTipForeground = FrozenBrush("#F8FAFC");
     private ToolTip? _pointToolTip;
-    private TextBlock? _toolTipText;
+    private TextBlock? _toolTipDate;
+    private TextBlock? _toolTipDownload;
+    private TextBlock? _toolTipUpload;
+    private TextBlock? _toolTipTotal;
+    private Window? _ownerWindow;
     private int _selectedIndex = -1;
 
     // Series colors describe measurements, independently of semantic statuses.
@@ -30,6 +38,15 @@ public sealed class HistoryUsageChart : FrameworkElement
 
     public HistoryUsageChart()
     {
+        // The tooltip is created when a day is selected. WPF's automatic service
+        // can already have entered this element while its tooltip was still null.
+        ToolTipService.SetIsEnabled(this, false);
+        Loaded += (_, _) => ObserveWindow();
+        Unloaded += (_, _) =>
+        {
+            StopObservingWindow();
+            ClearHover();
+        };
         IsVisibleChanged += (_, _) =>
         {
             if (!IsVisible) ClearHover();
@@ -115,6 +132,7 @@ public sealed class HistoryUsageChart : FrameworkElement
         var slotWidth = plot.Width / Data.Points.Count;
         var barWidth = Math.Min(Data.Points.Count <= 7 ? 48 : 18, slotWidth * 0.7);
         var maximum = (double)Math.Max(1, Data.MaximumTotalBytes);
+        var hoveredBar = Rect.Empty;
         drawingContext.PushClip(new RectangleGeometry(plot));
         for (var index = 0; index < Data.Points.Count; index++)
         {
@@ -140,8 +158,15 @@ public sealed class HistoryUsageChart : FrameworkElement
             if (uploadedHeight > 0)
                 drawingContext.DrawRectangle(UploadBrush, null,
                     new Rect(left, plot.Bottom - downloadedHeight - uploadedHeight, barWidth, uploadedHeight));
+            if (index == _selectedIndex && downloadedHeight + uploadedHeight > 0)
+                hoveredBar = new Rect(left, plot.Bottom - downloadedHeight - uploadedHeight,
+                    barWidth, downloadedHeight + uploadedHeight);
         }
         drawingContext.Pop();
+        // Draw after the plot clip so all four edges remain visible, including
+        // the tallest bar's top and the baseline. Empty days have no phantom bar.
+        if (!hoveredBar.IsEmpty)
+            drawingContext.DrawRectangle(null, HoverPen, hoveredBar);
     }
 
     private void DrawDateLabels(DrawingContext drawingContext, Rect plot)
@@ -180,7 +205,7 @@ public sealed class HistoryUsageChart : FrameworkElement
             return;
         }
         var point = Data.Points[index];
-        if (ReferenceEquals(SelectedPoint, point)) return;
+        if (ReferenceEquals(SelectedPoint, point) && _pointToolTip?.IsOpen == true) return;
 
         SelectPoint(point, index);
     }
@@ -189,10 +214,71 @@ public sealed class HistoryUsageChart : FrameworkElement
     {
         SelectedPoint = point;
         _selectedIndex = index;
-        _toolTipText ??= new TextBlock { TextWrapping = TextWrapping.Wrap, MaxWidth = 250 };
-        _pointToolTip ??= new ToolTip { Content = _toolTipText, MaxWidth = 274 };
-        _toolTipText.Text = point.ToolTipText;
+        EnsureToolTip();
+        _toolTipDate!.Text = point.LocalDate.ToString("ddd, MMM d, yyyy", CultureInfo.InvariantCulture);
+        _toolTipDownload!.Text = ByteFormatter.Format(point.DownloadBytes);
+        _toolTipUpload!.Text = ByteFormatter.Format(point.UploadBytes);
+        _toolTipTotal!.Text = ByteFormatter.Format(point.TotalBytes);
         ToolTip = _pointToolTip;
+        _pointToolTip!.IsOpen = true;
+        InvalidateVisual();
+    }
+
+    private void EnsureToolTip()
+    {
+        if (_pointToolTip is not null) return;
+
+        var content = new Grid { MaxWidth = 250 };
+        content.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        content.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        for (var row = 0; row < 4; row++)
+            content.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+        _toolTipDate = new TextBlock
+        {
+            Foreground = ToolTipForeground,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 0, 0, 6)
+        };
+        Grid.SetColumnSpan(_toolTipDate, 2);
+        content.Children.Add(_toolTipDate);
+        _toolTipDownload = AddToolTipRow(content, 1, "Download", DownloadBrush);
+        _toolTipUpload = AddToolTipRow(content, 2, "Upload", UploadBrush);
+        _toolTipTotal = AddToolTipRow(content, 3, "Total", ToolTipForeground);
+        _pointToolTip = new ToolTip
+        {
+            Content = content,
+            PlacementTarget = this,
+            Placement = PlacementMode.MousePoint,
+            StaysOpen = true,
+            IsHitTestVisible = false,
+            MaxWidth = 274,
+            Padding = new Thickness(8),
+            Background = FrozenBrush("#172036"),
+            Foreground = ToolTipForeground,
+            BorderBrush = FrozenBrush("#2B3957"),
+            BorderThickness = new Thickness(1),
+            FontFamily = new FontFamily("Segoe UI"),
+            FontSize = 12
+        };
+    }
+
+    private static TextBlock AddToolTipRow(Grid content, int row, string label, Brush labelBrush)
+    {
+        var top = row == 3 ? 4 : 2;
+        var name = new TextBlock { Text = label, Foreground = labelBrush, Margin = new Thickness(0, top, 0, 0) };
+        var value = new TextBlock
+        {
+            Foreground = ToolTipForeground,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Margin = new Thickness(16, top, 0, 0)
+        };
+        Grid.SetRow(name, row);
+        Grid.SetRow(value, row);
+        Grid.SetColumn(value, 1);
+        content.Children.Add(name);
+        content.Children.Add(value);
+        return value;
     }
 
     protected override void OnMouseLeave(MouseEventArgs args)
@@ -203,11 +289,40 @@ public sealed class HistoryUsageChart : FrameworkElement
 
     private void ClearHover()
     {
+        var hadSelection = _selectedIndex >= 0;
         SelectedPoint = null;
         _selectedIndex = -1;
         if (_pointToolTip is not null) _pointToolTip.IsOpen = false;
         ToolTip = null;
+        if (hadSelection) InvalidateVisual();
     }
+
+    private void ObserveWindow()
+    {
+        var window = Window.GetWindow(this);
+        if (ReferenceEquals(_ownerWindow, window)) return;
+        StopObservingWindow();
+        _ownerWindow = window;
+        if (_ownerWindow is null) return;
+        _ownerWindow.StateChanged += OwnerWindowOnStateChanged;
+        _ownerWindow.Deactivated += OwnerWindowOnDeactivated;
+    }
+
+    private void StopObservingWindow()
+    {
+        if (_ownerWindow is null) return;
+        _ownerWindow.StateChanged -= OwnerWindowOnStateChanged;
+        _ownerWindow.Deactivated -= OwnerWindowOnDeactivated;
+        _ownerWindow = null;
+    }
+
+    private void OwnerWindowOnStateChanged(object? sender, EventArgs args)
+    {
+        if (_ownerWindow?.WindowState == WindowState.Minimized) ClearHover();
+        else InvalidateVisual();
+    }
+
+    private void OwnerWindowOnDeactivated(object? sender, EventArgs args) => ClearHover();
 
     private FormattedText Text(string value) => new(value, CultureInfo.CurrentCulture,
         FlowDirection.LeftToRight, LabelTypeface, 11, LabelBrush, VisualTreeHelper.GetDpi(this).PixelsPerDip);

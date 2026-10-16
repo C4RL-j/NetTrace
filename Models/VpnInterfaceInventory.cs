@@ -18,6 +18,9 @@ public sealed record VpnInterfaceEvidence
     public string? DriverComponentId { get; init; }
     public string? DriverService { get; init; }
     public bool TapMediaAlwaysConnected { get; init; }
+    // Only currently assigned unicast addresses with a valid lifetime and usable DAD state.
+    // Kept in the passive inventory so the header never needs a separate adapter query.
+    public IReadOnlyList<IPAddress> AssignedAddresses { get; init; } = Array.Empty<IPAddress>();
 }
 
 // RAS phonebook GUIDs and logon LUIDs are not network interface identifiers.

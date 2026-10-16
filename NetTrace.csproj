@@ -8,6 +8,7 @@
     <AssemblyName>NetTrace</AssemblyName>
     <RootNamespace>NetTrace</RootNamespace>
     <Product>NetTrace</Product>
+    <Version>0.2.0</Version>
     <ApplicationIcon>assets\NetTrace.ico</ApplicationIcon>
   </PropertyGroup>
 

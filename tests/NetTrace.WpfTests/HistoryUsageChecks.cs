@@ -1,9 +1,11 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
@@ -24,6 +26,8 @@ internal static class HistoryUsageChecks
         var previews = System.IO.Path.Combine(root, "history-usage-previews");
         CheckStates(root, previews, check);
         CheckLifecycle(root, previews, check);
+        CheckSingleSeries(previews, check);
+        CheckRealPointerHover(previews, check);
         Console.WriteLine("History usage previews: " + previews);
     }
 
@@ -101,6 +105,10 @@ internal static class HistoryUsageChecks
                 "Daily today's bytes agree with History 001 while its four recent session rows remain present");
             ShowUsageSection(window);
             CheckStackedDrawing(chart, check);
+            CheckHoverDaySelection(chart, check);
+            CheckHoverOutline(chart, 6, check, "mixed-usage 7D", System.IO.Path.Combine(previews, "hover-outline-7D.png"));
+            CheckHoverOutline(chart, 4, check, "smaller mixed-usage 7D");
+            CheckHoverTransitions(chart, 6, 4, 3, check);
             CheckLayout(window, check, "mixed 7D");
             HistoryOverviewChecks.SavePreview(window, System.IO.Path.Combine(previews, "760x600-mixed-7D.png"));
             CheckTooltip(chart, 6, check, "mixed-usage 7D", System.IO.Path.Combine(previews, "tooltip-mixed-7D.png"));
@@ -129,7 +137,10 @@ internal static class HistoryUsageChecks
             ShowUsageSection(window);
             CheckLayout(window, check, "varied 30D");
             HistoryOverviewChecks.SavePreview(window, System.IO.Path.Combine(previews, "760x600-varied-30D.png"));
+            CheckHoverDaySelection(chart, check);
             CheckTooltip(chart, 0, check, "varied-usage 30D", System.IO.Path.Combine(previews, "tooltip-varied-30D.png"));
+            CheckHoverOutline(chart, 0, check, "varied-usage 30D", System.IO.Path.Combine(previews, "hover-outline-30D.png"));
+            CheckHoverTransitions(chart, 29, 0, 24, check);
             AddCompleted(history, LocalDay(clock, -1), null, 20_000_000_000, 5_000_000_000);
             RefreshUsage(window);
             check(chart.Data.MaximumTotalBytes == 25_000_000_000 && chart.Data.MaximumText == ByteFormatter.Format(25_000_000_000) &&
@@ -137,6 +148,7 @@ internal static class HistoryUsageChecks
                 "A large GB day automatically rescales the chart with the application's existing byte formatter");
             ShowUsageSection(window);
             CheckStackedDrawing(chart, check);
+            CheckHoverOutline(chart, 28, check, "large-GB 30D");
             HistoryOverviewChecks.SavePreview(window, System.IO.Path.Combine(previews, "760x600-large-GB-30D.png"));
             Page(window).ScrollToEnd();
             Layout(window);
@@ -227,6 +239,9 @@ internal static class HistoryUsageChecks
                 Enumerable.Range(0, 30).All(index => chart.GetPointAt(PointInDay(chart, index))?.LocalDate == chart.Data.Points[index].LocalDate),
                 "Mostly-zero 30D retains every empty daily column as a useful tooltip target");
             HistoryOverviewChecks.SavePreview(window, System.IO.Path.Combine(previews, "760x600-mostly-zero-30D.png"));
+            CheckTooltip(chart, 0, check, "empty day among populated 30D", System.IO.Path.Combine(previews, "tooltip-empty-day-30D.png"));
+            CheckTooltip(chart, 27, check, "populated day among mostly-zero 30D", System.IO.Path.Combine(previews, "tooltip-mostly-zero-30D.png"));
+            CheckHoverOutline(chart, 27, check, "mostly-zero 30D");
         }
         finally { window.Close(); }
     }
@@ -263,7 +278,7 @@ internal static class HistoryUsageChecks
             ShowUsageSection(window);
             HistoryOverviewChecks.SavePreview(window, System.IO.Path.Combine(previews, "760x600-active-7D.png"));
             var tip = Hover(chart, 6);
-            tip.IsOpen = true;
+            check(tip.IsOpen, "Hovering live daily usage opens its tooltip immediately without a delayed tooltip service");
             HistoryOverviewChecks.Pump();
             var selectedDate = chart.SelectedPoint!.LocalDate;
             clock.Advance(TimeSpan.FromSeconds(1));
@@ -272,11 +287,11 @@ internal static class HistoryUsageChecks
             window.RefreshDashboard();
             HistoryOverviewChecks.Pump();
             check(ReferenceEquals(tip, chart.ToolTip) && tip.IsOpen && chart.SelectedPoint?.LocalDate == selectedDate &&
-                ((TextBlock)tip.Content).Text == chart.Data.Points[^1].ToolTipText &&
+                TooltipHasValues(tip, chart.Data.Points[^1]) &&
                 chart.Data.Points[^1].DownloadBytes == 4_100_000,
                 "A stationary daily tooltip stays open and updates its exact active byte values on the existing view cadence");
             SaveTooltip(tip, System.IO.Path.Combine(previews, "tooltip-active-updated.png"));
-            tip.IsOpen = false;
+            Leave(chart);
             var viewTimer = Field<object>(window, "_timer");
             var workerNames = new[] { "_timer", "_profileMonitor", "_icmpMonitor", "_reachabilityMonitor", "_vpnSessions" };
             var workers = workerNames.Select(name => Field<object>(monitoring, name)).ToArray();
@@ -357,23 +372,405 @@ internal static class HistoryUsageChecks
     {
         var point = chart.Data.Points[index];
         var tip = Hover(chart, index);
-        var text = (TextBlock)tip.Content;
-        check(chart.GetPointAt(PointInDay(chart, index))?.LocalDate == point.LocalDate && chart.SelectedPoint?.LocalDate == point.LocalDate &&
-            text.Text == point.ToolTipText && text.Text.Contains(point.LocalDate.ToString("MMM d, yyyy", CultureInfo.InvariantCulture), StringComparison.Ordinal) &&
-            (point.TotalBytes == 0 ? text.Text.Contains("No recorded data usage", StringComparison.Ordinal) :
-                text.Text.Contains("Download: " + ByteFormatter.Format(point.DownloadBytes), StringComparison.Ordinal) &&
-                text.Text.Contains("Upload: " + ByteFormatter.Format(point.UploadBytes), StringComparison.Ordinal) &&
-                text.Text.Contains("Total: " + ByteFormatter.Format(point.TotalBytes), StringComparison.Ordinal)) &&
-            text.TextWrapping == TextWrapping.Wrap && double.IsFinite(text.MaxWidth) && text.MaxWidth > 0 && double.IsFinite(tip.MaxWidth),
-            $"The {state} tooltip exposes its exact local date and bytes with finite wrapping");
-        tip.PlacementTarget = chart;
-        tip.IsOpen = true;
+        var grid = tip.Content as Grid;
+        var texts = grid?.Children.OfType<TextBlock>().ToArray() ?? [];
+        var header = texts.SingleOrDefault(text => Grid.GetRow(text) == 0);
+        check(tip.IsOpen && chart.GetPointAt(PointInDay(chart, index))?.LocalDate == point.LocalDate && chart.SelectedPoint?.LocalDate == point.LocalDate &&
+            header?.Text == point.LocalDate.ToString("ddd, MMM d, yyyy", CultureInfo.InvariantCulture),
+            $"The {state} hover selects the exact daily column and immediately opens its day/date tooltip");
+        check(TooltipHasValues(tip, point) && point.TotalBytes == point.DownloadBytes + point.UploadBytes,
+            $"The {state} tooltip formats exact Download, Upload and their summed Total with the existing byte formatter");
+        var download = TooltipLabel(tip, "Download");
+        var upload = TooltipLabel(tip, "Upload");
+        var total = TooltipLabel(tip, "Total");
+        check(ReferenceEquals(download?.Foreground, HistoryUsageChart.DownloadBrush) &&
+            ReferenceEquals(upload?.Foreground, HistoryUsageChart.UploadBrush) &&
+            texts.Where(text => !ReferenceEquals(text, download) && !ReferenceEquals(text, upload))
+                .All(text => text.Foreground is SolidColorBrush brush && brush.Color.R >= 240 && brush.Color.G >= 240 && brush.Color.B >= 240) &&
+            total is not null,
+            $"The {state} tooltip colors only Download/Upload labels with the unchanged chart brushes and keeps Total and values neutral");
+        check(grid is not null && grid.RowDefinitions.Count == 4 && grid.ColumnDefinitions.Count == 2 && texts.Length == 7 &&
+            header is not null && Grid.GetColumnSpan(header) == 2 && double.IsFinite(grid.MaxWidth) && grid.MaxWidth is > 0 and <= 250 &&
+            double.IsFinite(tip.MaxWidth) && tip.MaxWidth <= 274 &&
+            tip.Background is SolidColorBrush background && background.Color.R < 40 && background.Color.G < 40 && background.Color.B < 70 &&
+            tip.BorderThickness == new Thickness(1),
+            $"The {state} tooltip uses a compact aligned grid and native NetTrace dark styling");
+        check(ReferenceEquals(tip.PlacementTarget, chart) && tip.Placement == PlacementMode.MousePoint && !tip.IsHitTestVisible &&
+            !ToolTipService.GetIsEnabled(chart),
+            $"The {state} chart owns mouse-point tooltip placement and avoids delayed service or popup hover interception");
         HistoryOverviewChecks.Pump();
-        check(tip.IsVisible && text.ActualWidth <= text.MaxWidth + 0.5,
+        check(tip.IsVisible && grid is not null && grid.ActualWidth <= grid.MaxWidth + 0.5 && tip.ActualWidth <= tip.MaxWidth + 0.5,
             $"The {state} details open as a compact native WPF tooltip");
+        if (point.TotalBytes == 0)
+            check(WhiteOutlines(chart).Length == 0 && TooltipHasValues(tip, point),
+                $"The {state} hover shows three zero amounts without drawing a phantom outlined bar");
         SaveTooltip(tip, path);
-        tip.IsOpen = false;
+        Leave(chart);
+        check(chart.SelectedPoint is null && chart.ToolTip is null && !tip.IsOpen,
+            $"Leaving the {state} day immediately clears selection and closes the tooltip");
     }
+
+    private static bool TooltipHasValues(ToolTip tip, DailyUsagePoint point) =>
+        TooltipValue(tip, "Download")?.Text == ByteFormatter.Format(point.DownloadBytes) &&
+        TooltipValue(tip, "Upload")?.Text == ByteFormatter.Format(point.UploadBytes) &&
+        TooltipValue(tip, "Total")?.Text == ByteFormatter.Format(point.TotalBytes);
+
+    private static TextBlock? TooltipLabel(ToolTip tip, string label) => (tip.Content as Grid)?.Children
+        .OfType<TextBlock>().SingleOrDefault(text => text.Text == label && Grid.GetColumn(text) == 0);
+
+    private static TextBlock? TooltipValue(ToolTip tip, string label)
+    {
+        var rowLabel = TooltipLabel(tip, label);
+        return rowLabel is null ? null : ((Grid)tip.Content).Children.OfType<TextBlock>()
+            .SingleOrDefault(text => Grid.GetRow(text) == Grid.GetRow(rowLabel) && Grid.GetColumn(text) == 1);
+    }
+
+    private static void CheckHoverDaySelection(HistoryUsageChart chart, Action<bool, string> check)
+    {
+        var data = chart.Data;
+        var plot = chart.PlotBounds;
+        var maximum = data.MaximumTotalBytes;
+        var values = data.Points.Select(point => (point.LocalDate, point.DownloadBytes, point.UploadBytes)).ToArray();
+        var correct = Enumerable.Range(0, data.Points.Count).All(index =>
+        {
+            var tip = Hover(chart, index);
+            return tip.IsOpen && chart.SelectedPoint?.LocalDate == data.Points[index].LocalDate && TooltipHasValues(tip, data.Points[index]);
+        });
+        check(correct && ReferenceEquals(data, chart.Data) && chart.PlotBounds == plot && chart.Data.MaximumTotalBytes == maximum &&
+            chart.Data.Points.Select(point => (point.LocalDate, point.DownloadBytes, point.UploadBytes)).SequenceEqual(values),
+            $"Hover visits each of the {data.Points.Count} chronological days with its own values while data and scale remain unchanged");
+        Leave(chart);
+    }
+
+    private static void CheckHoverTransitions(HistoryUsageChart chart, int first, int second, int zero, Action<bool, string> check)
+    {
+        Leave(chart);
+        var before = RenderChart(chart);
+        var data = chart.Data;
+        var plot = chart.PlotBounds;
+        var tip = Hover(chart, first);
+        var openedImmediately = tip.IsOpen;
+        HistoryOverviewChecks.Pump();
+        var firstOutline = WhiteOutlines(chart).SingleOrDefault()?.Geometry.Bounds;
+        var next = Hover(chart, second);
+        RenderChart(chart);
+        var nextOutlines = WhiteOutlines(chart);
+        check(openedImmediately && ReferenceEquals(tip, next) && tip.IsOpen && TooltipHasValues(tip, data.Points[second]) &&
+            chart.SelectedPoint?.LocalDate == data.Points[second].LocalDate && nextOutlines.Length == 1 &&
+            nextOutlines[0].Geometry.Bounds != firstOutline,
+            $"Moving between populated {data.Points.Count}D columns updates the open tooltip and keeps only the new day's white outline");
+        var empty = Hover(chart, zero);
+        var zeroRendered = RenderChart(chart);
+        check(data.Points[zero].TotalBytes == 0 && ReferenceEquals(tip, empty) && tip.IsOpen &&
+            chart.SelectedPoint?.LocalDate == data.Points[zero].LocalDate && TooltipHasValues(tip, data.Points[zero]) &&
+            WhiteOutlines(chart).Length == 0 && BitmapPixels(before).SequenceEqual(BitmapPixels(zeroRendered)),
+            $"Moving from a populated {data.Points.Count}D column to a zero day shows zero values and removes all outline pixels");
+        typeof(HistoryUsageChart).GetMethod("UpdateHover", PrivateInstance)!
+            .Invoke(chart, new object[] { new Point(plot.Left - 1, plot.Top + plot.Height / 2) });
+        check(chart.SelectedPoint is null && chart.ToolTip is null && !tip.IsOpen && ReferenceEquals(data, chart.Data) && chart.PlotBounds == plot &&
+            BitmapPixels(before).SequenceEqual(BitmapPixels(RenderChart(chart))),
+            $"Moving into the {data.Points.Count}D axis margin closes the tooltip and leaves chart bytes, scale and rendering unchanged");
+    }
+
+    private static void CheckSingleSeries(string previews, Action<bool, string> check)
+    {
+        var now = new DateTimeOffset(2026, 10, 12, 14, 0, 0, TimeSpan.Zero);
+        ConnectionSession[] sessions =
+        [
+            new(1, null, "WiFi", "Owned", "Owned", "Owned", now.AddDays(-1), now.AddDays(-1).AddMinutes(10),
+                now.AddDays(-1).AddMinutes(10), "ApplicationExit", 10_000_000, 0, null),
+            new(2, null, "WiFi", "Owned", "Owned", "Owned", now.AddMinutes(-10), now, now,
+                "ApplicationExit", 0, 20_000_000, null),
+        ];
+        var chart = new HistoryUsageChart { Width = 680, Height = 180 };
+        var window = new Window { Content = chart, SizeToContent = SizeToContent.WidthAndHeight,
+            ShowActivated = false, ShowInTaskbar = false, Opacity = 0 };
+        try
+        {
+            window.Show();
+            Layout(window);
+            foreach (var range in new[] { HistoryUsageRange.SevenDays, HistoryUsageRange.ThirtyDays })
+            {
+                chart.UpdateData(HistoryUsageChartData.Create(sessions, null, now, TimeZoneInfo.Utc, range));
+                RenderChart(chart);
+                var count = chart.Data.Points.Count;
+                check(chart.Data.Points[count - 2] is { DownloadBytes: 10_000_000, UploadBytes: 0 } &&
+                    chart.Data.Points[count - 1] is { DownloadBytes: 0, UploadBytes: 20_000_000 },
+                    $"The {count}D single-series fixture includes a real download-only and upload-only day");
+                CheckHoverOutline(chart, count - 2, check, $"download-only {count}D");
+                CheckHoverOutline(chart, count - 1, check, $"upload-only {count}D");
+                CheckTooltip(chart, count - 2, check, $"download-only {count}D", System.IO.Path.Combine(previews, $"tooltip-download-only-{count}D.png"));
+                CheckTooltip(chart, count - 1, check, $"upload-only {count}D", System.IO.Path.Combine(previews, $"tooltip-upload-only-{count}D.png"));
+            }
+        }
+        finally { window.Close(); }
+    }
+
+    private static void CheckRealPointerHover(string previews, Action<bool, string> check)
+    {
+        if (!GetCursorPos(out var originalPointer))
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Unable to save the pointer for native History hover verification.");
+
+        var now = new DateTimeOffset(2026, 10, 12, 14, 0, 0, TimeSpan.Zero);
+        ConnectionSession[] sessions =
+        [
+            new(1, null, "WiFi", "Owned", "Owned", "Owned", now.AddDays(-1), now.AddDays(-1).AddMinutes(10),
+                now.AddDays(-1).AddMinutes(10), "ApplicationExit", 10_000_000, 2_000_000, null),
+            new(2, null, "WiFi", "Owned", "Owned", "Owned", now.AddMinutes(-10), now, now,
+                "ApplicationExit", 24_300_000_000, 2_100_000_000, null),
+        ];
+        var chart = new HistoryUsageChart { Width = 680, Height = 180 };
+        var window = new Window
+        {
+            Content = chart, SizeToContent = SizeToContent.WidthAndHeight,
+            ShowActivated = false, ShowInTaskbar = false, Topmost = true, Opacity = 1,
+            WindowStyle = WindowStyle.None, ResizeMode = ResizeMode.NoResize,
+            Left = 80, Top = 80, Background = new SolidColorBrush(Color.FromRgb(15, 23, 42)),
+        };
+        try
+        {
+            window.Show();
+            Layout(window);
+            foreach (var range in new[] { HistoryUsageRange.SevenDays, HistoryUsageRange.ThirtyDays })
+            {
+                chart.UpdateData(HistoryUsageChartData.Create(sessions, null, now, TimeZoneInfo.Utc, range));
+                RenderChart(chart);
+                var data = chart.Data;
+                var count = data.Points.Count;
+                var plot = chart.PlotBounds;
+                var margin = new Point(plot.Left - 8, plot.Top + plot.Height / 2);
+                MovePointer(chart, margin);
+                Wait(() => chart.IsMouseOver && chart.SelectedPoint is null && chart.ToolTip is null);
+                check(chart.IsMouseOver && chart.SelectedPoint is null && chart.ToolTip is null,
+                    $"Native pointer entry into the {count}D chart margin has no day tooltip before crossing into the plot");
+
+                // Stay inside the same chart element when entering a day column:
+                // delayed ToolTipService discovery previously missed this move.
+                var firstIndex = count - 2;
+                MovePointer(chart, new Point(PointInDay(chart, firstIndex).X, plot.Top + 8));
+                Wait(() => chart.IsMouseOver && chart.SelectedPoint?.LocalDate == data.Points[firstIndex].LocalDate &&
+                    chart.ToolTip is ToolTip { IsOpen: true, IsVisible: true });
+                var firstTip = (ToolTip)chart.ToolTip!;
+                check(VisibleTooltipHasValues(firstTip, data.Points[firstIndex]) && WhiteOutlines(chart).Length == 1,
+                    $"Real {count}D mouse movement from margin to a short day's column opens visible Download/Upload/Total rows and its outline");
+                SaveTooltip(firstTip, System.IO.Path.Combine(previews, $"tooltip-native-short-{count}D.png"));
+
+                MovePointer(chart, PointInDay(chart, count - 1));
+                Wait(() => chart.IsMouseOver && chart.SelectedPoint?.LocalDate == data.Points[^1].LocalDate &&
+                    chart.ToolTip is ToolTip { IsOpen: true, IsVisible: true });
+                var nextTip = (ToolTip)chart.ToolTip!;
+                check(ReferenceEquals(firstTip, nextTip) && VisibleTooltipHasValues(nextTip, data.Points[^1]) &&
+                    WhiteOutlines(chart).Length == 1,
+                    $"Real {count}D mouse movement between days keeps the popup visible and shows the next day's exact Download/Upload/Total");
+                SaveTooltip(nextTip, System.IO.Path.Combine(previews, $"tooltip-native-GB-{count}D.png"));
+
+                MovePointer(chart, PointInDay(chart, 0));
+                Wait(() => chart.IsMouseOver && chart.SelectedPoint?.LocalDate == data.Points[0].LocalDate &&
+                    chart.ToolTip is ToolTip { IsOpen: true, IsVisible: true });
+                var zeroTip = (ToolTip)chart.ToolTip!;
+                check(VisibleTooltipHasValues(zeroTip, data.Points[0]) && data.Points[0].TotalBytes == 0 && WhiteOutlines(chart).Length == 0,
+                    $"Real {count}D mouse movement to a zero day shows visible zero amounts and removes the previous outline");
+
+                MovePointer(chart, margin);
+                Wait(() => chart.IsMouseOver && chart.SelectedPoint is null && chart.ToolTip is null && !zeroTip.IsOpen);
+                check(chart.IsMouseOver && chart.SelectedPoint is null && chart.ToolTip is null && !zeroTip.IsOpen && WhiteOutlines(chart).Length == 0,
+                    $"Real {count}D mouse movement back into the axis margin closes the popup and clears its outline");
+
+                MovePointer(chart, PointInDay(chart, count - 1));
+                Wait(() => chart.IsMouseOver && chart.SelectedPoint?.LocalDate == data.Points[^1].LocalDate &&
+                    chart.ToolTip is ToolTip { IsOpen: true, IsVisible: true });
+                var reopened = (ToolTip)chart.ToolTip!;
+                check(VisibleTooltipHasValues(reopened, data.Points[^1]) && ReferenceEquals(data, chart.Data) && chart.PlotBounds == plot,
+                    $"Real {count}D pointer re-entry reopens all usage rows without changing chart data or scale");
+
+                MovePointer(chart, new Point(chart.ActualWidth + 12, chart.ActualHeight / 2));
+                Wait(() => !chart.IsMouseOver && chart.SelectedPoint is null && chart.ToolTip is null && !reopened.IsOpen);
+                check(!chart.IsMouseOver && chart.SelectedPoint is null && chart.ToolTip is null && !reopened.IsOpen && WhiteOutlines(chart).Length == 0,
+                    $"Real pointer leave from the {count}D chart immediately closes the popup and removes its white outline");
+            }
+
+            MovePointer(chart, PointInDay(chart, chart.Data.Points.Count - 1));
+            Wait(() => chart.ToolTip is ToolTip { IsOpen: true, IsVisible: true });
+            var visibleTip = (ToolTip)chart.ToolTip!;
+            window.WindowState = WindowState.Minimized;
+            HistoryOverviewChecks.Pump();
+            check(chart.SelectedPoint is null && chart.ToolTip is null && !visibleTip.IsOpen,
+                "Minimizing the actual native-pointer History fixture closes its visible popup and clears hover state");
+            window.WindowState = WindowState.Normal;
+            Layout(window);
+            check(SeriesRectangles(chart).Length == 4,
+                "Restoring the native History fixture redraws the unchanged stacked bars before new pointer input");
+            MovePointer(chart, new Point(chart.PlotBounds.Left - 8, chart.PlotBounds.Top + chart.PlotBounds.Height / 2));
+            MovePointer(chart, PointInDay(chart, chart.Data.Points.Count - 1));
+            Wait(() => chart.IsMouseOver && chart.ToolTip is ToolTip { IsOpen: true, IsVisible: true });
+            var restoredTip = (ToolTip)chart.ToolTip!;
+            check(VisibleTooltipHasValues(restoredTip, chart.Data.Points[^1]),
+                "Real pointer movement after restoring the History fixture reopens its visible usage tooltip");
+            window.Content = null;
+            HistoryOverviewChecks.Pump();
+            check(chart.SelectedPoint is null && chart.ToolTip is null && !restoredTip.IsOpen,
+                "Unloading the actual native-pointer chart closes its popup and clears hover state");
+            window.Content = chart;
+            Layout(window);
+            MovePointer(chart, new Point(chart.PlotBounds.Left - 8, chart.PlotBounds.Top + chart.PlotBounds.Height / 2));
+            MovePointer(chart, PointInDay(chart, chart.Data.Points.Count - 1));
+            Wait(() => chart.IsMouseOver && chart.ToolTip is ToolTip { IsOpen: true, IsVisible: true });
+            visibleTip = (ToolTip)chart.ToolTip!;
+            check(VisibleTooltipHasValues(visibleTip, chart.Data.Points[^1]),
+                "Real pointer movement after reloading the History chart reopens all visible usage rows");
+            window.Hide();
+            HistoryOverviewChecks.Pump();
+            check(chart.SelectedPoint is null && chart.ToolTip is null && !visibleTip.IsOpen,
+                "Hiding the actual native-pointer History fixture closes its visible popup and clears hover state");
+        }
+        finally
+        {
+            window.Close();
+            if (!SetCursorPos(originalPointer.X, originalPointer.Y))
+                throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Unable to restore the pointer after native History hover verification.");
+            HistoryOverviewChecks.Pump();
+        }
+    }
+
+    private static bool VisibleTooltipHasValues(ToolTip tip, DailyUsagePoint point) =>
+        tip.IsOpen && tip.IsVisible && TooltipHasValues(tip, point) && tip.Content is Grid grid &&
+        grid.Children.OfType<TextBlock>().All(text => text.IsVisible && text.ActualWidth > 0 && text.ActualHeight > 0);
+
+    private static void MovePointer(HistoryUsageChart chart, Point position)
+    {
+        var screen = chart.PointToScreen(position);
+        if (!SetCursorPos((int)Math.Round(screen.X), (int)Math.Round(screen.Y)))
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Unable to move the pointer for native History hover verification.");
+        HistoryOverviewChecks.Pump();
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ScreenPoint
+    {
+        public int X;
+        public int Y;
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetCursorPos(out ScreenPoint point);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetCursorPos(int x, int y);
+
+    private static void CheckHoverOutline(HistoryUsageChart chart, int index, Action<bool, string> check, string state, string? path = null)
+    {
+        Leave(chart);
+        var data = chart.Data;
+        var plot = chart.PlotBounds;
+        var before = RenderChart(chart);
+        var fills = SeriesRectangles(chart);
+        var center = PointInDay(chart, index).X;
+        var selectedFills = fills.Where(drawing => center >= drawing.Geometry.Bounds.Left && center <= drawing.Geometry.Bounds.Right).ToArray();
+        var stack = selectedFills.Aggregate(Rect.Empty, (bounds, drawing) => Rect.Union(bounds, drawing.Geometry.Bounds));
+        var tip = Hover(chart, index);
+        var openedImmediately = tip.IsOpen;
+        var hovered = RenderChart(chart);
+        var outlines = WhiteOutlines(chart);
+        check(!stack.IsEmpty && outlines.Length == 1 && outlines[0].Brush is null && SameBounds(outlines[0].Geometry.Bounds, stack) &&
+            outlines[0].Pen is { Thickness: 1 } && outlines[0].Pen.Brush is SolidColorBrush outlineBrush && outlineBrush.Color == Colors.White,
+            $"Hovering {state} draws one thin white unfilled outline around the complete Download/Upload stack");
+        check(SeriesRectangles(chart).Select(drawing => (drawing.Brush, drawing.Geometry.Bounds))
+                .SequenceEqual(fills.Select(drawing => (drawing.Brush, drawing.Geometry.Bounds))) &&
+            ReferenceEquals(data, chart.Data) && chart.PlotBounds == plot,
+            $"The {state} outline preserves every existing series fill, bar geometry, data snapshot and scale");
+        check(!stack.IsEmpty && PixelChangesTraceOutline(before, hovered, stack),
+            $"The {state} rendered white outline reaches all four stack edges and changes only their pixels");
+        if (path is not null) SaveBitmap(hovered, path);
+        HistoryOverviewChecks.Pump();
+        Leave(chart);
+        check(openedImmediately && chart.SelectedPoint is null && chart.ToolTip is null && !tip.IsOpen,
+            $"The {state} mouse-leave handler immediately removes hover state and closes its tooltip");
+        var after = RenderChart(chart);
+        check(WhiteOutlines(chart).Length == 0 && BitmapPixels(before).SequenceEqual(BitmapPixels(after)),
+            $"The {state} white outline disappears on leave and the rendered chart exactly returns to its original fills");
+    }
+
+    private static GeometryDrawing[] SeriesRectangles(HistoryUsageChart chart) => Drawings(VisualTreeHelper.GetDrawing(chart))
+        .OfType<GeometryDrawing>().Where(drawing => drawing.Geometry is RectangleGeometry &&
+            (ReferenceEquals(drawing.Brush, HistoryUsageChart.DownloadBrush) || ReferenceEquals(drawing.Brush, HistoryUsageChart.UploadBrush))).ToArray();
+
+    private static GeometryDrawing[] WhiteOutlines(HistoryUsageChart chart) => Drawings(VisualTreeHelper.GetDrawing(chart))
+        .OfType<GeometryDrawing>().Where(drawing => drawing.Geometry is RectangleGeometry &&
+            drawing.Pen?.Brush is SolidColorBrush brush && brush.Color == Colors.White).ToArray();
+
+    private static bool SameBounds(Rect first, Rect second) =>
+        Math.Abs(first.Left - second.Left) < 0.000001 && Math.Abs(first.Top - second.Top) < 0.000001 &&
+        Math.Abs(first.Width - second.Width) < 0.000001 && Math.Abs(first.Height - second.Height) < 0.000001;
+
+    private static bool PixelChangesTraceOutline(RenderTargetBitmap before, RenderTargetBitmap hovered, Rect stack)
+    {
+        var original = BitmapPixels(before);
+        var selected = BitmapPixels(hovered);
+        var edges = new bool[4];
+        var changed = 0;
+        var boundary = stack;
+        boundary.Inflate(1.5, 1.5);
+        for (var y = 0; y < before.PixelHeight; y++)
+            for (var x = 0; x < before.PixelWidth; x++)
+            {
+                var offset = (y * before.PixelWidth + x) * 4;
+                if (original.AsSpan(offset, 4).SequenceEqual(selected.AsSpan(offset, 4))) continue;
+                changed++;
+                var position = new Point(x + 0.5, y + 0.5);
+                if (!boundary.Contains(position)) return false;
+                var left = Math.Abs(position.X - stack.Left) <= 1.5;
+                var right = Math.Abs(position.X - stack.Right) <= 1.5;
+                var top = Math.Abs(position.Y - stack.Top) <= 1.5;
+                var bottom = Math.Abs(position.Y - stack.Bottom) <= 1.5;
+                if (!left && !right && !top && !bottom) return false;
+                var verticalInterior = stack.Height <= 4 || position.Y > stack.Top + 1.5 && position.Y < stack.Bottom - 1.5;
+                var horizontalInterior = stack.Width <= 4 || position.X > stack.Left + 1.5 && position.X < stack.Right - 1.5;
+                edges[0] |= left && verticalInterior;
+                edges[1] |= right && verticalInterior;
+                edges[2] |= top && horizontalInterior;
+                edges[3] |= bottom && horizontalInterior;
+            }
+        return changed > 0 && edges.All(edge => edge);
+    }
+
+    private static byte[] BitmapPixels(RenderTargetBitmap bitmap)
+    {
+        var pixels = new byte[bitmap.PixelWidth * bitmap.PixelHeight * 4];
+        bitmap.CopyPixels(pixels, bitmap.PixelWidth * 4, 0);
+        return pixels;
+    }
+
+    private static RenderTargetBitmap RenderChart(HistoryUsageChart chart)
+    {
+        chart.UpdateLayout();
+        HistoryOverviewChecks.Pump();
+        var drawing = new DrawingVisual();
+        using (var context = drawing.RenderOpen())
+        {
+            context.DrawRectangle(new SolidColorBrush(Color.FromRgb(15, 23, 42)), null,
+                new Rect(0, 0, chart.ActualWidth, chart.ActualHeight));
+            context.DrawRectangle(new VisualBrush(chart) { Stretch = Stretch.None, AlignmentX = AlignmentX.Left, AlignmentY = AlignmentY.Top },
+                null, new Rect(0, 0, chart.ActualWidth, chart.ActualHeight));
+        }
+        var bitmap = new RenderTargetBitmap((int)Math.Ceiling(chart.ActualWidth), (int)Math.Ceiling(chart.ActualHeight),
+            96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(drawing);
+        return bitmap;
+    }
+
+    private static void SaveBitmap(RenderTargetBitmap bitmap, string path)
+    {
+        System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using var output = System.IO.File.Create(path);
+        encoder.Save(output);
+    }
+
+    private static void Leave(HistoryUsageChart chart) => chart.RaiseEvent(
+        new MouseEventArgs(Mouse.PrimaryDevice, Environment.TickCount) { RoutedEvent = Mouse.MouseLeaveEvent });
 
     internal static ToolTip Hover(HistoryUsageChart chart, int index)
     {

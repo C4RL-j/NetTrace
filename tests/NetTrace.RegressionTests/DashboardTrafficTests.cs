@@ -13,7 +13,7 @@ internal static class DashboardTrafficTests
     public static (string Name, Action Run)[] Cases =>
     [
         ("Empty Dashboard traffic uses a readable positive byte-rate scale", EmptyScale),
-        ("The live traffic chart retains exactly the last sixty seconds including endpoints", WindowBounds),
+        ("The live traffic chart uses the last 130 seconds with an exclusive oldest boundary", WindowBounds),
         ("Unordered traffic samples become chronological without mutating their input", ChronologicalSamples),
         ("Download and upload plot their independent actual bytes-per-second values", IndependentDirections),
         ("The live graph scale follows the highest individual direction rather than their sum", IndividualScale),
@@ -35,7 +35,8 @@ internal static class DashboardTrafficTests
         ("Duplicate same-second traffic refreshes reuse the existing visual snapshot", RedundantRefresh),
         ("A changed same-second measurement replaces its point without accumulating speeds", SameSecondReplacement),
         ("Advancing one second moves the graph even while both directions are idle", AdvancingIdle),
-        ("The rolling timeline remains bounded to sixty-one second positions", BoundedTimeline),
+        ("The rolling timeline remains bounded to 130 one-second observations", BoundedTimeline),
+        ("The oldest observation expires exactly when its age reaches 130 seconds", RetentionBoundary),
         ("Backdated traffic cannot replace current graph measurements", BackdatedSample),
         ("Timeline measurements normalize invalid rates exactly like the live cards", NormalizedRates),
         ("Available and unavailable states can replace the latest same-second point", AvailabilityReplacement),
@@ -48,7 +49,7 @@ internal static class DashboardTrafficTests
         ("Raw timeline snapshots are cached and remain immutable as background samples advance", ImmutableRawTimeline),
         ("Raw background collection builds no chart geometry until presentation reads it", LazyProjection),
         ("Headless monitoring feeds the timeline from the accepted raw rates without another capture", ServiceRatesAndAccounting),
-        ("An unseen headless timeline continuously retains the bounded last sixty seconds", ServiceRecentHistory),
+        ("An unseen headless timeline continuously retains the bounded last 130 seconds", ServiceRecentHistory),
         ("Reading monitoring snapshots reuses raw history without sampling or adding a timer", SnapshotReadsArePassive),
         ("A genuine failed network capture creates a gap while subsequent measurements reconnect", ServiceUnavailableCapture),
         ("Operating system sleep remains a genuine unobserved interval in the traffic timeline", ServiceSleepGap),
@@ -78,20 +79,21 @@ internal static class DashboardTrafficTests
         Check(double.IsFinite(value.MaximumBytesPerSecond) && value.MaximumBytesPerSecond > 0,
             "an empty chart still needs a finite positive Y axis");
         Equal(ByteRateFormatter.Format(value.MaximumBytesPerSecond), value.MaximumText, "empty scale quantity");
-        Equal(60, DashboardTrafficChartData.WindowSeconds, "rolling window length");
+        Equal(130, DashboardTrafficChartData.WindowSeconds, "rolling window length");
     });
 
     private static void WindowBounds()
     {
-        var value = Chart(Sample(-61, 99, 1), Sample(-60, 10, 2), Sample(-1, 20, 3),
+        var value = Chart(Sample(-131, 999, 1), Sample(-130, 999, 1), Sample(-129, 10, 2), Sample(-1, 20, 3),
             Sample(0, 30, 4), Sample(1, 999, 5));
-        Equal(3, value.Samples.Count, "only samples inside the inclusive visible window");
-        Equal(End.AddSeconds(-60), value.WindowStartUtc, "visible window start");
+        Equal(3, value.Samples.Count, "only observations newer than the oldest boundary and no later than now remain");
+        Equal(End.AddSeconds(-130), value.WindowStartUtc, "visible window start");
         Equal(End, value.WindowEndUtc, "visible window end");
-        Equal(10d, value.Samples[0].DownloadBytesPerSecond!.Value, "oldest endpoint is included");
+        Equal(10d, value.Samples[0].DownloadBytesPerSecond!.Value, "the first one-second observation inside the window is included");
         Equal(30d, value.Samples[^1].DownloadBytesPerSecond!.Value, "current endpoint is included");
+        Equal(50d, value.MaximumBytesPerSecond, "excluded old and future rates do not inflate the visible scale");
         var points = value.DownloadSegments.SelectMany(segment => segment).ToArray();
-        Near(0, points[0].Position, "oldest endpoint horizontal position");
+        Near(1d / 130, points[0].Position, "the oldest retained observation is one second inside the full 130-second axis");
         Near(1, points[^1].Position, "current endpoint horizontal position");
     }
 
@@ -289,9 +291,30 @@ internal static class DashboardTrafficTests
         for (var index = 0; index < 180; index++)
             timeline.Record(End.AddSeconds(index), index, index / 2d, true, "adapter-a");
         var value = timeline.Data;
-        Equal(61, value.Samples.Count, "sixty seconds have sixty-one inclusive point positions");
-        Equal(End.AddSeconds(119), value.Samples[0].TimestampUtc, "older observations expire");
+        Equal(130, value.Samples.Count, "the recent 130 one-second observations remain bounded");
+        Equal(End.AddSeconds(50), value.Samples[0].TimestampUtc, "older observations expire");
         Equal(End.AddSeconds(179), value.Samples[^1].TimestampUtc, "latest observation is retained");
+    }
+
+    private static void RetentionBoundary()
+    {
+        var timeline = new DashboardTrafficTimeline();
+        for (var index = 0; index < 130; index++)
+            timeline.Record(End.AddSeconds(index), index, index / 2d, true, "adapter-a");
+        var before = timeline.Samples;
+        Equal(130, before.Count, "130 seconds of actual observations fill the timeline without an extra endpoint");
+        Equal(End, before[0].TimestampUtc, "the oldest observation remains when its age is 129 seconds");
+        timeline.Record(End.AddSeconds(130), 130, 65, true, "adapter-a");
+        var after = timeline.Samples;
+        Equal(130, after.Count, "the next observation replaces the expired oldest second");
+        Equal(End.AddSeconds(1), after[0].TimestampUtc, "the observation exactly 130 seconds old rolls off");
+        Equal(End.AddSeconds(130), after[^1].TimestampUtc, "the new observation is immediately retained");
+        Equal(End, before[0].TimestampUtc, "rollover cannot mutate a previously published snapshot");
+        var chart = timeline.Data;
+        Equal(130, chart.DownloadSegments.Single().Count, "the full returning download trace includes every retained second");
+        Equal(130, chart.UploadSegments.Single().Count, "the full returning upload trace includes every retained second");
+        Near(1d / 130, chart.DownloadSegments.Single()[0].Position, "the full 130-second axis leaves no fabricated boundary observation");
+        Near(1, chart.DownloadSegments.Single()[^1].Position, "the current second ends the trace");
     }
 
     private static void BackdatedSample()
@@ -334,14 +357,15 @@ internal static class DashboardTrafficTests
     private static void ContinuousCollection()
     {
         var timeline = new DashboardTrafficTimeline();
-        for (var index = 0; index <= 20; index++)
+        for (var index = 0; index < 150; index++)
             timeline.Record(End.AddSeconds(index), 100 + index, 20 + index, true, "adapter-a");
         var resumed = timeline.Data;
-        Equal(21, resumed.Samples.Count, "all observations remain available without a visible graph");
+        Equal(130, resumed.Samples.Count, "all recent observations remain available without a visible graph");
+        Equal(End.AddSeconds(20), resumed.Samples[0].TimestampUtc, "only observations beyond the 130-second window expire");
         Check(resumed.Samples.All(sample => !sample.BreakBefore), "background collection adds no artificial visibility boundary");
-        Equal(21, resumed.DownloadSegments.Single().Count, "download history remains joined on returning");
-        Equal(21, resumed.UploadSegments.Single().Count, "upload history remains joined on returning");
-        Equal(120d, resumed.Samples[^1].DownloadBytesPerSecond!.Value, "returning presents the recent download rate");
+        Equal(130, resumed.DownloadSegments.Single().Count, "download history remains joined on returning");
+        Equal(130, resumed.UploadSegments.Single().Count, "upload history remains joined on returning");
+        Equal(249d, resumed.Samples[^1].DownloadBytesPerSecond!.Value, "returning presents the recent download rate");
     }
 
     private static void LongMeasurementGap()
@@ -377,7 +401,7 @@ internal static class DashboardTrafficTests
     {
         var timeline = new DashboardTrafficTimeline();
         var first = Observe(timeline, End, 100, 20, true, "adapter-a");
-        for (var index = 1; index <= 70; index++) timeline.Record(End.AddSeconds(index), index, 0, true, "adapter-a");
+        for (var index = 1; index <= 150; index++) timeline.Record(End.AddSeconds(index), index, 0, true, "adapter-a");
         Equal(1, first.Samples.Count, "old view does not gain later timeline points");
         Equal(End, first.WindowEndUtc, "old view keeps its original time window");
         Equal(100d, first.DownloadSegments.Single().Single().BytesPerSecond, "old view keeps its original geometry");
@@ -387,7 +411,9 @@ internal static class DashboardTrafficTests
     {
         var timeline = new DashboardTrafficTimeline();
         var peak = Observe(timeline, End, 4_920_000, 0, true, "adapter-a");
-        for (var index = 1; index <= 61; index++) timeline.Record(End.AddSeconds(index), 100, 0, true, "adapter-a");
+        for (var index = 1; index < 130; index++) timeline.Record(End.AddSeconds(index), 100, 0, true, "adapter-a");
+        Equal(peak.MaximumBytesPerSecond, timeline.Data.MaximumBytesPerSecond, "a 129-second-old real peak still controls the visible scale");
+        timeline.Record(End.AddSeconds(130), 100, 0, true, "adapter-a");
         Check(timeline.Data.MaximumBytesPerSecond < peak.MaximumBytesPerSecond, "expired historical peak no longer controls current scale");
         Equal(100d, timeline.Data.MaximumBytesPerSecond, "small stable speed uses its own current scale");
     }
@@ -416,7 +442,7 @@ internal static class DashboardTrafficTests
         var cache = typeof(DashboardTrafficTimeline).GetFields(BindingFlags.Instance | BindingFlags.NonPublic)
             .Single(field => field.FieldType == typeof(DashboardTrafficChartData));
         var initial = cache.GetValue(timeline);
-        for (var index = 0; index <= 60; index++)
+        for (var index = 0; index < 130; index++)
         {
             timeline.Record(End.AddSeconds(index), 100 + index, 20 + index, true, "adapter-a");
             _ = timeline.Samples;
@@ -424,13 +450,13 @@ internal static class DashboardTrafficTests
                 "recording and reading raw samples must not build new chart segments");
         }
         var visible = timeline.Data;
-        Equal(61, visible.DownloadSegments.Single().Count, "the visible read builds all recent geometry at once");
+        Equal(130, visible.DownloadSegments.Single().Count, "the visible read builds all recent geometry at once");
         Check(ReferenceEquals(visible, timeline.Data), "unchanged visible reads reuse the chart projection");
-        timeline.Record(End.AddSeconds(61), 161, 81, true, "adapter-a");
+        timeline.Record(End.AddSeconds(130), 230, 150, true, "adapter-a");
         var afterRecord = cache.GetValue(timeline);
         Check(afterRecord is null || ReferenceEquals(visible, afterRecord),
             "background recording can invalidate a projection but must not regenerate it");
-        Equal(61, timeline.Samples.Count, "raw storage stays bounded without projection");
+        Equal(130, timeline.Samples.Count, "raw storage stays bounded without projection");
         Check(!ReferenceEquals(visible, timeline.Data), "the next visible read presents the updated recent window");
     }
 
@@ -467,21 +493,21 @@ internal static class DashboardTrafficTests
         using var test = ControlledMonitoring();
         var start = test.Clock.GetUtcNow();
         var first = test.Service.GetSnapshot().TrafficSamples;
-        for (var index = 1; index <= 95; index++) test.AdvanceCounters(1000, 40);
+        for (var index = 1; index <= 165; index++) test.AdvanceCounters(1000, 40);
         // No Dashboard/window or graph projection was constructed during collection.
         var snapshot = test.Service.GetSnapshot();
-        Equal(61, snapshot.TrafficSamples.Count, "continuous background collection retains sixty-one endpoint positions");
-        Equal(start.AddSeconds(35), snapshot.TrafficSamples[0].TimestampUtc, "old background observations expire");
-        Equal(start.AddSeconds(95), snapshot.TrafficSamples[^1].TimestampUtc, "the latest background observation is retained");
+        Equal(130, snapshot.TrafficSamples.Count, "continuous background collection retains the latest 130 observations");
+        Equal(start.AddSeconds(36), snapshot.TrafficSamples[0].TimestampUtc, "old background observations expire");
+        Equal(start.AddSeconds(165), snapshot.TrafficSamples[^1].TimestampUtc, "the latest background observation is retained");
         for (var index = 1; index < snapshot.TrafficSamples.Count; index++)
             Equal(TimeSpan.FromSeconds(1), snapshot.TrafficSamples[index].TimestampUtc - snapshot.TrafficSamples[index - 1].TimestampUtc,
                 "background measurements retain every recent second");
         Check(snapshot.TrafficSamples.All(sample => !sample.BreakBefore), "lack of a Dashboard does not create visibility markers");
         var chart = DashboardTrafficChartData.Create(snapshot.TrafficSamples, test.Clock.GetUtcNow());
-        Equal(61, chart.DownloadSegments.Single().Count, "returning immediately has complete recent download geometry");
-        Equal(61, chart.UploadSegments.Single().Count, "returning immediately has complete recent upload geometry");
+        Equal(130, chart.DownloadSegments.Single().Count, "returning immediately has complete recent download geometry");
+        Equal(130, chart.UploadSegments.Single().Count, "returning immediately has complete recent upload geometry");
         Equal(1, first.Count, "an older monitoring snapshot remains immutable as the service advances");
-        Equal((95_000L, 3800L), test.Service.GetUsageTotals().Today, "background timeline storage does not alter cumulative usage");
+        Equal((165_000L, 6600L), test.Service.GetUsageTotals().Today, "background timeline storage does not alter cumulative usage");
     }
 
     private static void SnapshotReadsArePassive()

@@ -13,6 +13,7 @@ public sealed class VpnSessionMonitor : IDisposable
     private readonly VpnRouteVerifier _verifier;
     private readonly TimeProvider _timeProvider;
     private readonly bool _observeRoutesWithoutPhysicalSession;
+    private readonly IVpnRouteChangeSource _routeChanges;
     private readonly Timer _timer;
     private readonly object _gate = new();
     private readonly object _worker = new();
@@ -27,13 +28,15 @@ public sealed class VpnSessionMonitor : IDisposable
     public VpnRouteSnapshot LatestRouteSnapshot => _latestRouteSnapshot;
 
     public VpnSessionMonitor(ConnectionSessionTracker physical, VpnSessionStore store, VpnRouteVerifier? verifier = null,
-        TimeProvider? timeProvider = null, bool observeRoutesWithoutPhysicalSession = false)
+        TimeProvider? timeProvider = null, bool observeRoutesWithoutPhysicalSession = false,
+        IVpnRouteChangeSource? routeChanges = null)
     {
         _physical = physical ?? throw new ArgumentNullException(nameof(physical));
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _verifier = verifier ?? new VpnRouteVerifier();
         _timeProvider = timeProvider ?? TimeProvider.System;
         _observeRoutesWithoutPhysicalSession = observeRoutesWithoutPhysicalSession;
+        _routeChanges = routeChanges ?? new WindowsVpnRouteNotifications();
         _timer = new Timer(Observe, null, Timeout.Infinite, Timeout.Infinite);
     }
 
@@ -46,6 +49,14 @@ public sealed class VpnSessionMonitor : IDisposable
             _started = true;
             NetworkChange.NetworkAddressChanged += NetworkChanged;
             NetworkChange.NetworkAvailabilityChanged += AvailabilityChanged;
+            _routeChanges.Changed += NetworkChanged;
+            try { _routeChanges.Start(); }
+            catch (Exception exception)
+            {
+                // The existing address/availability events and periodic observation
+                // remain available if Windows cannot register route callbacks.
+                Trace.TraceWarning($"Could not start VPN route notifications: {exception.Message}");
+            }
             if (!_suspended) _timer.Change(200, 30_000);
         }
     }
@@ -162,8 +173,12 @@ public sealed class VpnSessionMonitor : IDisposable
             _latestRouteSnapshot = VpnRouteSnapshot.Unknown;
             NetworkChange.NetworkAddressChanged -= NetworkChanged;
             NetworkChange.NetworkAvailabilityChanged -= AvailabilityChanged;
+            _routeChanges.Changed -= NetworkChanged;
             _timer.Dispose();
         }
+        // Native cancellation waits for callbacks that can be inside Refresh().
+        // Never hold _gate while unregistering them.
+        _routeChanges.Dispose();
         // Finish any writer before the application releases its database lease.
         lock (_worker) { }
     }

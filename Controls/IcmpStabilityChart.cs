@@ -20,17 +20,19 @@ public sealed class IcmpStabilityChart : FrameworkElement
     public IcmpStabilityChartData Data { get; private set; } =
         IcmpStabilityChartData.Create(Array.Empty<IcmpProbeResult>());
 
-    public void UpdateSamples(IReadOnlyList<IcmpProbeResult> samples)
+    public void UpdateSamples(IReadOnlyList<IcmpProbeResult> samples,
+        InternetReachabilityStatus reachability = InternetReachabilityStatus.Checking)
     {
         ArgumentNullException.ThrowIfNull(samples);
         var count = Math.Min(samples.Count, IcmpMonitor.HistoryCapacity);
         var offset = samples.Count - count;
         var unchanged = Data.Count == count;
         for (var i = 0; unchanged && i < count; i++)
-            unchanged = ReferenceEquals(Data.Samples[i], samples[offset + i]);
+            unchanged = ReferenceEquals(Data.Samples[i], samples[offset + i]) &&
+                Data.PacketLossPoints[i].Percent == IcmpPacketLossPresentation.Percent(samples[offset + i], reachability);
         if (unchanged) return;
 
-        Data = IcmpStabilityChartData.Create(samples);
+        Data = IcmpStabilityChartData.Create(samples, reachability);
         InvalidateVisual();
     }
 

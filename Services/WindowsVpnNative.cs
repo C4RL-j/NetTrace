@@ -1,7 +1,9 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Security;
 using Microsoft.Win32;
@@ -19,19 +21,26 @@ public sealed class WindowsVpnNative : IVpnInterfaceSource
     public VpnInterfaceInventory Read()
     {
         var diagnostics = new List<string>();
-        var interfaces = ReadInterfaces(diagnostics);
+        var interfaces = ReadInterfaces(diagnostics, out var identities);
         var drivers = ReadDriverIdentities(diagnostics);
+        var assigned = ReadAssignedAddresses(identities);
         var enriched = interfaces.Select(item => drivers.TryGetValue(item.InterfaceGuid, out var driver)
             ? item with { DriverComponentId = driver.ComponentId, DriverService = driver.Service,
                 TapMediaAlwaysConnected = driver.TapMediaAlwaysConnected }
-            : item).ToArray();
+            : item).Select(item => item with
+            {
+                AssignedAddresses = assigned.TryGetValue(item.InterfaceGuid, out var addresses)
+                    ? addresses : Array.Empty<IPAddress>()
+            }).ToArray();
         var rasConnections = ReadRasConnections(diagnostics);
         return new(enriched, rasConnections, diagnostics.Count == 0,
             diagnostics.Count == 0 ? null : string.Join(" ", diagnostics));
     }
 
-    private static IReadOnlyList<VpnInterfaceEvidence> ReadInterfaces(List<string> diagnostics)
+    private static IReadOnlyList<VpnInterfaceEvidence> ReadInterfaces(List<string> diagnostics,
+        out Dictionary<(ulong Luid, uint Index), Guid> identities)
     {
+        identities = new();
         var entries = new List<VpnInterfaceEvidence>();
         IntPtr table = IntPtr.Zero;
         try
@@ -57,6 +66,7 @@ public sealed class WindowsVpnNative : IVpnInterfaceSource
             {
                 var rowPointer = IntPtr.Add(table, checked(tableOffset + i * rowSize));
                 var row = Marshal.PtrToStructure<MibIfRow2>(rowPointer);
+                identities[(row.InterfaceLuid, row.InterfaceIndex)] = row.InterfaceGuid;
                 entries.Add(new VpnInterfaceEvidence
                 {
                     InterfaceIndex = row.InterfaceIndex,
@@ -81,6 +91,59 @@ public sealed class WindowsVpnNative : IVpnInterfaceSource
                 FreeMibTable(table);
         }
         return entries;
+    }
+
+    private static Dictionary<Guid, IReadOnlyList<IPAddress>> ReadAssignedAddresses(
+        IReadOnlyDictionary<(ulong Luid, uint Index), Guid> identities)
+    {
+        var addresses = new Dictionary<Guid, List<IPAddress>>();
+        IntPtr table = IntPtr.Zero;
+        try
+        {
+            // One read of both families, associated by the same LUID/index seen
+            // in GetIfTable2. An index recycled during discovery cannot borrow an IP.
+            var result = GetUnicastIpAddressTable(0, out table); // AF_UNSPEC
+            if (result != 0)
+                throw new Win32Exception((int)result);
+            if (table == IntPtr.Zero)
+                throw new InvalidOperationException("Windows returned an empty unicast-address table pointer.");
+            var count = Marshal.ReadInt32(table);
+            if (count is < 0 or > 1000000)
+                throw new InvalidOperationException("Windows returned an invalid unicast-address count.");
+
+            const int tableOffset = 8;
+            var rowSize = Marshal.SizeOf<MibUnicastIpAddressRow>();
+            for (var i = 0; i < count; i++)
+            {
+                var pointer = IntPtr.Add(table, checked(tableOffset + i * rowSize));
+                var row = Marshal.PtrToStructure<MibUnicastIpAddressRow>(pointer);
+                // Tentative, duplicate and invalid addresses do not establish a
+                // connected IP interface. A deprecated address remains assigned.
+                if (row.ValidLifetime == 0 || row.DadState is not (3 or 4) ||
+                    !identities.TryGetValue((row.InterfaceLuid, row.InterfaceIndex), out var guid) || guid == Guid.Empty)
+                    continue;
+                var family = (AddressFamily)(ushort)Marshal.ReadInt16(pointer);
+                if (family is not (AddressFamily.InterNetwork or AddressFamily.InterNetworkV6)) continue;
+                var bytes = new byte[family == AddressFamily.InterNetwork ? 4 : 16];
+                Marshal.Copy(IntPtr.Add(pointer, family == AddressFamily.InterNetwork ? 4 : 8), bytes, 0, bytes.Length);
+                var address = family == AddressFamily.InterNetwork ? new IPAddress(bytes)
+                    : new IPAddress(bytes, unchecked((uint)Marshal.ReadInt32(pointer, 24)));
+                if (!addresses.TryGetValue(guid, out var values)) addresses.Add(guid, values = new());
+                values.Add(address);
+            }
+        }
+        catch (Exception exception) when (IsInventoryException(exception))
+        {
+            // IP evidence is used only by the connected header indicator. A failed
+            // address read must not change the established history/route semantics.
+            Trace.TraceWarning($"Windows assigned VPN addresses could not be fully read: {exception.Message}");
+        }
+        finally
+        {
+            if (table != IntPtr.Zero) FreeMibTable(table);
+        }
+        return addresses.ToDictionary(pair => pair.Key,
+            pair => (IReadOnlyList<IPAddress>)Array.AsReadOnly(pair.Value.Distinct().ToArray()));
     }
 
     private static Dictionary<Guid, DriverIdentity> ReadDriverIdentities(List<string> diagnostics)
@@ -265,6 +328,9 @@ public sealed class WindowsVpnNative : IVpnInterfaceSource
     private static extern uint GetIfTable2(out IntPtr table);
 
     [DllImport("iphlpapi.dll")]
+    private static extern uint GetUnicastIpAddressTable(ushort family, out IntPtr table);
+
+    [DllImport("iphlpapi.dll")]
     private static extern void FreeMibTable(IntPtr table);
 
     [DllImport("rasapi32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
@@ -278,6 +344,7 @@ public sealed class WindowsVpnNative : IVpnInterfaceSource
     [StructLayout(LayoutKind.Explicit, Size = 1352, CharSet = CharSet.Unicode)]
     private struct MibIfRow2
     {
+        [FieldOffset(0)] internal ulong InterfaceLuid;
         [FieldOffset(8)] internal uint InterfaceIndex;
         [FieldOffset(12)] internal Guid InterfaceGuid;
         [FieldOffset(1128)] internal uint Type;
@@ -285,6 +352,17 @@ public sealed class WindowsVpnNative : IVpnInterfaceSource
         [FieldOffset(1152)] internal byte StatusFlags;
         [FieldOffset(1156)] internal uint OperStatus;
         [FieldOffset(1164)] internal uint MediaConnectState;
+    }
+
+    // SOCKADDR_INET occupies 28 bytes, followed by eight-byte-aligned NET_LUID.
+    // https://learn.microsoft.com/windows/win32/api/netioapi/ns-netioapi-mib_unicastipaddress_row
+    [StructLayout(LayoutKind.Explicit, Size = 80)]
+    private struct MibUnicastIpAddressRow
+    {
+        [FieldOffset(32)] internal ulong InterfaceLuid;
+        [FieldOffset(40)] internal uint InterfaceIndex;
+        [FieldOffset(52)] internal uint ValidLifetime;
+        [FieldOffset(64)] internal uint DadState;
     }
 
     // SDK ras.h explicitly uses pshpack4.h, including for HRASCONN on x64.

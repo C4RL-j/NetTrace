@@ -129,21 +129,44 @@ internal static class InternetReachabilityChecks
         check(reachabilityText.Text == "Available" && quality.Text == "Unavailable" &&
             Control<TextBlock>(window, "IcmpLatencyText").Text == "Unavailable" &&
             Control<TextBlock>(window, "IcmpJitterText").Text == "Unavailable" &&
-            Control<TextBlock>(window, "IcmpPacketLossText").Text == "100%" &&
-            loss.Data.PacketLossPoints[^1].Percent == 100,
-            "Available internet reachability coexists with unavailable ICMP quality, missing latency/jitter and full-loss history");
+            Control<TextBlock>(window, "IcmpPacketLossText").Text == "Unavailable" &&
+            loss.Data.PacketLossPoints[^1].Percent is null &&
+            FindText(cards[0]).Any(text => text == "Packet Loss") &&
+            Control<TextBlock>(window, "HealthDisclaimerText").Text.Contains(
+                "Packet loss can't be measured for these samples.", StringComparison.Ordinal),
+            "Available internet with zero of four replies keeps the Packet Loss label and shows unavailable loss, latency and jitter with a measurement explanation");
         check(FindText(cards[0]).Any(text => text.Contains("ICMP replies can be blocked", StringComparison.Ordinal) &&
                 text.Contains("does not determine internet availability", StringComparison.Ordinal) &&
                 text.Contains("DNS", StringComparison.Ordinal) && text.Contains("HTTPS", StringComparison.Ordinal)),
             "The concise disclaimer explains blocked ICMP and separate DNS/HTTPS reachability without claiming every service works");
         SavePreview(window, root, "available-icmp-unavailable");
+        var blockedResult = monitoring.LatestIcmpMeasurement;
+        var blockedSamples = monitoring.RollingIcmpSamples;
+        var blockedData = line.Data;
+        var blockedQuality = Summary(window);
 
         timer.Start();
         CompleteReachability(monitoring, probes, clock, true, false);
         Wait(() => reachabilityText.Text == "Limited");
-        check(quality.Text == "Unavailable" && ReferenceEquals(timer, ViewTimer(window)),
-            "A completed reachability check updates visible Health through the existing view timer without waiting for another ICMP cycle");
+        check(quality.Text == "Unavailable" && Control<TextBlock>(window, "IcmpPacketLossText").Text == "Unavailable" &&
+            loss.Data.PacketLossPoints[^1].Percent is null && ReferenceEquals(blockedData, line.Data) &&
+            ReferenceEquals(blockedResult, monitoring.LatestIcmpMeasurement) && ReferenceEquals(timer, ViewTimer(window)),
+            "Limited internet with zero of four replies retains unavailable packet loss through the existing view timer without another ICMP cycle");
         timer.Stop();
+        CompleteReachability(monitoring, probes, clock, false, false);
+        window.RefreshDashboard();
+        check(Control<TextBlock>(window, "IcmpPacketLossText").Text == "100%" && loss.Data.PacketLossPoints[^1].Percent == 100 &&
+            ReferenceEquals(blockedResult, monitoring.LatestIcmpMeasurement) && monitoring.RollingIcmpSamples.SequenceEqual(blockedSamples) &&
+            !ReferenceEquals(blockedData, line.Data) && ReferenceEquals(line.Data, loss.Data) &&
+            ReferenceEquals(blockedQuality, Summary(window)) && Control<TextBlock>(window, "IcmpLatencyText").Text == "Unavailable" &&
+            Control<TextBlock>(window, "IcmpJitterText").Text == "Unavailable",
+            "An unreachable completion alone restores genuine 100% loss while ICMP observations, quality, latency and jitter remain unchanged");
+        CompleteReachability(monitoring, probes, clock, true, false);
+        window.RefreshDashboard();
+        check(Control<TextBlock>(window, "IcmpPacketLossText").Text == "Unavailable" && loss.Data.PacketLossPoints[^1].Percent is null &&
+            ReferenceEquals(blockedResult, monitoring.LatestIcmpMeasurement) && ReferenceEquals(line.Data, loss.Data) &&
+            ReferenceEquals(blockedQuality, Summary(window)) && blockedResult!.PacketLossPercent == 100,
+            "Restored Limited reachability removes false 100% loss immediately without replacing or rewriting a raw ICMP result");
         var calls = probes.Calls;
         for (var repeat = 0; repeat < 4; repeat++) window.RefreshDashboard();
         check(probes.Calls == calls && ReferenceEquals(reachabilityWorker, reachability.Completion) &&
@@ -213,13 +236,31 @@ internal static class InternetReachabilityChecks
         Pump();
         check(created == 2 && Control<TextBlock>(recreated, "InternetReachabilityText").Text == "Available" &&
             Control<TextBlock>(recreated, "IcmpQualityText").Text == "Unavailable" &&
+            Control<TextBlock>(recreated, "IcmpPacketLossText").Text == "Unavailable" &&
+            Control<IcmpPacketLossChart>(recreated, "IcmpPacketLossChart").Data.PacketLossPoints[^1].Percent is null &&
             monitoring.RollingIcmpSamples.SequenceEqual(lastRaw),
-            "Tray Open recreates Health with the current reachability result and unchanged ICMP history");
+            "Tray Open recreates Health with Available reachability, unavailable packet loss and unchanged ICMP history");
         check(ReferenceEquals(reachabilityWorker, reachability.Completion) && ReferenceEquals(icmpWorker, icmp.Completion) &&
             probes.MaximumConcurrent == 4 && pings.MaximumConcurrent == 1 && ReferenceEquals(baseline, Baseline(monitoring)) &&
             captures == counters.Captures && history.GetActiveSession()!.Id == physicalId &&
             monitoring.GetSnapshot().SessionDownloaded == 0,
             "Reachability page and tray operations preserve both workers, physical session, sampler baseline and bandwidth accounting");
+
+        ViewTimer(recreated).Stop();
+        CompleteIcmp(monitoring, pings, clock, replies: 3, latency: 40);
+        recreated.RefreshDashboard();
+        check(Control<TextBlock>(recreated, "IcmpPacketLossText").Text == "25%" &&
+            Control<IcmpPacketLossChart>(recreated, "IcmpPacketLossChart").Data.PacketLossPoints[^1].Percent == 25 &&
+            Control<TextBlock>(recreated, "IcmpLatencyText").Text == "40 ms" &&
+            Control<TextBlock>(recreated, "IcmpJitterText").Text == "0 ms" &&
+            !Control<TextBlock>(recreated, "HealthDisclaimerText").Text.Contains("can't be measured", StringComparison.Ordinal),
+            "Available internet with three of four replies displays real 25% loss and preserves successful latency and jitter");
+        CompleteIcmp(monitoring, pings, clock, replies: 2, latency: 40);
+        recreated.RefreshDashboard();
+        check(Control<TextBlock>(recreated, "IcmpPacketLossText").Text == "50%" &&
+            Control<IcmpPacketLossChart>(recreated, "IcmpPacketLossChart").Data.PacketLossPoints[^1].Percent == 50 &&
+            Control<TextBlock>(recreated, "IcmpRepliesText").Text == "2 / 4",
+            "Available internet with two of four replies displays real 50% loss in both the metric and shared chart");
 
         var beforeSleep = monitoring.LatestInternetReachability;
         probes.QueueDns(true, false);
@@ -303,6 +344,16 @@ internal static class InternetReachabilityChecks
         clock.Advance(TimeSpan.FromSeconds(15));
         var reply = latency is { } value ? new IcmpPingReply(IPStatus.Success, value) : new IcmpPingReply(IPStatus.TimedOut, 9999);
         source.Queue(Enumerable.Repeat(reply, 4));
+        WaitWithoutUi(() => monitoring.LatestIcmpMeasurement is { } latest && !ReferenceEquals(previous, latest) && source.Active == 1);
+    }
+
+    private static void CompleteIcmp(MonitoringService monitoring, ControlledPingSource source, ControlledClock clock,
+        int replies, long latency)
+    {
+        var previous = monitoring.LatestIcmpMeasurement;
+        clock.Advance(TimeSpan.FromSeconds(15));
+        source.Queue(Enumerable.Range(0, 4).Select(index => index < replies
+            ? new IcmpPingReply(IPStatus.Success, latency) : new IcmpPingReply(IPStatus.TimedOut, 9999)));
         WaitWithoutUi(() => monitoring.LatestIcmpMeasurement is { } latest && !ReferenceEquals(previous, latest) && source.Active == 1);
     }
 

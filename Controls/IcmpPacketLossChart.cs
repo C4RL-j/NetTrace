@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Media;
 using NetTrace.Models;
 using NetTrace.Presentation;
@@ -18,12 +19,17 @@ public sealed class IcmpPacketLossChart : FrameworkElement
     public IcmpStabilityChartData Data { get; private set; } =
         IcmpStabilityChartData.Create(Array.Empty<IcmpProbeResult>());
 
+    public string Message => Data.Count == 0 ? "Waiting for packet loss samples..." :
+        Data.PacketLossPoints.All(point => point.Percent is null)
+            ? IcmpPacketLossPresentation.UnavailableMessage : "";
+
     public void UpdateData(IcmpStabilityChartData data)
     {
         ArgumentNullException.ThrowIfNull(data);
         if (ReferenceEquals(Data, data)) return;
 
         Data = data;
+        AutomationProperties.SetHelpText(this, Message);
         InvalidateVisual();
     }
 
@@ -44,9 +50,9 @@ public sealed class IcmpPacketLossChart : FrameworkElement
         }
         drawingContext.DrawLine(AxisPen, plot.BottomLeft, plot.BottomRight);
 
-        if (Data.Count == 0)
+        if (Message.Length > 0)
         {
-            DrawMessage(drawingContext, plot, "Waiting for packet loss samples...");
+            DrawMessage(drawingContext, plot, Message);
             return;
         }
 

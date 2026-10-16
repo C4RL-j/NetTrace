@@ -92,6 +92,22 @@ controlled source so the full suite performs no public DNS/HTTPS requests. Seven
 PNGs under `internet-reachability-previews` cover the states, ICMP combinations and 760×600
 layout; the existing two cards and vertical chart scrolling remain intact.
 
+Health Polish covers beginner-friendly packet loss in
+`IcmpPacketLossPresentationChecks.cs` and the existing reachability/VPN integration
+fixtures. Available or Limited internet with zero successful ICMP replies displays
+`Packet Loss: Unavailable`, preserves the raw 100% observation and renders neutral
+chart gaps with a measurement explanation. An active VPN adds a qualified blocked-ping
+explanation. Genuine unreachable full loss and partial 25%/50% loss remain measurable.
+Reachability-only transitions update the metric and synchronized charts without
+replacing ICMP samples or recalculating unchanged quality, latency or jitter. Native
+pixel fixtures verify unavailable charts contain no loss bars and save six PNGs under
+`packet-loss-presentation-previews` in the owned test directory.
+Run all Health groups, including VPN context checks, independently with:
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests/NetTrace.WpfTests.csproj -- --health-checks
+```
+
 ```powershell
 dotnet run --project tests/NetTrace.WpfTests/NetTrace.WpfTests.csproj
 ```
@@ -283,7 +299,7 @@ Today/chart definitions consistent. An unfinished stored session's persisted byt
 are included once on its local start day; current unflushed process counters remain
 unavailable. Session/event row hashes must remain unchanged after every view.
 
-Dashboard 001 has 34 checks in `DashboardSpeedChecks.cs` and runs with the full suite:
+Dashboard 001 and Polish 005 have 35 checks in `DashboardSpeedChecks.cs` and run with the full suite:
 
 ```powershell
 dotnet run --project tests/NetTrace.WpfTests/NetTrace.WpfTests.csproj -- --dashboard-speed-checks
@@ -294,7 +310,7 @@ Owned zero/KB/MB/GB and asymmetric rate fixtures verify large adaptive byte-rate
 primaries with muted Mbps directly below, semantic shared styles, unchanged peak
 Mbps and cumulative session/data usage labels, stable transfer-rate help cues,
 wrapped native help popups with focus/click/Escape behavior, and two aligned cards
-at 760×600. Minimum-size scrolling preserves access to the data usage/current
+at 760×600. Live Traffic direction labels and primary/secondary speed readings use the same green Download and blue Upload brushes as the live graph. Minimum-size scrolling preserves access to the data usage/current
 connection sections. Synthetic page and help screenshots are saved beneath
 `dashboard-speed-previews` in the owned test directory.
 
@@ -312,7 +328,7 @@ UI store and reports which adaptive traffic conditions occurred. If ordinary
 background traffic never reaches MB/s, that live condition is reported as
 unavailable; deterministic MB/s coverage remains part of the owned WPF checks.
 
-Dashboard Data Usage 001 and Dashboard Polish 003 use the summary checks in
+Dashboard Data Usage 001 and Dashboard Polish 003/004/005 use the summary checks in
 `DashboardUsageChecks.cs`, included in the full suite:
 
 ```powershell
@@ -320,16 +336,22 @@ dotnet run --project tests/NetTrace.WpfTests/NetTrace.WpfTests.csproj -- --dashb
 ```
 
 Owned date buckets distinguish Today, seven-day and thirty-day totals, including
-the existing inclusive boundaries and exclusion of future days. The compact attached
+the existing inclusive boundaries and exclusion of future days. The larger pill
 selector cycles Today → Last 7 Days → Last 30 Days → Today with the existing cyan
 style. Checks refresh each range and retain 7D/30D selection across all five other
 navigation pages. Keyboard focus and Space cycling, removal of the separate tabs
 and old cards, the native graph as the right column's only control, readable zero/GB
-values and compact flush selector/card geometry are verified at 760×600, with
-resizing and vertical access to Current Connection preserved.
+values and the pill's calendar icon/label/chevron geometry are verified at 760×600, with
+resizing and vertical access to Current Connection preserved. Polish 004 checks
+that the narrower summary gives all freed horizontal space to the native graph.
+All three ranges also use large persisted TB values to verify exact text and
+readable wrapping in the card at 760×600 and 920×740. Polish 005 verifies full-width
+rounded selector spacing, the dark card surface and stronger total hierarchy.
+Native rendered text confirms exact download values and arrows are green and
+upload values and arrows are blue in every range, including zero and wrapped TB totals.
 Previews are saved under `dashboard-usage-previews` in the owned test directory.
 
-Dashboard Data Usage 002 and Dashboard Polish 003 use rolling live Download/Upload
+Dashboard Data Usage 002 and Dashboard Polish 003/004/005 use rolling live Download/Upload
 graph checks in `DashboardTrafficChecks.cs`, included in the full suite:
 
 ```powershell
@@ -338,20 +360,24 @@ dotnet run --project tests/NetTrace.WpfTests/NetTrace.WpfTests.csproj -- --dashb
 
 An injected clock and owned physical counters verify that the native speed curves
 use the same raw snapshot as the existing live cards, preserve asymmetric KB/s and
-MB/s values, advance the 60-second timeline and expire old samples and peaks. Idle
+MB/s values, advance the 130-second timeline and expire old samples and peaks. Idle
 zero rates and unavailable intervals stay distinct and hoverable. Tooltips show
 local sample time and directional rates; a stationary popup updates to the sample
 beneath its pointer as the graph moves. Summary range selection preserves the live
 graph and physical accounting, and repeated same-second updates do not duplicate
 samples, samplers or timers. Navigation, hiding and minimizing each continue more
-than a minute of source sampling while freezing chart data and native drawing and
-clearing hover. The cached immutable source remains bounded to 61 chronological
+than 130 seconds of source sampling while freezing chart data and native drawing and
+clearing hover. The cached immutable source remains bounded to 130 chronological
 one-second observations. Returning immediately renders that already-collected
-continuous recent minute without a visibility gap; genuine unavailable measurements
+continuous recent 130 seconds without a visibility gap; genuine unavailable measurements
 still split both curves. Source collection uses one existing adapter capture per
 monitoring sample and preserves the existing worker and timer identities.
 Native drawing, legend, axis and tooltip bounds are checked at 760×600 and after
-resizing. Synthetic previews are saved under `dashboard-traffic-previews`. These
+resizing. The 130s/60s/Now axis labels place the 60-second tick at its actual
+timeline position. Width checks compare the compact summary and expanded graph
+against the previous equal-column layout. Polish 005 checks the graph aligns with
+the summary card below the enlarged pill and checks the graph uses green download and blue upload colors. Synthetic previews are saved under
+`dashboard-traffic-previews`. These
 checks do not open the user's database, require an App Usage service or generate
 network traffic.
 
@@ -534,3 +560,59 @@ completion during range switching cannot replace current rows or totals. Existin
 range checks retain periodic selected-range refresh and zero hidden-page requests.
 Owned fixtures never change the production collector, database or app permissions.
 See [006.1 validation](VALIDATION0061.md) for commands, totals and preview evidence.
+
+## Download Speed Test
+
+The fixed dashboard card offers 25/50/100/250 MB. Controlled checks render Idle,
+Running, Completed, Cancelled and Error at 760×600 and 920×740; assert identical
+card, graph, surrounding bounds and scrolling; exercise the actual warning dialog,
+all limits, retries, partial results, monitoring/adapter cancellation and window
+cleanup. A controlled localhost HTTP server verifies the real WPF Cancel button
+closes a stalled response socket promptly. These ordinary checks generate no
+public internet traffic:
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests/NetTrace.WpfTests.csproj -- --download-speed-test-checks
+```
+
+Explicit live verification constructs the real WPF dashboard, HTTP downloader,
+physical adapter sampler and normal SQLite accounting with an isolated data store.
+It downloads exactly the smallest 25 MB payload plus protocol overhead, then checks
+ordinary Today/app/connection totals, persistence and layout. Run only when that
+real data consumption is intended:
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests/NetTrace.WpfTests.csproj -- --download-speed-test-live-validation
+```
+
+## Header VPN key
+
+`--vpn-key-checks` checks the small cyan header key against connected RAS and
+private split-tunnel snapshots independently of internet reachability. It compares
+exact Monitoring dot/text, navigation and dashboard bounds at 760×600 and 920×740,
+checks all tooltip names and actually hovers the pointer over the native WPF key.
+The fixture preserves sampler, observer and accounting state and sends no public
+network traffic or VPN connection/disconnection commands.
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests/NetTrace.WpfTests.csproj -- --vpn-key-checks
+```
+
+## Compact tray popup
+
+`--tray-popup-checks` verifies the 340-DIP native popup, shared directional live
+rates, Today totals including unflushed bytes, the last 60 existing traffic samples,
+cached split-tunnel VPN keys and monitoring state. It checks that rendering adds
+no sampler, worker, counter reads or usage changes and preserves the dashboard's
+130-second graph history. All accounting uses isolated owned data and injected
+monitoring transports.
+
+The checks send native notification-area callbacks for single and double clicks,
+verify placement inside the monitor work area, perform an actual cursor click on
+an outside WPF window, send native Escape, exercise Settings and Open commands,
+and verify window, notification subscription and Exit cleanup. They temporarily
+move the real pointer and save popup previews in the reported isolated directory.
+
+```powershell
+dotnet run --project tests/NetTrace.WpfTests/NetTrace.WpfTests.csproj -- --tray-popup-checks
+```

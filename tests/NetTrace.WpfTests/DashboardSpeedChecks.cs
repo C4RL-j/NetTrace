@@ -6,6 +6,7 @@ using System.Reflection;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using Microsoft.Data.Sqlite;
@@ -56,8 +57,19 @@ internal static class DashboardSpeedChecks
                     ReferenceEquals(secondary.Style.BasedOn, window.FindResource("MutedText")) && primary.FontSize > secondary.FontSize &&
                     primary.FontWeight.ToOpenTypeWeight() > secondary.FontWeight.ToOpenTypeWeight() &&
                     ReferenceEquals(primary.Parent, secondary.Parent) && panel.Children.IndexOf(secondary) == panel.Children.IndexOf(primary) + 1,
-                    $"{direction} uses shared semantic primary/secondary styles with muted smaller Mbps directly below byte rate");
+                    $"{direction} uses shared semantic primary/secondary styles with smaller Mbps directly below byte rate");
             }
+            bool SameColor(Brush left, Brush right) => left is SolidColorBrush first &&
+                right is SolidColorBrush second && first.Color == second.Color;
+            check(new[] { "Download", "Upload" }.All(direction =>
+            {
+                var expected = direction == "Download" ? DashboardTrafficChart.DownloadBrush : DashboardTrafficChart.UploadBrush;
+                var primary = Control<TextBlock>(window, direction + "RateText");
+                var heading = ((StackPanel)primary.Parent).Children.OfType<StackPanel>().First().Children.OfType<TextBlock>().Single();
+                return SameColor(heading.Foreground, expected) && SameColor(primary.Foreground, expected) &&
+                    SameColor(Control<TextBlock>(window, direction + "MbpsText").Foreground, expected);
+            }),
+                "Live Traffic direction labels and both speed readings match green Download and blue Upload graph colors");
             var initialCuePositions = new[] { "DownloadRateHelp", "UploadRateHelp" }
                 .Select(name => Control<NetworkHelpButton>(window, name).TranslatePoint(new Point(), Card(Control<TextBlock>(window, name.StartsWith("Download", StringComparison.Ordinal) ? "DownloadRateText" : "UploadRateText"))))
                 .ToArray();
@@ -289,7 +301,11 @@ internal static class DashboardSpeedChecks
         command.ExecuteNonQuery();
     }
     private static T Control<T>(Window window, string name) where T : class => HistoryOverviewChecks.Control<T>(window, name);
-    private static string Text(Window window, string name) => Control<TextBlock>(window, name).Text;
+    private static string Text(Window window, string name)
+    {
+        var text = Control<TextBlock>(window, name);
+        return new TextRange(text.ContentStart, text.ContentEnd).Text;
+    }
     private static ScrollViewer Page(MainWindow window) => (ScrollViewer)Control<TabItem>(window, "DashboardTab").Content;
     private static T Field<T>(object instance, string name) => (T)instance.GetType().GetField(name, PrivateInstance)!.GetValue(instance)!;
     private static void StopSampler(MonitoringService monitoring) => Field<System.Threading.Timer>(monitoring, "_timer").Change(Timeout.Infinite, Timeout.Infinite);

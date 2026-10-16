@@ -29,7 +29,8 @@ public sealed class IcmpStabilityChartData
         MaxMilliseconds = maxMilliseconds;
     }
 
-    public static IcmpStabilityChartData Create(IReadOnlyList<IcmpProbeResult> samples)
+    public static IcmpStabilityChartData Create(IReadOnlyList<IcmpProbeResult> samples,
+        InternetReachabilityStatus reachability = InternetReachabilityStatus.Checking)
     {
         ArgumentNullException.ThrowIfNull(samples);
         var count = Math.Min(samples.Count, IcmpMonitor.HistoryCapacity);
@@ -42,8 +43,7 @@ public sealed class IcmpStabilityChartData
         var jitter = CreateSegments(snapshot, sample => sample.SuccessfulReplies >= 2
             ? sample.JitterMs : null);
         var packetLoss = snapshot.Select((sample, index) => new IcmpPacketLossChartPoint(
-            SamplePosition(index, count), double.IsFinite(sample.PacketLossPercent)
-                ? Math.Clamp(sample.PacketLossPercent, 0, 100) : null)).ToArray();
+            SamplePosition(index, count), IcmpPacketLossPresentation.Percent(sample, reachability))).ToArray();
         var max = latency.Concat(jitter).SelectMany(segment => segment)
             .Select(point => point.Milliseconds).DefaultIfEmpty(0).Max();
         return new IcmpStabilityChartData(Array.AsReadOnly(snapshot), latency, jitter,

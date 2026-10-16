@@ -25,8 +25,9 @@ public sealed record DashboardTrafficChartPoint(double Position, double BytesPer
 // A visible chart projection of the monitor's rolling samples, never usage accounting.
 public sealed class DashboardTrafficChartData
 {
-    public const int WindowSeconds = 60;
+    public const int WindowSeconds = 130;
     public IReadOnlyList<DashboardTrafficSample> Samples { get; }
+    public int WindowDurationSeconds { get; }
     public DateTimeOffset WindowStartUtc { get; }
     public DateTimeOffset WindowEndUtc { get; }
     public double MaximumBytesPerSecond { get; }
@@ -36,12 +37,14 @@ public sealed class DashboardTrafficChartData
     public IReadOnlyList<IReadOnlyList<DashboardTrafficChartPoint>> UploadSegments { get; }
     public static DashboardTrafficChartData Empty { get; } = Create([], DateTimeOffset.UtcNow);
 
-    private DashboardTrafficChartData(IReadOnlyList<DashboardTrafficSample> samples, DateTimeOffset endUtc)
+    private DashboardTrafficChartData(IReadOnlyList<DashboardTrafficSample> samples, DateTimeOffset endUtc,
+        int windowSeconds)
     {
         Samples = samples;
+        WindowDurationSeconds = windowSeconds;
         WindowEndUtc = endUtc;
-        WindowStartUtc = endUtc.UtcTicks >= TimeSpan.FromSeconds(WindowSeconds).Ticks
-            ? endUtc.AddSeconds(-WindowSeconds) : DateTimeOffset.MinValue;
+        WindowStartUtc = endUtc.UtcTicks >= TimeSpan.FromSeconds(windowSeconds).Ticks
+            ? endUtc.AddSeconds(-windowSeconds) : DateTimeOffset.MinValue;
         var maximum = samples.SelectMany(sample => new[] { sample.DownloadBytesPerSecond, sample.UploadBytesPerSecond })
             .Where(value => value.HasValue).Select(value => value!.Value).DefaultIfEmpty(0).Max();
         MaximumBytesPerSecond = NiceMaximum(maximum);
@@ -50,11 +53,18 @@ public sealed class DashboardTrafficChartData
     }
 
     public static DashboardTrafficChartData Create(IReadOnlyList<DashboardTrafficSample> samples, DateTimeOffset endUtc)
+        => Create(samples, endUtc, WindowSeconds);
+
+    public static DashboardTrafficChartData Create(IReadOnlyList<DashboardTrafficSample> samples, DateTimeOffset endUtc,
+        int windowSeconds)
     {
         ArgumentNullException.ThrowIfNull(samples);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(windowSeconds);
         endUtc = endUtc.ToUniversalTime();
-        var startTicks = Math.Max(0, endUtc.UtcTicks - TimeSpan.FromSeconds(WindowSeconds).Ticks);
-        var snapshot = samples.Where(sample => sample.TimestampUtc.UtcTicks >= startTicks && sample.TimestampUtc <= endUtc)
+        var startTicks = endUtc.UtcTicks - TimeSpan.FromSeconds(windowSeconds).Ticks;
+        // Each observation represents one monitoring second; the left boundary
+        // expires so a full window contains one sample per second.
+        var snapshot = samples.Where(sample => sample.TimestampUtc.UtcTicks > startTicks && sample.TimestampUtc <= endUtc)
             .GroupBy(sample => sample.TimestampUtc).Select(group => group.Last()).OrderBy(sample => sample.TimestampUtc)
             .Select(sample => sample with
             {
@@ -62,7 +72,7 @@ public sealed class DashboardTrafficChartData
                 DownloadBytesPerSecond = sample.DownloadBytesPerSecond is { } download ? ByteRateFormatter.Normalize(download) : null,
                 UploadBytesPerSecond = sample.UploadBytesPerSecond is { } upload ? ByteRateFormatter.Normalize(upload) : null
             }).ToArray();
-        return new(Array.AsReadOnly(snapshot), endUtc);
+        return new(Array.AsReadOnly(snapshot), endUtc, windowSeconds);
     }
 
     private IReadOnlyList<IReadOnlyList<DashboardTrafficChartPoint>> CreateSegments(Func<DashboardTrafficSample, double?> select)
@@ -80,7 +90,7 @@ public sealed class DashboardTrafficChartData
         {
             if (sample.BreakBefore || previous is { } last && (sample.TimestampUtc - last).TotalSeconds > 2.5) Finish();
             if (select(sample) is { } rate)
-                current.Add(new(Math.Clamp((sample.TimestampUtc - WindowStartUtc).TotalSeconds / WindowSeconds, 0, 1), rate));
+                current.Add(new(Math.Clamp((sample.TimestampUtc - WindowStartUtc).TotalSeconds / WindowDurationSeconds, 0, 1), rate));
             else Finish();
             previous = sample.TimestampUtc;
         }

@@ -1,8 +1,10 @@
 using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
+using Path = System.Windows.Shapes.Path;
 using NetTrace;
 using NetTrace.Controls;
 using NetTrace.Models;
@@ -19,6 +21,7 @@ internal static class DashboardUsageChecks
         var previews = System.IO.Path.Combine(root, "dashboard-usage-previews");
         CheckRanges(root, previews, check);
         CheckEmpty(root, previews, check);
+        CheckLargeValues(root, previews, check);
         Console.WriteLine("Dashboard summary range previews: " + previews);
     }
 
@@ -52,7 +55,7 @@ internal static class DashboardUsageChecks
             };
 
             check(Control<TabItem>(window, "DashboardTab").IsSelected && IsSelected(window, 0),
-                "Dashboard Data Usage opens with Today selected in the compact selector");
+                "Dashboard Data Usage opens with Today selected in the pill selector");
             CheckValues(window, 0, expected[0], check, "default Today excludes prior and future date buckets");
             CheckStructure(window, check);
             foreach (var index in new[] { 1, 2, 0 })
@@ -72,6 +75,7 @@ internal static class DashboardUsageChecks
                     ReferenceEquals(breakdown, Control<TextBlock>(window, "DashboardUsageBreakdownText")),
                     $"{RangeTitles[index]} updates the same summary card and directional text controls");
                 CheckAccent(window, index, check);
+                CheckDirectionColors(window, index, expected[index], check, "recorded GB totals");
                 CheckLayout(window, check, RangeTitles[index] + " GB totals");
                 Save(window, previews, "760x600-" + index + "-GB.png");
             }
@@ -148,6 +152,7 @@ internal static class DashboardUsageChecks
             {
                 Click(window, index);
                 CheckValues(window, index, (0, 0), check, "an empty range displays truthful zero total and directional values");
+                CheckDirectionColors(window, index, (0, 0), check, "zero totals");
                 CheckLayout(window, check, RangeTitles[index] + " zero totals");
                 Save(window, previews, "760x600-" + index + "-zero.png");
             }
@@ -179,6 +184,44 @@ internal static class DashboardUsageChecks
         }
     }
 
+    private static void CheckLargeValues(string root, string previews, Action<bool, string> check)
+    {
+        var store = new UsageStore(System.IO.Path.Combine(root, "dashboard-usage-large-values"));
+        var clock = new OwnedClock();
+        var today = DateOnly.FromDateTime(clock.GetLocalNow().DateTime);
+        store.AddUsage(today, 3_000_000_000_000_000_000, 1_000_000_000_000_000_000);
+        store.AddUsage(today.AddDays(-1), 1_000_000_000_000_000_000, 1_000_000_000_000_000_000);
+        store.AddUsage(today.AddDays(-29), 200_000_000_000_000_000, 200_000_000_000_000_000);
+        var expected = new (long Download, long Upload)[]
+        {
+            (3_000_000_000_000_000_000, 1_000_000_000_000_000_000),
+            (4_000_000_000_000_000_000, 2_000_000_000_000_000_000),
+            (4_200_000_000_000_000_000, 2_200_000_000_000_000_000)
+        };
+        using var monitoring = HistoryOverviewChecks.CreateMonitoring(store, clock);
+        var window = CreateWindow(monitoring);
+        try
+        {
+            window.Show();
+            HistoryOverviewChecks.StopViewTimer(window);
+            foreach (var size in new[] { (Width: 760, Height: 600), (Width: 920, Height: 740) })
+            {
+                window.Width = size.Width;
+                window.Height = size.Height;
+                for (var index = 0; index < RangeTitles.Length; index++)
+                {
+                    Click(window, index);
+                    CheckValues(window, index, expected[index], check,
+                        "large persisted byte totals remain exact in the narrower summary");
+                    CheckDirectionColors(window, index, expected[index], check, $"{size.Width}x{size.Height} large TB totals");
+                    CheckLayout(window, check, $"{size.Width}x{size.Height} {RangeTitles[index]} large TB values");
+                    Save(window, previews, $"{size.Width}x{size.Height}-{index}-large-TB.png");
+                }
+            }
+        }
+        finally { window.Close(); }
+    }
+
     private static void CheckKeyboard(MainWindow window, Action<bool, string> check)
     {
         Click(window, 0);
@@ -188,7 +231,7 @@ internal static class DashboardUsageChecks
         Keyboard.Focus(button);
         HistoryOverviewChecks.Pump();
         check(button.Focusable && button.IsKeyboardFocused,
-            "The compact Dashboard range selector accepts keyboard focus at the minimum window size");
+            "The pill Dashboard range selector accepts keyboard focus at the minimum window size");
         var source = PresentationSource.FromVisual(window)!;
         button.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, source, 0, Key.Space)
             { RoutedEvent = Keyboard.KeyDownEvent, Source = button });
@@ -207,31 +250,43 @@ internal static class DashboardUsageChecks
         var summary = Control<Grid>(window, "DashboardUsageSummary");
         var selector = Control<Button>(window, "DashboardUsageSelectorButton");
         var card = Control<Border>(window, "DashboardUsageCard");
-        check(section.ColumnDefinitions.Count == 3 && section.ColumnDefinitions[0].Width.IsStar &&
+        check(section.ColumnDefinitions.Count == 3 && section.ColumnDefinitions[0].Width.IsAbsolute &&
             section.ColumnDefinitions[2].Width.IsStar && Grid.GetColumn(summary) == 0 && Grid.GetRow(summary) == 1,
-            "Data Usage places one summary in the left column and preserves the existing Dashboard spacing");
+            "Data Usage places one compact summary in a narrower left column and gives the graph the remaining width");
         var traffic = Control<DashboardTrafficChart>(window, "DashboardTrafficChart");
-        check(section.Children.Count == 3 && ReferenceEquals(traffic.Parent, section) &&
+        var speedTest = Control<Border>(window, "SpeedTestCard");
+        check(section.Children.Count == 4 && ReferenceEquals(traffic.Parent, section) &&
                 Grid.GetColumn(traffic) == 2 && Grid.GetRow(traffic) == 1 &&
                 section.Children.OfType<FrameworkElement>().Where(child => Grid.GetRow(child) == 1 &&
-                    Grid.GetColumn(child) == 2).Single() == traffic,
-            "The right Data Usage column contains only the native live Download/Upload graph");
+                    Grid.GetColumn(child) == 2).SequenceEqual(new FrameworkElement[] { speedTest, traffic }) &&
+                ReferenceEquals(speedTest.Parent, section) && speedTest.Height == 52 && traffic.Margin.Top == 54,
+            "The right Data Usage column retains the native live graph below a fixed Speed Test in its existing gap");
         check(summary.Children.Count == 2 && ReferenceEquals(selector.Parent, summary) &&
             ReferenceEquals(card.Parent, summary) && Grid.GetRow(selector) == 0 && Grid.GetRow(card) == 1 &&
-            selector.HorizontalAlignment == HorizontalAlignment.Left,
-            "One compact selector attaches directly above the left summary card");
+            selector.HorizontalAlignment == HorizontalAlignment.Stretch,
+            "One pill selector remains directly above the left summary card");
         check(ReferenceEquals(selector.Style, window.FindResource("DashboardUsageSelectorStyle")) &&
-            HistoryOverviewChecks.Descendants(selector).OfType<TextBlock>().Any(text => text.Text == "›") &&
+            Control<Path>(window, "DashboardUsageSelectorIcon").Data is not null &&
+            Control<Path>(window, "DashboardUsageSelectorChevron").Data is not null &&
             Text(window, "DashboardUsageRangeText") == "TODAY",
-            "The compact selector exposes the selected range and next-range arrow through the shared NetTrace style");
+            "The pill selector exposes its selected range, calendar icon and chevron through the shared NetTrace style");
         check(new[] { "DashboardUsageTabs", "DashboardUsageTodayButton", "DashboardUsage7DButton", "DashboardUsage30DButton",
                 "TodayTotalText", "TodayBreakdownText", "WeekTotalText", "WeekBreakdownText", "MonthTotalText", "MonthBreakdownText" }
                 .All(name => window.FindName(name) is null) &&
             summary.Children.OfType<Border>().Count() == 1,
             "The old separate range tabs and duplicate usage cards are removed");
-        check(card.CornerRadius.TopLeft == 0 && card.CornerRadius.TopRight == 14 &&
-            card.CornerRadius.BottomLeft == 14 && card.CornerRadius.BottomRight == 14,
-            "The shared card joins the compact selector at its top left and keeps the remaining rounded corners");
+        check(card.CornerRadius.TopLeft >= 16 && card.CornerRadius.TopRight == card.CornerRadius.TopLeft &&
+            card.CornerRadius.BottomLeft == card.CornerRadius.TopLeft && card.CornerRadius.BottomRight == card.CornerRadius.TopLeft &&
+            card.Padding.Left >= 18 && card.Padding.Top >= 18 &&
+            Control<TextBlock>(window, "DashboardUsageTotalText").FontSize >= 30 &&
+            Control<TextBlock>(window, "DashboardUsageTotalText").FontSize >=
+                Control<TextBlock>(window, "DashboardUsageTitleText").FontSize * 2 &&
+            Control<TextBlock>(window, "DashboardUsageTotalText").FontWeight.ToOpenTypeWeight() >= 600,
+            "The refreshed summary has soft rounded corners, generous inset spacing and a larger prominent total");
+        check(card.Background is GradientBrush gradient && gradient.GradientStops.Count >= 2 &&
+            gradient.GradientStops.All(stop => stop.Color.A == 255 &&
+                Math.Max(stop.Color.R, Math.Max(stop.Color.G, stop.Color.B)) < 80),
+            "The refreshed usage card keeps a subtle opaque dark surface consistent with NetTrace");
     }
 
     private static void CheckAccent(MainWindow window, int selected, Action<bool, string> check)
@@ -242,9 +297,11 @@ internal static class DashboardUsageChecks
         check(SameBrush(button.Foreground, accent) || borders.Any(border =>
                 SameBrush(border.Background, accent) || SameBrush(border.BorderBrush, accent)),
             $"The selected {RangeTitles[selected]} selector uses the existing cyan accent");
-        check(borders.Any(border => border.CornerRadius.TopLeft > 0 && border.CornerRadius.TopRight > 0 &&
-                border.CornerRadius.BottomLeft == 0 && border.CornerRadius.BottomRight == 0),
-            $"The {RangeTitles[selected]} selector has rounded upper corners and attaches flush to the summary");
+        check(borders.Any(border => border.CornerRadius.TopLeft >= button.ActualHeight / 2 - 1 &&
+                border.CornerRadius.TopRight == border.CornerRadius.TopLeft &&
+                border.CornerRadius.BottomLeft == border.CornerRadius.TopLeft &&
+                border.CornerRadius.BottomRight == border.CornerRadius.TopLeft),
+            $"The {RangeTitles[selected]} selector uses a fully rounded pill above the summary");
     }
 
     private static void CheckLayout(MainWindow window, Action<bool, string> check, string state)
@@ -255,39 +312,122 @@ internal static class DashboardUsageChecks
         var summary = Control<Grid>(window, "DashboardUsageSummary");
         var selector = Control<Button>(window, "DashboardUsageSelectorButton");
         var card = Control<Border>(window, "DashboardUsageCard");
+        var traffic = Control<DashboardTrafficChart>(window, "DashboardTrafficChart");
         var selectorBounds = Bounds(selector, summary);
         var cardBounds = Bounds(card, summary);
+        var previousEqualWidth = (section.ActualWidth - section.ColumnDefinitions[1].ActualWidth) / 2;
         check(window.MinWidth == 760 && window.MinHeight == 600 &&
             page.HorizontalScrollBarVisibility == ScrollBarVisibility.Disabled && page.ScrollableWidth < 0.01 &&
-            section.ActualWidth <= page.ViewportWidth + 0.5 && summary.ActualWidth <= section.ActualWidth / 2 + 0.5,
-            $"{state} preserves the minimum Dashboard width with no horizontal overflow");
-        check(Math.Abs(selectorBounds.Bottom - cardBounds.Top) < 0.5 && Math.Abs(selectorBounds.Left - cardBounds.Left) < 0.5 &&
-            selectorBounds.Width < cardBounds.Width - 20 && selectorBounds.Width <= 180 && selectorBounds.Height <= 40,
-            $"{state} keeps the selector compact and flush with the top-left summary edge");
+            section.ActualWidth <= page.ViewportWidth + 0.5 && summary.ActualWidth < previousEqualWidth - 60 &&
+            traffic.ActualWidth > previousEqualWidth + 60 &&
+            Math.Abs(summary.ActualWidth + traffic.ActualWidth + section.ColumnDefinitions[1].ActualWidth - section.ActualWidth) < 0.5,
+            $"{state} keeps the summary narrower and gives its freed width to the graph without horizontal overflow");
+        check(cardBounds.Top - selectorBounds.Bottom is >= 8 and <= 12 &&
+            Math.Abs(selectorBounds.Left - cardBounds.Left) < 0.5 &&
+            Math.Abs(selectorBounds.Right - cardBounds.Right) < 0.5 && selectorBounds.Height is >= 42 and <= 48,
+            $"{state} keeps the larger pill aligned to the summary width with clean spacing above the card");
+        var textDiagnostics = new List<string>();
         var valuesFit = new[] { "DashboardUsageTitleText", "DashboardUsageTotalText", "DashboardUsageBreakdownText" }
-            .All(name =>
+            .Select(name =>
             {
                 var text = Control<TextBlock>(window, name);
                 var bounds = Bounds(text, card);
-                text.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+                var measureWidth = text.TextWrapping == TextWrapping.NoWrap ? double.PositiveInfinity
+                    : text.ActualWidth + text.Margin.Left + text.Margin.Right;
+                text.Measure(new Size(measureWidth,
+                    double.PositiveInfinity));
+                // DesiredSize includes FrameworkElement margins; ActualWidth/Height
+                // and transformed text bounds describe only the element itself.
+                var desiredWidth = text.DesiredSize.Width - text.Margin.Left - text.Margin.Right;
+                var desiredHeight = text.DesiredSize.Height - text.Margin.Top - text.Margin.Bottom;
+                textDiagnostics.Add(FormattableString.Invariant($"{name}: actual {text.ActualWidth:0.###}x{text.ActualHeight:0.###}, desired {text.DesiredSize.Width:0.###}x{text.DesiredSize.Height:0.###}, content desired {desiredWidth:0.###}x{desiredHeight:0.###}, measure width {measureWidth:0.###}, bounds {bounds}, margin {text.Margin}, wrap {text.TextWrapping}."));
                 return bounds.Left >= -0.5 && bounds.Right <= card.ActualWidth + 0.5 &&
                     bounds.Top >= -0.5 && bounds.Bottom <= card.ActualHeight + 0.5 &&
-                    text.DesiredSize.Width <= text.ActualWidth + 0.5;
-            });
+                    text.TextTrimming == TextTrimming.None && desiredWidth <= text.ActualWidth + 0.5 &&
+                    desiredHeight <= text.ActualHeight + 0.5;
+            }).ToArray().All(value => value);
         var content = HistoryOverviewChecks.Descendants(selector).OfType<ContentPresenter>().Single();
         content.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-        check(valuesFit && content.DesiredSize.Width <= content.ActualWidth + 0.5 && selectorBounds.Left >= -0.5 &&
-            selectorBounds.Right <= summary.ActualWidth + 0.5 && selector.ActualHeight >= 28,
-            $"{state} shows the complete selector label, arrow, title, total, download and upload values without clipping");
+        var icon = Control<Path>(window, "DashboardUsageSelectorIcon");
+        var chevron = Control<Path>(window, "DashboardUsageSelectorChevron");
+        var label = Control<TextBlock>(window, "DashboardUsageRangeText");
+        var iconBounds = Bounds(icon, selector);
+        var labelBounds = Bounds(label, selector);
+        var chevronBounds = Bounds(chevron, selector);
+        var readable = valuesFit && content.DesiredSize.Width <= content.ActualWidth + 0.5 && selectorBounds.Left >= -0.5 &&
+            selectorBounds.Right <= summary.ActualWidth + 0.5 && selector.ActualHeight >= 42 &&
+            iconBounds.Width >= 14 && iconBounds.Height >= 14 && iconBounds.Left >= 10 &&
+            iconBounds.Right <= labelBounds.Left - 4 && labelBounds.Right <= chevronBounds.Left - 4 &&
+            chevronBounds.Right <= selector.ActualWidth - 10 &&
+            iconBounds.Top >= -0.5 && iconBounds.Bottom <= selector.ActualHeight + 0.5 &&
+            chevronBounds.Top >= -0.5 && chevronBounds.Bottom <= selector.ActualHeight + 0.5;
+        if (!readable)
+        {
+            Console.WriteLine(FormattableString.Invariant($"Dashboard summary layout failure {state}: card {card.ActualWidth:0.###}x{card.ActualHeight:0.###}, selector bounds {selectorBounds}, summary width {summary.ActualWidth:0.###}, selector content actual {content.ActualWidth:0.###}x{content.ActualHeight:0.###}, desired {content.DesiredSize.Width:0.###}x{content.DesiredSize.Height:0.###}."));
+            foreach (var diagnostic in textDiagnostics) Console.WriteLine(diagnostic);
+        }
+        check(readable,
+            $"{state} shows the complete selector icon, label, chevron, title, total, download and upload values without clipping");
         Layout(window);
     }
 
+    private static void CheckDirectionColors(MainWindow window, int range, (long Download, long Upload) expected,
+        Action<bool, string> check, string state)
+    {
+        Layout(window);
+        var text = Control<TextBlock>(window, "DashboardUsageBreakdownText");
+        var download = Control<Run>(window, "DashboardUsageDownloadRun");
+        var upload = Control<Run>(window, "DashboardUsageUploadRun");
+        var drawings = Drawings(VisualTreeHelper.GetDrawing(text)).OfType<GlyphRunDrawing>().ToArray();
+        var green = Color.FromRgb(0x22, 0xC5, 0x5E);
+        var blue = Color.FromRgb(0x38, 0xBD, 0xF8);
+        string Characters(Color color) => string.Concat(drawings.Where(drawing =>
+            drawing.ForegroundBrush is SolidColorBrush brush && brush.Color == color)
+            .Select(drawing => drawing.GlyphRun.Characters is { } characters ? new string(characters.ToArray()) : ""));
+        // Text wrapping may omit whitespace glyphs at line breaks; the Run text
+        // separately preserves exact formatting, while drawing confirms its ink.
+        string WithoutWhitespace(string value) => string.Concat(value.Where(character => !char.IsWhiteSpace(character)));
+        check(IsSelected(window, range) && download.Text == "↓ " + ByteFormatter.Format(expected.Download) &&
+            upload.Text == "↑ " + ByteFormatter.Format(expected.Upload) &&
+            WithoutWhitespace(Characters(green)) == WithoutWhitespace(download.Text) &&
+            WithoutWhitespace(Characters(blue)) == WithoutWhitespace(upload.Text),
+            $"{RangeTitles[range]} {state} renders exact download in green and upload in blue, including their direction arrows");
+    }
+
+    private static IEnumerable<Drawing> Drawings(Drawing? drawing)
+    {
+        if (drawing is null) yield break;
+        yield return drawing;
+        if (drawing is DrawingGroup group)
+            foreach (var child in group.Children)
+                foreach (var item in Drawings(child)) yield return item;
+    }
+
     private static void CheckValues(MainWindow window, int range, (long Download, long Upload) expected,
-        Action<bool, string> check, string reason) => check(IsSelected(window, range) &&
-            Text(window, "DashboardUsageTitleText") == RangeTitles[range] &&
-            Text(window, "DashboardUsageTotalText") == ByteFormatter.Format(expected.Download + expected.Upload) &&
-            Text(window, "DashboardUsageBreakdownText") == $"↓ {ByteFormatter.Format(expected.Download)}   ↑ {ByteFormatter.Format(expected.Upload)}",
-            RangeTitles[range] + ": " + reason);
+        Action<bool, string> check, string reason)
+    {
+        var title = Text(window, "DashboardUsageTitleText");
+        var total = Text(window, "DashboardUsageTotalText");
+        var breakdown = Text(window, "DashboardUsageBreakdownText");
+        var expectedTotal = ByteFormatter.Format(expected.Download + expected.Upload);
+        var expectedBreakdown = $"↓ {ByteFormatter.Format(expected.Download)}   ↑ {ByteFormatter.Format(expected.Upload)}";
+        var correct = IsSelected(window, range) && title == RangeTitles[range] &&
+            total == expectedTotal && breakdown == expectedBreakdown;
+        if (!correct)
+        {
+            Console.WriteLine($"Dashboard usage value mismatch ({reason}): selected '{Text(window, "DashboardUsageRangeText")}', title '{title}', total '{total}' (expected '{expectedTotal}'), breakdown '{breakdown}' (expected '{expectedBreakdown}').");
+            Console.WriteLine("Actual breakdown code points: " + string.Join(" ", breakdown.Select(character => $"U+{(int)character:X4}")));
+            Console.WriteLine($"Directional Runs: download '{Control<Run>(window, "DashboardUsageDownloadRun").Text}', upload '{Control<Run>(window, "DashboardUsageUploadRun").Text}'.");
+            var preview = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "NetTrace-Polish005-summary-failure-" + Guid.NewGuid().ToString("N") + ".png");
+            try
+            {
+                Save(window, System.IO.Path.GetDirectoryName(preview)!, System.IO.Path.GetFileName(preview));
+                Console.WriteLine("Dashboard usage failure preview: " + preview);
+            }
+            catch (Exception exception) { Console.WriteLine("Could not save the failure preview: " + exception.Message); }
+        }
+        check(correct, RangeTitles[range] + ": " + reason);
+    }
 
     private static bool IsSelected(MainWindow window, int range) =>
         Text(window, "DashboardUsageRangeText") == RangeTitles[range];
@@ -309,7 +449,11 @@ internal static class DashboardUsageChecks
         element.TransformToAncestor(parent).TransformBounds(new Rect(0, 0, element.ActualWidth, element.ActualHeight));
     private static ScrollViewer Page(MainWindow window) => (ScrollViewer)Control<TabItem>(window, "DashboardTab").Content;
     private static T Control<T>(Window window, string name) where T : class => HistoryOverviewChecks.Control<T>(window, name);
-    private static string Text(Window window, string name) => Control<TextBlock>(window, name).Text;
+    private static string Text(Window window, string name)
+    {
+        var text = Control<TextBlock>(window, name);
+        return new TextRange(text.ContentStart, text.ContentEnd).Text;
+    }
     private static void Layout(Window window) { window.UpdateLayout(); HistoryOverviewChecks.Pump(); }
     private static void Save(MainWindow window, string previews, string name)
     {

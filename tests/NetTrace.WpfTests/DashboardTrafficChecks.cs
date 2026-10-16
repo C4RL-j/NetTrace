@@ -41,6 +41,7 @@ internal static class DashboardTrafficChecks
             var chart = Control<DashboardTrafficChart>(window, "DashboardTrafficChart");
             check(Control<TabItem>(window, "DashboardTab").IsSelected &&
                 Text(window, "DashboardUsageRangeText") == "TODAY" &&
+                System.Windows.Automation.AutomationProperties.GetName(chart).Contains("130 seconds", StringComparison.Ordinal) &&
                 chart.Data.Samples.Count == 0 && monitoring.GetSnapshot().TrafficSamples.Count == 0,
                 "The native Dashboard graph opens beside the Today summary without inventing measurements before monitoring starts");
             Start(monitoring);
@@ -101,10 +102,10 @@ internal static class DashboardTrafficChecks
             var oldSampleTime = chart.Data.Samples[^1].TimestampUtc;
             Step(window, monitoring, clock, counters, 0, 0);
             check(chart.Data.WindowEndUtc == oldEnd.AddSeconds(1) && chart.Data.WindowStartUtc == oldStart.AddSeconds(1) &&
-                chart.Data.WindowEndUtc - chart.Data.WindowStartUtc == TimeSpan.FromSeconds(60) &&
+                chart.Data.WindowEndUtc - chart.Data.WindowStartUtc == TimeSpan.FromSeconds(130) &&
                 chart.Data.Samples.Any(point => point.TimestampUtc == oldSampleTime) &&
                 chart.Data.Samples[^1].DownloadBytesPerSecond == 0 && chart.Data.Samples[^1].UploadBytesPerSecond == 0,
-                "One monitoring second advances the continuous 60-second X window and keeps genuine idle traffic at zero");
+                "One monitoring second advances the continuous 130-second X window and keeps genuine idle traffic at zero");
             CheckTooltip(chart, chart.Data.Samples.Count - 1, check, "idle zero rates",
                 System.IO.Path.Combine(previews, "tooltip-zero-rates.png"));
             var tip = Hover(chart, chart.Data.Samples.Count - 1);
@@ -116,35 +117,42 @@ internal static class DashboardTrafficChecks
                 "A stationary tooltip updates to the exact sample below its pointer as the live graph moves");
             tip.IsOpen = false;
 
-            for (var index = 0; index < 64; index++)
+            for (var index = 0; index < 134; index++)
                 Step(window, monitoring, clock, counters, (index % 8 + 1) * 50_000, (index % 5) * 20_000);
-            check(chart.Data.Samples.Count <= 61 && chart.Data.Samples.Count >= 60 &&
+            check(chart.Data.Samples.Count == 130 &&
                 chart.Data.Samples.Select(point => point.TimestampUtc).Distinct().Count() == chart.Data.Samples.Count &&
-                chart.Data.Samples.All(point => point.TimestampUtc >= chart.Data.WindowStartUtc && point.TimestampUtc <= chart.Data.WindowEndUtc) &&
-                chart.Data.Samples.Zip(chart.Data.Samples.Skip(1), (first, second) => second.TimestampUtc > first.TimestampUtc).All(value => value),
-                "The moving graph caps memory at the rolling minute and retains unique chronological one-second samples");
+                chart.Data.Samples[0].TimestampUtc == chart.Data.WindowEndUtc.AddSeconds(-129) &&
+                chart.Data.Samples.All(point => point.TimestampUtc > chart.Data.WindowStartUtc && point.TimestampUtc <= chart.Data.WindowEndUtc) &&
+                chart.Data.Samples.Zip(chart.Data.Samples.Skip(1), (first, second) => second.TimestampUtc - first.TimestampUtc == TimeSpan.FromSeconds(1)).All(value => value),
+                "The moving graph retains exactly 130 unique chronological one-second samples in the rolling 130-second window");
+            var oldest = chart.Data.Samples[0];
+            var secondOldest = chart.Data.Samples[1];
+            Step(window, monitoring, clock, counters, 400_000, 80_000);
+            check(chart.Data.Samples.Count == 130 && chart.Data.Samples[0] == secondOldest &&
+                !chart.Data.Samples.Contains(oldest) && chart.Data.Samples[^1].TimestampUtc == clock.GetUtcNow(),
+                "The next one-second observation removes only the oldest retained graph sample");
             check(chart.Data.MaximumBytesPerSecond >= 400_000 && chart.Data.MaximumBytesPerSecond < 5_000_000 &&
                 chart.Data.MaximumText.Contains("KB/s", StringComparison.Ordinal),
                 "The Y scale returns to KB/s after the earlier MB/s peak expires from the rolling window");
             ShowGraph(window);
             CheckNativeDrawing(chart, check);
-            CheckLayout(window, check, "full rolling minute");
-            HistoryOverviewChecks.SavePreview(window, System.IO.Path.Combine(previews, "760x600-rolling-minute.png"));
-            for (var index = 0; index < 61; index++)
+            CheckLayout(window, check, "full rolling 130 seconds");
+            HistoryOverviewChecks.SavePreview(window, System.IO.Path.Combine(previews, "760x600-rolling-130-seconds.png"));
+            for (var index = 0; index < 130; index++)
                 Step(window, monitoring, clock, counters, (index % 8 + 1) * 500_000, (index % 6) * 240_000);
-            check(chart.Data.Samples.Count == 61 && chart.Data.Samples.Any(point => point.DownloadBytesPerSecond >= 1_000_000) &&
+            check(chart.Data.Samples.Count == 130 && chart.Data.Samples.Any(point => point.DownloadBytesPerSecond >= 1_000_000) &&
                 chart.Data.Samples.Any(point => point.UploadBytesPerSecond >= 1_000_000) &&
                 chart.Data.Samples.Any(point => point.DownloadBytesPerSecond is > 0 and < 1_000_000),
-                "A full rolling minute preserves visibly distinct KB/s and MB/s activity in both live directions");
+                "A full rolling 130 seconds preserves visibly distinct KB/s and MB/s activity in both live directions");
             ShowGraph(window);
             CheckNativeDrawing(chart, check);
-            CheckLayout(window, check, "full mixed-unit rolling minute");
+            CheckLayout(window, check, "full mixed-unit rolling 130 seconds");
             HistoryOverviewChecks.SavePreview(window, System.IO.Path.Combine(previews, "760x600-full-mixed-rates.png"));
             window.Width = 920;
             window.Height = 740;
             Layout(window);
             CheckLayout(window, check, "resized 920x740");
-            HistoryOverviewChecks.SavePreview(window, System.IO.Path.Combine(previews, "920x740-rolling-minute.png"));
+            HistoryOverviewChecks.SavePreview(window, System.IO.Path.Combine(previews, "920x740-rolling-130-seconds.png"));
         }
         finally { window.Close(); }
     }
@@ -194,7 +202,7 @@ internal static class DashboardTrafficChecks
             Layout(window);
             check(chart.SelectedSample is null && chart.ToolTip is null,
                 "Leaving Dashboard clears graph hover and closes its native popup");
-            HiddenSteps(window, monitoring, clock, counters, 70, 1_500_000, 200_000, data, check, "hidden Dashboard page");
+            HiddenSteps(window, monitoring, clock, counters, 140, 1_500_000, 200_000, data, check, "hidden Dashboard page");
             navigation.SelectedItem = Control<TabItem>(window, "DashboardTab");
             Layout(window);
             CheckReturnedHistory(window, monitoring, clock, data, 1_500_000, 200_000, check, "Returning to Dashboard");
@@ -206,7 +214,7 @@ internal static class DashboardTrafficChecks
             data = chart.Data;
             window.Hide();
             Layout(window);
-            HiddenSteps(window, monitoring, clock, counters, 66, 600_000, 100_000, data, check, "hidden window");
+            HiddenSteps(window, monitoring, clock, counters, 136, 600_000, 100_000, data, check, "hidden window");
             check(chart.SelectedSample is null && chart.ToolTip is null,
                 "Hiding the main window releases the graph tooltip and hover state");
             window.Show();
@@ -218,7 +226,7 @@ internal static class DashboardTrafficChecks
             data = chart.Data;
             window.WindowState = WindowState.Minimized;
             Layout(window);
-            HiddenSteps(window, monitoring, clock, counters, 65, 800_000, 160_000, data, check, "minimized window");
+            HiddenSteps(window, monitoring, clock, counters, 135, 800_000, 160_000, data, check, "minimized window");
             check(chart.SelectedSample is null && chart.ToolTip is null,
                 "Minimizing clears graph hover as well as suspending its view updates");
             window.WindowState = WindowState.Normal;
@@ -266,11 +274,11 @@ internal static class DashboardTrafficChecks
         }
         var snapshot = monitoring.GetSnapshot();
         var samples = snapshot.TrafficSamples;
-        check(samples.Count == 61 && samples[0].TimestampUtc == clock.GetUtcNow().AddSeconds(-60) &&
+        check(samples.Count == 130 && samples[0].TimestampUtc == clock.GetUtcNow().AddSeconds(-129) &&
             samples[^1].TimestampUtc == clock.GetUtcNow() && samples.All(sample => !sample.BreakBefore &&
                 sample.DownloadBytesPerSecond == download && sample.UploadBytesPerSecond == upload) &&
             samples.Zip(samples.Skip(1), (first, second) => second.TimestampUtc - first.TimestampUtc == TimeSpan.FromSeconds(1)).All(value => value),
-            "The " + state + " continues exact existing raw-rate samples in a bounded chronological 60-second timeline without artificial gaps");
+            "The " + state + " continues exact existing raw-rate samples in a bounded chronological 130-second timeline without artificial gaps");
         check(ReferenceEquals(chart.Data, data) && ReferenceEquals(DrawingContent(chart), drawing) &&
             ReferenceEquals(samples, monitoring.GetSnapshot().TrafficSamples) &&
             sourceBefore.Select(sample => sample.TimestampUtc).SequenceEqual(timestampsBefore),
@@ -294,13 +302,15 @@ internal static class DashboardTrafficChecks
         var chart = Control<DashboardTrafficChart>(window, "DashboardTrafficChart");
         var snapshot = monitoring.GetSnapshot();
         check(!ReferenceEquals(chart.Data, previous) && chart.Data.Samples.SequenceEqual(snapshot.TrafficSamples) &&
-            chart.Data.Samples.Count == 61 && chart.Data.Samples[^1].TimestampUtc == clock.GetUtcNow() &&
+            chart.Data.Samples.Count == 130 && chart.Data.Samples[0].TimestampUtc == clock.GetUtcNow().AddSeconds(-129) &&
+            chart.Data.Samples[^1].TimestampUtc == clock.GetUtcNow() &&
+            chart.Data.WindowEndUtc - chart.Data.WindowStartUtc == TimeSpan.FromSeconds(130) &&
             chart.Data.Samples.All(sample => !sample.BreakBefore && sample.DownloadBytesPerSecond == download && sample.UploadBytesPerSecond == upload) &&
             chart.Data.DownloadSegments.Count == 1 && chart.Data.UploadSegments.Count == 1 &&
-            chart.Data.DownloadSegments[0].Count == 61 && chart.Data.UploadSegments[0].Count == 61 &&
+            chart.Data.DownloadSegments[0].Count == 130 && chart.Data.UploadSegments[0].Count == 130 &&
             Text(window, "DownloadRateText") == ByteRateFormatter.Format(download) &&
             Text(window, "UploadRateText") == ByteRateFormatter.Format(upload),
-            state + " immediately renders the already-collected continuous recent minute and the same latest rates as the cards");
+            state + " immediately renders the already-collected continuous recent 130 seconds and the same latest rates as the cards");
     }
 
     private static object? DrawingContent(UIElement element) => typeof(UIElement)
@@ -337,8 +347,18 @@ internal static class DashboardTrafficChecks
         check(glyphs.Contains("Download", StringComparison.Ordinal) && glyphs.Contains("Upload", StringComparison.Ordinal) &&
             glyphs.Contains("/s", StringComparison.Ordinal) &&
             DashboardTrafficChart.DownloadBrush is SolidColorBrush download && download.IsFrozen &&
-            DashboardTrafficChart.UploadBrush is SolidColorBrush upload && upload.IsFrozen && download.Color != upload.Color,
-            "The native graph draws concise rate axes and distinct Download/Upload legend colors");
+            DashboardTrafficChart.UploadBrush is SolidColorBrush upload && upload.IsFrozen &&
+            download.Color == Color.FromRgb(0x22, 0xC5, 0x5E) && upload.Color == Color.FromRgb(0x38, 0xBD, 0xF8),
+            "The native graph uses green Download and blue Upload consistently for its curves and legend");
+        var ticks = drawings.OfType<GlyphRunDrawing>().Where(drawing => drawing.GlyphRun.Characters is { } characters &&
+            new[] { "130s", "60s", "Now" }.Contains(new string(characters.ToArray()))).ToArray();
+        var middle = ticks.SingleOrDefault(drawing => new string(drawing.GlyphRun.Characters.ToArray()) == "60s");
+        check(ticks.Length == 3 && middle is not null &&
+            Math.Abs(middle.Bounds.Left + middle.Bounds.Width / 2 -
+                (chart.PlotBounds.Left + chart.PlotBounds.Width * (1 - 60.0 / 130))) < 2 &&
+            ticks.All(tick => tick.Bounds.Left >= chart.PlotBounds.Left - 1 &&
+                tick.Bounds.Right <= chart.PlotBounds.Right + 1 && tick.Bounds.Top >= chart.PlotBounds.Bottom),
+            "The native X axis shows 130s, 60s and Now with the 60-second label at its true timeline position");
         var curves = drawings.OfType<GeometryDrawing>().Where(drawing => drawing.Pen is not null &&
             drawing.Geometry.Bounds.IntersectsWith(chart.PlotBounds) &&
             (ReferenceEquals(drawing.Pen.Brush, DashboardTrafficChart.DownloadBrush) ||
@@ -360,14 +380,20 @@ internal static class DashboardTrafficChecks
         var chart = Control<DashboardTrafficChart>(window, "DashboardTrafficChart");
         var bounds = chart.TransformToAncestor(page).TransformBounds(new Rect(0, 0, chart.ActualWidth, chart.ActualHeight));
         var chartTop = chart.TranslatePoint(new Point(), section).Y;
-        var summaryTop = summary.TranslatePoint(new Point(), section).Y;
+        var card = Control<Border>(window, "DashboardUsageCard");
+        var cardTop = card.TranslatePoint(new Point(), section).Y;
+        var previousEqualWidth = (section.ActualWidth - section.ColumnDefinitions[1].ActualWidth) / 2;
+        if (state is "mixed KB/s and MB/s" or "resized 920x740")
+            Console.WriteLine(FormattableString.Invariant($"Dashboard traffic layout {window.Width:0}x{window.Height:0}: section {section.ActualWidth:0.##} DIP, summary {summary.ActualWidth:0.##} DIP, graph {chart.ActualWidth:0.##} DIP, previous equal width {previousEqualWidth:0.##} DIP."));
         check(window.MinWidth == 760 && window.MinHeight == 600 &&
             page.HorizontalScrollBarVisibility == ScrollBarVisibility.Disabled && page.ScrollableWidth < 0.01 &&
             bounds.Left >= -0.5 && bounds.Right <= page.ViewportWidth + 0.5 &&
             bounds.Top >= -0.5 && bounds.Bottom <= page.ActualHeight + 0.5 &&
-            Math.Abs(chartTop - summaryTop) < 0.5 && Grid.GetColumn(chart) == 2 && Grid.GetRow(chart) == 1 &&
-            chart.PlotBounds.Width > 100 && chart.PlotBounds.Height > 40,
-            "The " + state + " graph aligns with the left summary and fits the minimum Dashboard without horizontal overflow");
+            Math.Abs(chartTop - cardTop) < 0.5 && Grid.GetColumn(chart) == 2 && Grid.GetRow(chart) == 1 &&
+            summary.ActualWidth < previousEqualWidth - 60 && chart.ActualWidth > previousEqualWidth + 60 &&
+            Math.Abs(chart.ActualWidth + summary.ActualWidth + section.ColumnDefinitions[1].ActualWidth - section.ActualWidth) < 0.5 &&
+            chart.PlotBounds.Width > 250 && chart.PlotBounds.Height > 40,
+            "The " + state + " graph aligns to the refreshed summary card, keeps all freed width and fits the minimum Dashboard without horizontal overflow");
         var drawing = VisualTreeHelper.GetDrawing(chart);
         check(drawing is not null && drawing.Bounds.Left >= -2 && drawing.Bounds.Top >= -2 &&
             drawing.Bounds.Right <= chart.ActualWidth + 2 && drawing.Bounds.Bottom <= chart.ActualHeight + 2,

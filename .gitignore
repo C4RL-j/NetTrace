@@ -4,3 +4,6 @@
 .vs/
 [Pp]ublish/
 *.user
+
+# Local mockups, screenshots and verification evidence.
+/output/

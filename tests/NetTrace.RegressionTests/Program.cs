@@ -225,15 +225,25 @@ var tests = new (string Name, Action Run)[]
     ("Equivalent absolute executable paths produce the same canonical registration", StartupRegistrationCanonicalPath)
 }.Concat(IcmpHealthTests.Cases).Concat(IcmpRollingTests.Cases)
     .Concat(IcmpStabilityChartTests.Cases).Concat(IcmpPacketLossChartTests.Cases)
+    .Concat(IcmpPacketLossPresentationTests.Cases)
     .Concat(IcmpQualityTests.Cases).Concat(InternetReachabilityTests.Cases)
     .Concat(ConnectionDetailsTests.Cases).Concat(ProfileManagementTests.Cases)
-    .Concat(RouteAwarenessTests.Cases).Concat(TransportAwarenessTests.Cases)
+    .Concat(RouteAwarenessTests.Cases).Concat(TransportAwarenessTests.Cases).Concat(VpnConnectedTunnelTests.Cases)
     .Concat(WifiRadioTests.Cases).Concat(HistoryOverviewTests.Cases)
     .Concat(HistoryUsageTests.Cases).Concat(DashboardSpeedTests.Cases)
-    .Concat(DashboardUsageTests.Cases).Concat(DashboardTrafficTests.Cases).ToArray();
+    .Concat(DashboardUsageTests.Cases).Concat(DashboardTrafficTests.Cases).Concat(DownloadSpeedTestTests.Cases).ToArray();
+
+if (args.Length > 0 && args[0] == "--health-checks")
+    tests = IcmpHealthTests.Cases.Concat(IcmpRollingTests.Cases)
+        .Concat(IcmpStabilityChartTests.Cases).Concat(IcmpPacketLossChartTests.Cases)
+        .Concat(IcmpPacketLossPresentationTests.Cases).Concat(IcmpQualityTests.Cases)
+        .Concat(InternetReachabilityTests.Cases).ToArray();
 
 if (args.Length > 0 && args[0] == "--wifi-radio-checks")
     tests = WifiRadioTests.Cases;
+
+if (args.Length > 0 && args[0] == "--vpn-key-checks")
+    tests = VpnConnectedTunnelTests.Cases;
 
 if (args.Length > 0 && args[0] == "--history-overview-checks")
     tests = HistoryOverviewTests.Cases;
@@ -243,6 +253,9 @@ if (args.Length > 0 && args[0] == "--history-usage-checks")
 
 if (args.Length > 0 && args[0] == "--dashboard-speed-checks")
     tests = DashboardSpeedTests.Cases;
+
+if (args.Length > 0 && args[0] == "--download-speed-test-checks")
+    tests = DownloadSpeedTestTests.Cases;
 
 if (args.Length > 0 && args[0] == "--dashboard-usage-checks")
     tests = DashboardUsageTests.Cases;

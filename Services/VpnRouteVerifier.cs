@@ -40,8 +40,11 @@ public sealed class VpnRouteVerifier
         // The existing GetCurrentState/Verify history API deliberately retains its old semantics.
         var ipv4 = Read(AddressFamily.InterNetwork);
         var ipv6 = Read(AddressFamily.InterNetworkV6);
-        return new(Verify(detection, ipv4, ipv6),
-            VpnRouteClassifier.Classify(inventory, ipv4, ipv6, checkedAtUtc));
+        var snapshot = VpnRouteClassifier.Classify(inventory, ipv4, ipv6, checkedAtUtc) with
+        {
+            ConnectedTunnelNames = VpnConnectedTunnelClassifier.Classify(inventory, ipv4, ipv6)
+        };
+        return new(Verify(detection, ipv4, ipv6), snapshot);
     }
 
     private VpnRouteInventory Read(AddressFamily family)

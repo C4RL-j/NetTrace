@@ -24,17 +24,20 @@ public partial class MainWindow : Window
     private IcmpProbeResult? _lastChartMeasurement;
     private IcmpQualitySummary? _qualitySummary;
     private InternetReachabilityResult? _lastReachabilityMeasurement;
+    private InternetReachabilityStatus _lastPacketLossReachabilityStatus;
 
     public MainWindow(MonitoringService monitoring, IWindowsStartupRegistration? startupRegistration = null,
         WifiRadioService? wifiRadio = null, IAppUsageTodayClient? appUsageClient = null,
         AppUsageRangeSelection? appUsageRangeSelection = null, IAppTrackingSetupService? appTrackingSetupService = null,
-        Func<bool>? confirmAppTrackingUninstall = null, Func<bool>? confirmAppUsageHistoryClear = null)
+        Func<bool>? confirmAppTrackingUninstall = null, Func<bool>? confirmAppUsageHistoryClear = null,
+        IDownloadSpeedTest? downloadSpeedTest = null, Func<long, bool>? confirmDownloadSpeedTest = null)
     {
         ArgumentNullException.ThrowIfNull(monitoring);
         _monitoring = monitoring;
         _wifiRadio = wifiRadio ?? new WifiRadioService();
         _startupRegistration = startupRegistration;
         InitializeComponent();
+        InitializeDownloadSpeedTest(downloadSpeedTest, confirmDownloadSpeedTest);
         appTrackingSetupService ??= new AppTrackingSetupService();
         InitializeAppUsageToday(appUsageClient, appUsageRangeSelection, appTrackingSetupService);
         InitializeAppTrackingSettings(appTrackingSetupService, confirmAppTrackingUninstall, confirmAppUsageHistoryClear);
@@ -238,14 +241,19 @@ public partial class MainWindow : Window
         // Read the application-owned worker's last completed cycle. Opening this
         // page never starts or restarts probes; the existing view timer refreshes it.
         var result = _monitoring.LatestIcmpMeasurement;
-        if (refreshChart || !_chartInitialized || !ReferenceEquals(result, _lastChartMeasurement))
+        var samplesChanged = !_chartInitialized || !ReferenceEquals(result, _lastChartMeasurement);
+        if (refreshChart || samplesChanged || reachabilityStatus != _lastPacketLossReachabilityStatus)
         {
             var samples = _monitoring.RollingIcmpSamples;
-            IcmpStabilityChart.UpdateSamples(samples);
+            IcmpStabilityChart.UpdateSamples(samples, reachabilityStatus);
             IcmpPacketLossChart.UpdateData(IcmpStabilityChart.Data);
-            _qualitySummary = IcmpQualityEvaluator.Evaluate(IcmpStabilityChart.Data.Samples);
-            IcmpQualityText.Text = _qualitySummary.Quality.ToString();
+            if (samplesChanged)
+            {
+                _qualitySummary = IcmpQualityEvaluator.Evaluate(IcmpStabilityChart.Data.Samples);
+                IcmpQualityText.Text = _qualitySummary.Quality.ToString();
+            }
             _lastChartMeasurement = samples.Count == 0 ? null : samples[^1];
+            _lastPacketLossReachabilityStatus = reachabilityStatus;
             _chartInitialized = true;
             // Visibility may have suppressed an earlier render, even when the
             // retained samples have not changed since the page was last shown.
@@ -258,6 +266,9 @@ public partial class MainWindow : Window
         var quality = _qualitySummary?.Quality ?? IcmpQuality.Measuring;
         IcmpQualityText.Foreground = StatusBrush(StatusPresentation.ForIcmpQuality(quality));
         HealthDisclaimerText.Text = StatusPresentation.HealthExplanation(snapshot.VpnRoute.Status, reachabilityStatus, quality);
+        if (result is not null && IcmpPacketLossPresentation.Explanation(result, reachabilityStatus,
+                snapshot.VpnRoute.Status) is { Length: > 0 } explanation)
+            HealthDisclaimerText.Text = $"{explanation} {HealthDisclaimerText.Text}";
         HealthWaitingText.Visibility = result is null ? Visibility.Visible : Visibility.Collapsed;
         if (result is null)
         {
@@ -275,7 +286,7 @@ public partial class MainWindow : Window
             ? $"{latency:0.##} ms" : "Unavailable";
         IcmpJitterText.Text = result.SuccessfulReplies >= 2 && result.JitterMs is { } jitter
             ? $"{jitter:0.##} ms" : "Unavailable";
-        IcmpPacketLossText.Text = $"{result.PacketLossPercent:0.##}%";
+        IcmpPacketLossText.Text = IcmpPacketLossPresentation.Text(result, reachabilityStatus);
         IcmpRepliesText.Text = $"{result.SuccessfulReplies} / {result.SuccessfulReplies + result.FailedReplies}";
         IcmpLastSampleText.Text = result.TimestampUtc.ToLocalTime().ToString("G");
     }
@@ -283,6 +294,7 @@ public partial class MainWindow : Window
     private void OnClosed(object? sender, EventArgs args)
     {
         _closed = true;
+        DisposeDownloadSpeedTest();
         _ = DisposeAppUsageTodayAsync();
         if (_appTrackingSettings is not null) _ = _appTrackingSettings.DisposeAsync();
         _timer.Stop();
@@ -303,7 +315,9 @@ public partial class MainWindow : Window
         if (_closed || Dispatcher.HasShutdownStarted) return;
         // Discard a pre-sleep association before any deferred UI work. This is
         // thread-safe and does not query WLAN or access a WPF control.
-        if (_monitoring.GetSnapshot().IsSuspended) _wifiRadio.Invalidate();
+        var snapshot = _monitoring.GetSnapshot();
+        if (snapshot.IsSuspended) _wifiRadio.Invalidate();
+        CancelDownloadSpeedTestIfMonitoringChanged(snapshot);
         Dispatcher.BeginInvoke(new Action(() =>
         {
             if (!_closed && IsVisible && WindowState != WindowState.Minimized)
@@ -337,6 +351,7 @@ public partial class MainWindow : Window
         var monitoringBrush = StatusBrush(StatusPresentation.ForMonitoring(snapshot));
         StatusDot.Fill = monitoringBrush;
         StatusText.Foreground = monitoringBrush;
+        ApplyVpnKeyIndicator(snapshot.VpnRoute);
         var state = snapshot.Connection;
         CurrentProfileText.Text = state.Status switch
         {
@@ -361,13 +376,31 @@ public partial class MainWindow : Window
             var usage = DashboardUsagePresentation.Create(_selectedDashboardUsageRange, totals.Today, totals.Week, totals.Month);
             DashboardUsageTitleText.Text = usage.TitleText;
             DashboardUsageTotalText.Text = usage.TotalText;
-            DashboardUsageBreakdownText.Text = usage.BreakdownText;
+            DashboardUsageDownloadRun.Text = usage.DownloadText;
+            DashboardUsageUploadRun.Text = usage.UploadText;
         }
         catch (Exception exception)
         {
             SessionMessageText.Text = $"Usage history could not be read: {exception.Message}";
             Trace.TraceError(SessionMessageText.Text);
         }
+    }
+
+    private void ApplyVpnKeyIndicator(VpnRouteSnapshot snapshot)
+    {
+        // A connected tunnel says nothing about internet availability, encryption
+        // or security. Read only the existing observer's independent cached result.
+        if (!snapshot.HasActiveTunnel)
+        {
+            VpnKeyToolTip.IsOpen = false;
+            VpnKeyTooltipText.Text = "VPN Connected";
+            VpnKeyIndicator.Visibility = Visibility.Collapsed;
+            return;
+        }
+        VpnKeyTooltipText.Text = "VPN Connected" + string.Concat(snapshot.ConnectedTunnelNames
+            .Where(name => !string.IsNullOrWhiteSpace(name)).Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(name => Environment.NewLine + name));
+        VpnKeyIndicator.Visibility = Visibility.Visible;
     }
 
     private void ApplyLiveSpeed(double downloadBytesPerSecond, double uploadBytesPerSecond)

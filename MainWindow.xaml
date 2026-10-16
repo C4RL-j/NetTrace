@@ -32,6 +32,65 @@
             <Setter Property="FontSize" Value="13"/>
         </Style>
 
+        <Style x:Key="SpeedTestActionStyle" TargetType="Button">
+            <Setter Property="Background" Value="#23B9ED"/>
+            <Setter Property="Foreground" Value="#071724"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface" Background="{TemplateBinding Background}" CornerRadius="5"
+                                BorderBrush="#38BDF8" BorderThickness="1">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Surface" Property="Background" Value="#4AC8F6"/></Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Surface" Property="BorderBrush" Value="#F8FAFC"/></Trigger>
+                            <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Surface" Property="Opacity" Value="0.55"/></Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="SpeedTestLimitStyle" TargetType="ComboBox">
+            <Setter Property="MinHeight" Value="0"/>
+            <Setter Property="FontSize" Value="10"/>
+            <Setter Property="Background" Value="#172036"/>
+            <Setter Property="Foreground" Value="#F8FAFC"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBox">
+                        <Grid>
+                            <ToggleButton Focusable="False" ClickMode="Press"
+                                          IsChecked="{Binding IsDropDownOpen, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType="ToggleButton">
+                                        <Border Background="#172036" BorderBrush="#2B3957" BorderThickness="1" CornerRadius="4"/>
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                            </ToggleButton>
+                            <ContentPresenter IsHitTestVisible="False" Margin="5,0,16,0" VerticalAlignment="Center"
+                                              Content="{TemplateBinding SelectionBoxItem}" ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"/>
+                            <Path IsHitTestVisible="False" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,5,0"
+                                  Width="6" Height="4" Stretch="Fill" Stroke="#94A3B8" StrokeThickness="1" Data="M 0,0 L 3,3 L 6,0"/>
+                            <Popup x:Name="PART_Popup" Placement="Bottom" AllowsTransparency="True" Focusable="False"
+                                   IsOpen="{TemplateBinding IsDropDownOpen}">
+                                <Border Background="#172036" BorderBrush="#2B3957" BorderThickness="1" Padding="2"
+                                        MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}">
+                                    <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained"/>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.65"/></Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style x:Key="LiveRatePrimaryTextStyle" TargetType="TextBlock">
             <Setter Property="FontSize" Value="34"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
@@ -180,22 +239,31 @@
 
         <Style x:Key="DashboardUsageSelectorStyle" TargetType="Button">
             <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
-            <Setter Property="Padding" Value="10,6"/>
+            <Setter Property="Padding" Value="16,11"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="RangeSelectorSurface" Background="{StaticResource CardBrush}"
-                                BorderBrush="{StaticResource AccentBrush}" BorderThickness="1,1,1,0"
-                                CornerRadius="8,8,0,0" Padding="{TemplateBinding Padding}">
+                        <Border x:Name="RangeSelectorSurface" BorderBrush="#34506A" BorderThickness="1"
+                                CornerRadius="22" Padding="{TemplateBinding Padding}">
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                                    <GradientStop Color="#17253E" Offset="0"/>
+                                    <GradientStop Color="#111D33" Offset="1"/>
+                                </LinearGradientBrush>
+                            </Border.Background>
                             <Grid>
-                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                  TextElement.FontSize="11" TextElement.FontWeight="SemiBold"/>
-                                <Border x:Name="RangeFocusBorder" BorderBrush="Transparent" BorderThickness="1" CornerRadius="2"/>
+                                <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center"
+                                                  TextElement.FontSize="13" TextElement.FontWeight="SemiBold"/>
+                                <Border x:Name="RangeFocusBorder" BorderBrush="Transparent" BorderThickness="1" CornerRadius="12"/>
                             </Grid>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="RangeSelectorSurface" Property="Background" Value="#172036"/>
+                                <Setter TargetName="RangeSelectorSurface" Property="Background" Value="#1C2C47"/>
+                                <Setter TargetName="RangeSelectorSurface" Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="RangeSelectorSurface" Property="Background" Value="#0E1B30"/>
                             </Trigger>
                             <Trigger Property="IsKeyboardFocused" Value="True">
                                 <Setter TargetName="RangeFocusBorder" Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
@@ -272,6 +340,8 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
+        <Grid>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
         <StackPanel Orientation="Horizontal">
             <Image Source="/NetTrace;component/assets/Network Globe Icon.png"
                    Width="48" Height="48" Margin="0,0,12,0"
@@ -281,6 +351,31 @@
                 <TextBlock Text="Lightweight network usage monitor" Margin="0,5,0,0" Style="{StaticResource MutedText}"/>
             </StackPanel>
         </StackPanel>
+            <StackPanel x:Name="MonitoringHeaderStatus" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top" Margin="12,8,0,0"
+                        ToolTip="Whether NetTrace is collecting traffic. This does not represent network health.">
+                <!-- Draw left of the existing status without changing its measurement or alignment. -->
+                <Grid Width="0" Height="16" ClipToBounds="False">
+                    <Border x:Name="VpnKeyIndicator" Width="16" Height="16" Margin="-24,0,0,0"
+                            HorizontalAlignment="Left" VerticalAlignment="Center" Background="Transparent"
+                            Visibility="Collapsed" AutomationProperties.Name="VPN Connected"
+                            AutomationProperties.HelpText="An active VPN or tunnel was detected. Encryption and security are not verified."
+                            ToolTipService.InitialShowDelay="200" ToolTipService.ShowDuration="20000">
+                        <Border.ToolTip>
+                            <ToolTip x:Name="VpnKeyToolTip" Background="#172036" Foreground="#F8FAFC"
+                                     BorderBrush="#2B3957" BorderThickness="1" Padding="10" MaxWidth="302">
+                                <TextBlock x:Name="VpnKeyTooltipText" Text="VPN Connected" TextWrapping="Wrap" MaxWidth="280"/>
+                            </ToolTip>
+                        </Border.ToolTip>
+                        <Path x:Name="VpnKeyPath" Width="16" Height="10" Stretch="Uniform"
+                              HorizontalAlignment="Center" VerticalAlignment="Center" Fill="{StaticResource AccentBrush}"
+                              Data="F0 M 6.2,0 A 6.2,6.2 0 0 1 12.04,4.1 L 22.8,4.1 L 22.8,8.3 L 20.7,8.3 L 20.7,12.4 L 16.5,12.4 L 16.5,8.3 L 12.04,8.3 A 6.2,6.2 0 1 1 6.2,0 Z M 8.25,6.2 A 2.05,2.05 0 1 1 4.15,6.2 A 2.05,2.05 0 1 1 8.25,6.2 Z"/>
+                    </Border>
+                </Grid>
+                <Ellipse x:Name="StatusDot" Width="9" Height="9" Fill="{StaticResource StatusPositiveBrush}" VerticalAlignment="Center"/>
+                <TextBlock x:Name="StatusText" Text="Monitoring" Margin="8,0,0,0" FontSize="12" FontWeight="SemiBold"
+                           Foreground="{StaticResource StatusPositiveBrush}"/>
+            </StackPanel>
+        </Grid>
 
         <TabControl x:Name="MainNavigation" Grid.Row="2" Style="{StaticResource NavigationStyle}"
                     SelectedIndex="0" TabStripPlacement="Top" AutomationProperties.Name="Main navigation">
@@ -304,11 +399,14 @@
                             <Border Grid.Row="1" Grid.Column="0" Style="{StaticResource CardStyle}">
                                 <StackPanel>
                                     <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="↓ Download" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                                        <TextBlock Text="↓ Download" Style="{StaticResource MutedText}" VerticalAlignment="Center"
+                                                   Foreground="{x:Static controls:DashboardTrafficChart.DownloadBrush}"/>
                                         <controls:NetworkHelpButton x:Name="DownloadRateHelp" Term="Transfer rate" Margin="6,0,0,0"/>
                                     </StackPanel>
-                                    <TextBlock x:Name="DownloadRateText" Text="0 B/s" Style="{StaticResource LiveRatePrimaryTextStyle}"/>
-                                    <TextBlock x:Name="DownloadMbpsText" Text="0.00 Mbps" Style="{StaticResource LiveRateSecondaryTextStyle}"/>
+                                    <TextBlock x:Name="DownloadRateText" Text="0 B/s" Style="{StaticResource LiveRatePrimaryTextStyle}"
+                                               Foreground="{x:Static controls:DashboardTrafficChart.DownloadBrush}"/>
+                                    <TextBlock x:Name="DownloadMbpsText" Text="0.00 Mbps" Style="{StaticResource LiveRateSecondaryTextStyle}"
+                                               Foreground="{x:Static controls:DashboardTrafficChart.DownloadBrush}"/>
                                     <TextBlock x:Name="DownloadPeakText" Text="Peak today ↓ 0.00 Mbps" Style="{StaticResource MutedText}" Margin="0,6,0,0"
                                                ToolTip="Highest sampled download traffic NetTrace observed today across monitored adapters. Saved across restarts; not a speed-test result."/>
                                     <TextBlock x:Name="DownloadSessionText" Text="App session ↓ 0 B" Style="{StaticResource MutedText}" Margin="0,8,0,0"
@@ -319,11 +417,14 @@
                             <Border Grid.Row="1" Grid.Column="2" Style="{StaticResource CardStyle}">
                                 <StackPanel>
                                     <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="↑ Upload" Style="{StaticResource MutedText}" VerticalAlignment="Center"/>
+                                        <TextBlock Text="↑ Upload" Style="{StaticResource MutedText}" VerticalAlignment="Center"
+                                                   Foreground="{x:Static controls:DashboardTrafficChart.UploadBrush}"/>
                                         <controls:NetworkHelpButton x:Name="UploadRateHelp" Term="Transfer rate" Margin="6,0,0,0"/>
                                     </StackPanel>
-                                    <TextBlock x:Name="UploadRateText" Text="0 B/s" Style="{StaticResource LiveRatePrimaryTextStyle}"/>
-                                    <TextBlock x:Name="UploadMbpsText" Text="0.00 Mbps" Style="{StaticResource LiveRateSecondaryTextStyle}"/>
+                                    <TextBlock x:Name="UploadRateText" Text="0 B/s" Style="{StaticResource LiveRatePrimaryTextStyle}"
+                                               Foreground="{x:Static controls:DashboardTrafficChart.UploadBrush}"/>
+                                    <TextBlock x:Name="UploadMbpsText" Text="0.00 Mbps" Style="{StaticResource LiveRateSecondaryTextStyle}"
+                                               Foreground="{x:Static controls:DashboardTrafficChart.UploadBrush}"/>
                                     <TextBlock x:Name="UploadPeakText" Text="Peak today ↑ 0.00 Mbps" Style="{StaticResource MutedText}" Margin="0,6,0,0"
                                                ToolTip="Highest sampled upload traffic NetTrace observed today across monitored adapters. Saved across restarts; not a speed-test result."/>
                                     <TextBlock x:Name="UploadSessionText" Text="App session ↑ 0 B" Style="{StaticResource MutedText}" Margin="0,8,0,0"
@@ -338,7 +439,7 @@
                                 <RowDefinition Height="Auto"/>
                             </Grid.RowDefinitions>
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="240"/>
                                 <ColumnDefinition Width="14"/>
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
@@ -351,30 +452,88 @@
                                     <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="Auto"/>
                                 </Grid.RowDefinitions>
-                                <Button x:Name="DashboardUsageSelectorButton" Grid.Row="0" HorizontalAlignment="Left"
-                                        MinWidth="105" Padding="10,6" Style="{StaticResource DashboardUsageSelectorStyle}"
+                                <Button x:Name="DashboardUsageSelectorButton" Grid.Row="0" HorizontalAlignment="Stretch"
+                                        Height="44" Style="{StaticResource DashboardUsageSelectorStyle}"
                                         Click="DashboardUsageSelector_OnClick" ToolTip="Next: Last 7 Days"
                                         AutomationProperties.Name="Change data usage range">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
-                                        <TextBlock x:Name="DashboardUsageRangeText" Text="TODAY" VerticalAlignment="Center"/>
-                                        <TextBlock Grid.Column="1" Text="›" FontSize="18" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                                        <Path x:Name="DashboardUsageSelectorIcon" Width="18" Height="18" Margin="0,0,12,0"
+                                              VerticalAlignment="Center" Stretch="Uniform" Stroke="{StaticResource AccentBrush}"
+                                              StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                              Data="M 4,2 L 4,6 M 14,2 L 14,6 M 2,8 L 16,8 M 3,4 L 15,4 Q 17,4 17,6 L 17,16 Q 17,18 15,18 L 3,18 Q 1,18 1,16 L 1,6 Q 1,4 3,4 M 5,11 L 7,11 M 11,11 L 13,11 M 5,14 L 7,14"/>
+                                        <TextBlock x:Name="DashboardUsageRangeText" Grid.Column="1" Text="TODAY" VerticalAlignment="Center"/>
+                                        <Path x:Name="DashboardUsageSelectorChevron" Grid.Column="2" Width="12" Height="6" Margin="12,0,0,0"
+                                              VerticalAlignment="Center" Stretch="Uniform" Stroke="{StaticResource AccentBrush}"
+                                              StrokeThickness="1.8" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                              Data="M 1,1 L 6,6 L 11,1"/>
                                     </Grid>
                                 </Button>
-                                <Border x:Name="DashboardUsageCard" Grid.Row="1" Style="{StaticResource CardStyle}" CornerRadius="0,14,14,14">
+                                <Border x:Name="DashboardUsageCard" Grid.Row="1" Style="{StaticResource CardStyle}"
+                                        MinHeight="152" Margin="0,10,0,0" Padding="20" CornerRadius="18" BorderBrush="#2B3E5A">
+                                    <Border.Background>
+                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                            <GradientStop Color="#172640" Offset="0"/>
+                                            <GradientStop Color="#14213B" Offset="0.45"/>
+                                            <GradientStop Color="#111A2E" Offset="1"/>
+                                        </LinearGradientBrush>
+                                    </Border.Background>
                                     <StackPanel>
-                                        <TextBlock x:Name="DashboardUsageTitleText" Text="TODAY" Style="{StaticResource MutedText}"/>
-                                        <TextBlock x:Name="DashboardUsageTotalText" Text="0 B" FontSize="25" FontWeight="SemiBold" Margin="0,7,0,0"/>
-                                        <TextBlock x:Name="DashboardUsageBreakdownText" Text="↓ 0 B   ↑ 0 B" Style="{StaticResource MutedText}" Margin="0,6,0,0"/>
+                                        <TextBlock x:Name="DashboardUsageTitleText" Text="TODAY" Style="{StaticResource MutedText}" FontWeight="SemiBold"/>
+                                        <TextBlock x:Name="DashboardUsageTotalText" Text="0 B" FontSize="32" FontWeight="SemiBold" Margin="0,10,0,0" TextWrapping="Wrap"/>
+                                        <TextBlock x:Name="DashboardUsageBreakdownText" Style="{StaticResource MutedText}"
+                                                   FontSize="14" FontWeight="SemiBold" Margin="0,14,0,0" TextWrapping="Wrap"><Run x:Name="DashboardUsageDownloadRun" Text="↓ 0 B" Foreground="#22C55E"/><Run Text="   "/><Run x:Name="DashboardUsageUploadRun" Text="↑ 0 B" Foreground="#38BDF8"/></TextBlock>
                                     </StackPanel>
                                 </Border>
                             </Grid>
+                            <!-- Reserve the existing 54-DIP gap. Content cannot measure or move the graph. -->
+                            <Border x:Name="SpeedTestCard" Grid.Row="1" Grid.Column="2" Height="52" VerticalAlignment="Top"
+                                    Background="{StaticResource CardBrush}" BorderBrush="#287B9F" BorderThickness="1"
+                                    CornerRadius="10" Padding="8,3" ClipToBounds="True" AutomationProperties.Name="Download speed test">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="14"/><RowDefinition Height="16"/><RowDefinition Height="2"/><RowDefinition Height="12"/>
+                                    </Grid.RowDefinitions>
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="6"/><ColumnDefinition Width="138"/></Grid.ColumnDefinitions>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="SPEED TEST" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                        <controls:NetworkHelpButton x:Name="SpeedTestHelp" Term="Speed test" Width="12" Height="12" FontSize="10" Margin="4,0,0,0"/>
+                                        <TextBlock x:Name="SpeedTestStatusText" FontSize="9" Foreground="{StaticResource SubtleBrush}" Margin="6,0,0,0"
+                                                   VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                    </StackPanel>
+                                    <Grid Grid.Row="1">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                        <TextBlock x:Name="SpeedTestRateText" Text="Test your download speed" FontSize="10.5"
+                                                   Foreground="{StaticResource SubtleBrush}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                        <TextBlock x:Name="SpeedTestDataText" Grid.Column="1" FontSize="10" Foreground="{StaticResource SubtleBrush}"
+                                                   Margin="6,0,0,0" VerticalAlignment="Center"/>
+                                    </Grid>
+                                    <Grid Grid.Column="2" Grid.RowSpan="2" VerticalAlignment="Center">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="58"/><ColumnDefinition Width="5"/><ColumnDefinition Width="75"/></Grid.ColumnDefinitions>
+                                        <ComboBox x:Name="SpeedTestLimitSelector" Width="58" Height="24" Style="{StaticResource SpeedTestLimitStyle}"
+                                                  SelectedIndex="0" SelectionChanged="SpeedTestLimitSelector_OnSelectionChanged"
+                                                  ToolTip="Maximum download data. Network overhead is also counted in usage."
+                                                  AutomationProperties.Name="Maximum speed-test download data">
+                                            <ComboBoxItem Content="25 MB" Tag="25"/><ComboBoxItem Content="50 MB" Tag="50"/>
+                                            <ComboBoxItem Content="100 MB" Tag="100"/><ComboBoxItem Content="250 MB" Tag="250"/>
+                                        </ComboBox>
+                                        <Button x:Name="SpeedTestActionButton" Grid.Column="2" Width="75" Height="24" Content="Start Test"
+                                                Style="{StaticResource SpeedTestActionStyle}" Click="SpeedTestActionButton_OnClick"/>
+                                    </Grid>
+                                    <ProgressBar x:Name="SpeedTestProgress" Grid.Row="2" Grid.ColumnSpan="3" Height="2" Minimum="0" Maximum="100"
+                                                 Visibility="Hidden" Foreground="{StaticResource AccentBrush}" Background="#203550" BorderThickness="0"
+                                                 AutomationProperties.Name="Speed-test data progress"/>
+                                    <TextBlock x:Name="SpeedTestWarningText" Grid.Row="3" Grid.ColumnSpan="3" FontSize="9.5" VerticalAlignment="Center"
+                                               Foreground="{StaticResource SubtleBrush}" Text="Uses real data. Included in NetTrace usage totals."/>
+                                </Grid>
+                            </Border>
                             <controls:DashboardTrafficChart x:Name="DashboardTrafficChart" Grid.Row="1" Grid.Column="2"
-                                                            Height="152" VerticalAlignment="Top"
-                                                            AutomationProperties.Name="Live download and upload traffic over the last 60 seconds"/>
+                                                            Height="152" Margin="0,54,0,0" VerticalAlignment="Top"
+                                                            AutomationProperties.Name="Live download and upload traffic over the last 130 seconds"/>
                         </Grid>
 
                         <Border Style="{StaticResource CardStyle}" Margin="0,18,0,0">
@@ -400,11 +559,8 @@
                             </Grid>
                         </Border>
 
-                        <StackPanel Orientation="Horizontal" Margin="0,14,0,0"
-                                    ToolTip="Whether NetTrace is collecting traffic. This does not represent network health.">
-                            <Ellipse x:Name="StatusDot" Width="9" Height="9" Fill="{StaticResource StatusPositiveBrush}" VerticalAlignment="Center"/>
-                            <TextBlock x:Name="StatusText" Text="Monitoring" Margin="8,0,0,0" FontWeight="SemiBold"/>
-                        </StackPanel>
+                        <!-- Retain the previous footer extent so moving status does not change page scrolling or card widths. -->
+                        <Border Height="16" Margin="0,14,0,0"/>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
@@ -458,7 +614,7 @@
                                     <TextBlock Grid.Row="5" Text="Jitter" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
                                     <TextBlock x:Name="IcmpJitterText" Grid.Row="5" Grid.Column="1" Text="—" TextWrapping="Wrap" Margin="0,8,0,0"/>
 
-                                    <TextBlock Grid.Row="6" Text="Packet loss" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
+                                    <TextBlock Grid.Row="6" Text="Packet Loss" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
                                     <TextBlock x:Name="IcmpPacketLossText" Grid.Row="6" Grid.Column="1" Text="—" TextWrapping="Wrap" Margin="0,8,0,0"/>
 
                                     <TextBlock Grid.Row="7" Text="Successful replies" Style="{StaticResource MutedText}" Margin="0,8,0,0"/>
@@ -482,10 +638,10 @@
                                 <controls:IcmpStabilityChart x:Name="IcmpStabilityChart" Height="110" Margin="0,10,0,0"
                                                              AutomationProperties.Name="Connection stability, average latency and jitter in milliseconds"/>
                                 <TextBlock Text="Packet Loss" FontSize="14" FontWeight="SemiBold" Margin="0,10,0,0"
-                                           ToolTip="ICMP packet loss per completed probe cycle."/>
+                                           ToolTip="ICMP packet loss per completed probe cycle. Unavailable when internet is reachable but no ping replies arrive."/>
                                 <controls:IcmpPacketLossChart x:Name="IcmpPacketLossChart" Height="70" Margin="0,6,0,0"
                                                               AutomationProperties.Name="ICMP packet loss history, zero to one hundred percent"/>
-                                <TextBlock Text="Up to 60 completed cycles, oldest → newest. Unavailable latency/jitter appear as gaps."
+                                <TextBlock Text="Up to 60 completed cycles, oldest → newest. Unavailable measurements appear as gaps."
                                            Style="{StaticResource MutedText}" TextWrapping="Wrap" Margin="0,8,0,0"/>
                             </StackPanel>
                         </Border>

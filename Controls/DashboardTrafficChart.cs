@@ -15,8 +15,8 @@ public sealed class DashboardTrafficChart : FrameworkElement
     private static readonly Brush LabelBrush = FrozenBrush("#94A3B8");
     private static readonly Pen GridPen = FrozenPen("#243244", 1);
     private static readonly Pen AxisPen = FrozenPen("#334155", 1);
-    private static readonly Pen DownloadPen = FrozenPen("#38BDF8", 2);
-    private static readonly Pen UploadPen = FrozenPen("#A78BFA", 2);
+    private static readonly Pen DownloadPen = FrozenPen("#22C55E", 2);
+    private static readonly Pen UploadPen = FrozenPen("#38BDF8", 2);
     private ToolTip? _sampleToolTip;
     private TextBlock? _toolTipText;
     private Point? _hoverPosition;
@@ -204,11 +204,13 @@ public sealed class DashboardTrafficChart : FrameworkElement
 
     private void DrawTimeLabels(DrawingContext drawingContext, Rect plot)
     {
-        var seconds = (Data.WindowEndUtc - Data.WindowStartUtc).TotalSeconds;
+        var seconds = (double)Data.WindowDurationSeconds;
+        var middleSeconds = seconds >= 120 ? 60 : seconds / 2;
+        var middlePosition = seconds > 0 ? 1 - middleSeconds / seconds : 0.5;
         var labels = new[]
         {
             (Position: 0.0, Text: $"{seconds:0}s"),
-            (Position: 0.5, Text: $"{seconds / 2:0}s"),
+            (Position: middlePosition, Text: $"{middleSeconds:0}s"),
             (Position: 1.0, Text: "Now")
         };
         var previousRight = double.NegativeInfinity;

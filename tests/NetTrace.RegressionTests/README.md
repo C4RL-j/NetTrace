@@ -90,6 +90,21 @@ nonblocking shutdown, late faults, no overlapping cycles, suspend discard,
 fresh resume observations and independence from ICMP history/quality. All existing
 monitoring fixtures explicitly inject fake DNS/HTTPS probes.
 
+Health Polish adds 11 groups in `IcmpPacketLossPresentationTests.cs`. Available or
+Limited reachability with zero successful ICMP replies reports unavailable packet
+loss and nullable chart points; an active VPN adds a qualified ping explanation.
+Partial 25% and 50% loss remains measurable, and Unavailable or Checking internet
+reachability preserves numeric 100% loss. Mixed histories retain cycle positions,
+raw immutable ICMP observations, latency, jitter and their scale. Current
+reachability projects the existing rolling history without adding probe work or
+historical reachability records.
+
+Run the deterministic Health groups independently with:
+
+```powershell
+dotnet run --project tests/NetTrace.RegressionTests/NetTrace.RegressionTests.csproj -- --health-checks
+```
+
 One live check can be run separately with:
 
 ```powershell
@@ -242,7 +257,7 @@ Run only these deterministic Dashboard 001 groups with:
 dotnet run --project tests/NetTrace.RegressionTests/NetTrace.RegressionTests.csproj -- --dashboard-speed-checks
 ```
 
-Dashboard's usage selector has 11 deterministic groups in `DashboardUsageTests.cs`.
+Dashboard's usage selector has 14 deterministic groups in `DashboardUsageTests.cs`.
 Distinct existing Today, seven-day and
 thirty-day totals verify the selected title, combined quantity and download/upload
 breakdown without changing accounting. The cases cover the default Today enum,
@@ -250,6 +265,9 @@ empty values, unchanged binary quantity formatting and display culture, immutabl
 refreshed snapshots and rejection of unsupported ranges. Dashboard Polish 003 adds
 the compact selector's repeatable Today → Last 7 Days → Last 30 Days → Today cycle,
 the unchanged quantities at each step, and rejection of unsupported selector ranges.
+Dashboard Polish 005 verifies independent download/upload presentation text for the
+colored summary while preserving the existing paired breakdown, selected range,
+zero and TB quantities, and localized byte formatting.
 Actual selector interaction, navigation retention and compact window layout are
 covered by the WPF harness.
 
@@ -259,17 +277,22 @@ Run only the Dashboard usage selector groups with:
 dotnet run --project tests/NetTrace.RegressionTests/NetTrace.RegressionTests.csproj -- --dashboard-usage-checks
 ```
 
-Dashboard's live Download/Upload graph has 42 groups in
-`DashboardTrafficTests.cs`, bringing the console suite to 704 groups. The rolling
-60-second graph uses existing sampled byte rates and the same adaptive formatter
+Dashboard's live Download/Upload graph has 43 groups in
+`DashboardTrafficTests.cs`, bringing the console suite to 708 groups. The rolling
+130-second graph uses existing sampled byte rates and the same adaptive formatter
 as the live speed cards. Tests cover independent download/upload geometry,
-inclusive window bounds, readable automatic scales, known idle zeros, unavailable
-and unobserved gaps, local hover values and English/French display cultures.
+exclusive oldest and inclusive current window bounds, readable automatic scales,
+known idle zeros, unavailable and unobserved gaps, local hover values and
+English/French display cultures.
 The timeline checks one position per UTC second, redundant refresh reuse,
-replacement rather than summation, bounded memory, stale-sample rejection,
-card-matching normalization, real measurement gaps, adapter changes and immutable
+replacement rather than summation, exactly 130 retained one-second observations,
+oldest-observation expiry at 130 seconds, old-peak scale decrease, bounded memory,
+stale-sample rejection, card-matching normalization, real measurement gaps,
+adapter changes and immutable
 snapshots. Raw snapshots are cached; background collection builds no chart geometry
 until a presentation reads it. Dashboard visibility creates no artificial break.
+Full 130-point returning traces remain continuous after collecting without a
+visible graph.
 
 Seven headless service groups use an owned temporary database, injected counter
 source and controlled clock without constructing any Dashboard or WPF window. The
@@ -286,3 +309,25 @@ dotnet run --project tests/NetTrace.RegressionTests/NetTrace.RegressionTests.csp
 ```
 
 Both harnesses use owned temporary databases and injected network/VPN/ICMP evidence. They do not open real application data or change Windows network settings.
+
+## Download Speed Test
+
+Eight deterministic checks use real localhost HTTP sockets for the four decimal
+caps, capped streamed completion, cancellation before headers and during a stalled
+body, partial/error results, unexpected size, overlapping-request rejection and
+disposal. No public speed-test endpoint is used by the ordinary suite.
+
+```powershell
+dotnet run --project tests/NetTrace.RegressionTests/NetTrace.RegressionTests.csproj -- --download-speed-test-checks
+```
+
+## Connected VPN header detection
+
+`--vpn-key-checks` exercises connected RAS evidence and Up/IP/active-route tunnel
+requirements, private and IPv6 split routes, inactive/ordinary/virtual adapter
+exclusions, multiple names and shared cached observation. The tests use controlled
+local inventories and do not change Windows routes or VPN connections.
+
+```powershell
+dotnet run --project tests/NetTrace.RegressionTests/NetTrace.RegressionTests.csproj -- --vpn-key-checks
+```

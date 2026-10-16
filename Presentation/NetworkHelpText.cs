@@ -9,6 +9,7 @@ public static class NetworkHelpText
         new ReadOnlyDictionary<string, string>(new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["Transfer rate"] = "Shows how many bytes are transferred each second. KB/s and MB/s are commonly used by download apps. Internet speeds are often shown in Mbps; 1 MB/s equals 8 Mbps.",
+            ["Speed test"] = "Downloads real data from Cloudflare to measure download speed in Mbps. Choose a maximum download size; protocol overhead is also included in normal NetTrace usage totals. Cancel stops the download. A cancelled test with enough data shows a partial result. The result is an estimate from one download, and can be affected by other traffic or a VPN.",
             ["Signal quality"] = "An easy-to-read estimate of how strong the current Wi-Fi signal is. Higher percentages usually mean a more reliable wireless connection.",
             ["RSSI"] = "Received Signal Strength Indicator. It measures Wi-Fi signal strength in dBm. Values closer to 0 are stronger, so -50 dBm is stronger than -80 dBm.",
             ["Channel"] = "The radio channel your Wi-Fi connection is currently using. Nearby networks using the same or overlapping channels can sometimes cause interference.",

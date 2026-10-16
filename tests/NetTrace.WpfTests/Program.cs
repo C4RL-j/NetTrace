@@ -27,6 +27,10 @@ internal static class Program
             return RunWifiRadioTarget(args[0] == "--wifi-radio-color-check");
         if (args.Length > 0 && args[0] == "--scrolling-checks")
             return RunScrollingTarget();
+        if (args.Length > 0 && args[0] == "--health-checks")
+            return RunHealthTarget();
+        if (args.Length > 0 && args[0] == "--vpn-key-checks")
+            return RunVpnKeyTarget();
         if (args.Length > 0 && args[0] == "--history-overview-checks")
             return RunHistoryTarget();
         if (args.Length > 0 && args[0] == "--history-usage-checks")
@@ -35,10 +39,16 @@ internal static class Program
             return PassiveHistoryValidation.Run();
         if (args.Length > 0 && args[0] == "--dashboard-speed-checks")
             return RunDashboardSpeedTarget();
+        if (args.Length > 0 && args[0] == "--download-speed-test-checks")
+            return RunDownloadSpeedTestTarget();
+        if (args.Length > 0 && args[0] == "--download-speed-test-live-validation")
+            return DownloadSpeedTestChecks.RunLiveValidation();
         if (args.Length > 0 && args[0] == "--dashboard-usage-checks")
             return RunDashboardUsageTarget();
         if (args.Length > 0 && args[0] == "--dashboard-traffic-checks")
             return RunDashboardTrafficTarget();
+        if (args.Length > 0 && args[0] == "--tray-popup-checks")
+            return RunTrayPopupTarget();
         if (args.Length > 0 && args[0] == "--dashboard-live-validation")
             return PassiveDashboardValidation.Run();
         if (args.Length > 0 && args[0] == "--app-usage-today-checks")
@@ -328,11 +338,13 @@ internal static class Program
             IcmpPresentationChecks.Run(ownedRoot, adapter.Id, Check);
             IcmpStabilityChartChecks.Run(ownedRoot, adapter.Id, Check);
             IcmpPacketLossChartChecks.Run(ownedRoot, adapter.Id, Check);
+            IcmpPacketLossPresentationChecks.Run(ownedRoot, Check);
             IcmpQualityChecks.Run(ownedRoot, adapter.Id, Check);
             InternetReachabilityChecks.Run(ownedRoot, adapter.Id, Check);
             ConnectionDetailsChecks.Run(ownedRoot, Check);
             ProfileManagementChecks.Run(ownedRoot, Check);
             VpnRouteAwarenessChecks.Run(ownedRoot, Check);
+            VpnKeyIndicatorChecks.Run(ownedRoot, Check);
             VpnTransportChecks.Run(ownedRoot, Check);
             WifiRadioChecks.Run(ownedRoot, Check);
             ScrollingChecks.Run(ownedRoot, Check);
@@ -340,7 +352,9 @@ internal static class Program
             HistoryUsageChecks.Run(ownedRoot, Check);
             DashboardSpeedChecks.Run(ownedRoot, Check);
             DashboardUsageChecks.Run(ownedRoot, Check);
+            DownloadSpeedTestChecks.Run(ownedRoot, Check);
             DashboardTrafficChecks.Run(ownedRoot, Check);
+            TrayPopupChecks.Run(ownedRoot, Check);
             AppUsageTodayChecks.Run(ownedRoot, Check);
             AppUsageRangeChecks.Run(ownedRoot, Check);
             AppUsageRowIconChecks.Run(ownedRoot, Check);
@@ -434,6 +448,48 @@ internal static class Program
         finally { Application.Current?.Shutdown(); }
     }
 
+    private static int RunVpnKeyTarget()
+    {
+        var ownedRoot = System.IO.Path.Combine(AppContext.BaseDirectory, "owned-vpn-key-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            _ = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+            VpnKeyIndicatorChecks.Run(ownedRoot, Check);
+            Console.WriteLine($"{_passed}/{_passed} targeted VPN key WPF checks passed. Isolated data: {ownedRoot}");
+            return 0;
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"FAIL after {_passed} targeted VPN key checks: {exception}");
+            return 1;
+        }
+        finally { Application.Current?.Shutdown(); }
+    }
+
+    private static int RunHealthTarget()
+    {
+        var ownedRoot = System.IO.Path.Combine(AppContext.BaseDirectory, "owned-health-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            _ = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+            IcmpPresentationChecks.Run(ownedRoot, OwnedAdapterId, Check);
+            IcmpStabilityChartChecks.Run(ownedRoot, OwnedAdapterId, Check);
+            IcmpPacketLossChartChecks.Run(ownedRoot, OwnedAdapterId, Check);
+            IcmpPacketLossPresentationChecks.Run(ownedRoot, Check);
+            IcmpQualityChecks.Run(ownedRoot, OwnedAdapterId, Check);
+            InternetReachabilityChecks.Run(ownedRoot, OwnedAdapterId, Check);
+            VpnRouteAwarenessChecks.Run(ownedRoot, Check);
+            Console.WriteLine($"{_passed}/{_passed} targeted Health WPF checks passed. Isolated data: {ownedRoot}");
+            return 0;
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"FAIL after {_passed} targeted Health checks: {exception}");
+            return 1;
+        }
+        finally { Application.Current?.Shutdown(); }
+    }
+
     private static int RunDashboardUsageTarget()
     {
         var ownedRoot = System.IO.Path.Combine(AppContext.BaseDirectory, "owned-dashboard-usage-" + Guid.NewGuid().ToString("N"));
@@ -452,6 +508,24 @@ internal static class Program
         finally { Application.Current?.Shutdown(); }
     }
 
+    private static int RunTrayPopupTarget()
+    {
+        var ownedRoot = System.IO.Path.Combine(AppContext.BaseDirectory, "owned-tray-popup-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            _ = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+            TrayPopupChecks.Run(ownedRoot, Check);
+            Console.WriteLine($"{_passed}/{_passed} targeted tray popup WPF checks passed. Isolated data: {ownedRoot}");
+            return 0;
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"FAIL after {_passed} targeted tray popup checks: {exception}");
+            return 1;
+        }
+        finally { Application.Current?.Shutdown(); }
+    }
+
     private static int RunDashboardTrafficTarget()
     {
         var ownedRoot = System.IO.Path.Combine(AppContext.BaseDirectory, "owned-dashboard-traffic-" + Guid.NewGuid().ToString("N"));
@@ -465,6 +539,24 @@ internal static class Program
         catch (Exception exception)
         {
             Console.Error.WriteLine($"FAIL after {_passed} targeted Dashboard traffic checks: {exception}");
+            return 1;
+        }
+        finally { Application.Current?.Shutdown(); }
+    }
+
+    private static int RunDownloadSpeedTestTarget()
+    {
+        var ownedRoot = System.IO.Path.Combine(AppContext.BaseDirectory, "owned-download-speed-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            _ = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+            DownloadSpeedTestChecks.Run(ownedRoot, Check);
+            Console.WriteLine($"{_passed}/{_passed} targeted download speed-test WPF checks passed. Isolated data: {ownedRoot}");
+            return 0;
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"FAIL after {_passed} targeted download speed-test checks: {exception}");
             return 1;
         }
         finally { Application.Current?.Shutdown(); }
@@ -979,8 +1071,8 @@ internal static class Program
         var notifyIcon = NotifyIcon(context);
         Check((bool)notifyIcon.GetType().GetProperty("Visible")!.GetValue(notifyIcon)!,
             "Application lifetime owns a visible Windows system-tray icon");
-        Check(TrayMenuLabels(context).SequenceEqual(new[] { "Open NetTrace", "Exit" }),
-            "Tray menu contains only Open NetTrace and Exit");
+        Check(TrayMenuLabels(context).SequenceEqual(new[] { "Open NetTrace", "Settings", "Exit" }),
+            "Tray menu contains Open NetTrace, Settings and Exit");
         Check(Application.Current.ShutdownMode == ShutdownMode.OnExplicitShutdown,
             "Tray lifetime uses explicit application shutdown");
 

@@ -11,6 +11,9 @@ public enum DashboardUsageRange
 
 public sealed record DashboardUsagePresentation(string TitleText, string TotalText, string BreakdownText)
 {
+    public string DownloadText { get; init; } = string.Empty;
+    public string UploadText { get; init; } = string.Empty;
+
     public static DashboardUsageRange NextRange(DashboardUsageRange range) => range switch
     {
         DashboardUsageRange.Today => DashboardUsageRange.SevenDays,
@@ -30,7 +33,12 @@ public sealed record DashboardUsagePresentation(string TitleText, string TotalTe
             DashboardUsageRange.ThirtyDays => ("LAST 30 DAYS", month),
             _ => throw new ArgumentOutOfRangeException(nameof(range))
         };
-        return new(title, ByteFormatter.Format(usage.Downloaded + usage.Uploaded),
-            $"↓ {ByteFormatter.Format(usage.Downloaded)}   ↑ {ByteFormatter.Format(usage.Uploaded)}");
+        var download = $"↓ {ByteFormatter.Format(usage.Downloaded)}";
+        var upload = $"↑ {ByteFormatter.Format(usage.Uploaded)}";
+        return new(title, ByteFormatter.Format(usage.Downloaded + usage.Uploaded), $"{download}   {upload}")
+        {
+            DownloadText = download,
+            UploadText = upload
+        };
     }
 }

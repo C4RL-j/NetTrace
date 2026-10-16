@@ -34,10 +34,10 @@ public sealed class DashboardTrafficTimeline
             _samples[^1] = sample;
         }
         else _samples.Add(sample);
-        var oldestTicks = Math.Max(0, timestampUtc.UtcTicks - TimeSpan.FromSeconds(DashboardTrafficChartData.WindowSeconds).Ticks);
-        _samples.RemoveAll(point => point.TimestampUtc.UtcTicks < oldestTicks);
-        if (_samples.Count > DashboardTrafficChartData.WindowSeconds + 1)
-            _samples.RemoveRange(0, _samples.Count - DashboardTrafficChartData.WindowSeconds - 1);
+        var oldestTicks = timestampUtc.UtcTicks - TimeSpan.FromSeconds(DashboardTrafficChartData.WindowSeconds).Ticks;
+        _samples.RemoveAll(point => point.TimestampUtc.UtcTicks <= oldestTicks);
+        if (_samples.Count > DashboardTrafficChartData.WindowSeconds)
+            _samples.RemoveRange(0, _samples.Count - DashboardTrafficChartData.WindowSeconds);
         _snapshot = null;
         _data = null;
     }
